@@ -148,8 +148,8 @@ const (
 
 	// defaultPlanJudgeConcurrency bounds how many plan-level judge rounds may
 	// run concurrently across all plans — the "cron-style lane cap" this
-	// wave's brief calls for (mirrors pkg/cron's maxConcurrentRuns/laneSem
-	// pattern, service.go). Task-level judge calls need no separate cap: they
+	// wave's brief calls for (modelled on the former pkg/cron fixed lane
+	// semaphore, since replaced by memory admission). Task-level judge calls need no separate cap: they
 	// already run inside TaskExecutor's own per-task goroutine, itself
 	// bounded by TaskExecutor's dispatchSema.
 	defaultPlanJudgeConcurrency = 4

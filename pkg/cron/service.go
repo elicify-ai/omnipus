@@ -15,6 +15,7 @@ import (
 
 	"github.com/adhocore/gronx"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
@@ -51,10 +52,6 @@ func (m SessionMode) Valid() bool {
 }
 
 const (
-	// defaultMaxConcurrentRuns is the fallback parallel-lane capacity when none
-	// is supplied (schedules.max_concurrent_runs default 8, FR-007).
-	defaultMaxConcurrentRuns = 8
-
 	// runHistoryCap is the number of inline run records retained per job
 	// (Ambiguity #5: keep last 20; full history via linked sessions).
 	runHistoryCap = 20
@@ -252,10 +249,12 @@ type CronService struct {
 	// runner is the agent fire path (W-3/runner seam); nil until SetRunner.
 	runner ScheduledRunner
 
-	// maxConcurrentRuns bounds the parallel autonomous lane (FR-007).
-	maxConcurrentRuns int
-	// laneSem is the semaphore for the lane; cap = maxConcurrentRuns.
-	laneSem chan struct{}
+	// Memory-governed dispatch admission (admission.go, T10 FR-07). admitMu
+	// is a leaf lock, never held while mu is taken or a runner executes.
+	admitMu       sync.Mutex
+	admissionRule AdmissionRule
+	admitted      int
+	admitWake     chan struct{}
 	// laneWG tracks every in-flight lane run, across run windows, for
 	// WaitForLane (tests).
 	laneWG sync.WaitGroup
@@ -300,15 +299,15 @@ func (cs *CronService) SetOnSkip(fn func(jobID, reason string)) {
 
 func NewCronService(storePath string) *CronService {
 	cs := &CronService{
-		storePath:         storePath,
-		gronx:             gronx.New(),
-		wakeChan:          make(chan struct{}, 1),
-		clock:             realClock{},
-		maxConcurrentRuns: defaultMaxConcurrentRuns,
-		retryBackoffMs:    append([]int64(nil), defaultRetryBackoffMs...),
-		stopDrainTimeout:  defaultStopDrainTimeout,
+		storePath:        storePath,
+		gronx:            gronx.New(),
+		wakeChan:         make(chan struct{}, 1),
+		clock:            realClock{},
+		admissionRule:    config.MemoryAdmissionCap,
+		admitWake:        make(chan struct{}),
+		retryBackoffMs:   append([]int64(nil), defaultRetryBackoffMs...),
+		stopDrainTimeout: defaultStopDrainTimeout,
 	}
-	cs.laneSem = make(chan struct{}, cs.maxConcurrentRuns)
 	cs.laneCtx, cs.laneCancel = context.WithCancel(context.Background())
 	// Initialize and load store on creation
 	cs.loadStore()
@@ -330,18 +329,6 @@ func (cs *CronService) SetRunner(r ScheduledRunner) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.runner = r
-}
-
-// SetMaxConcurrentRuns configures the parallel-lane capacity (FR-007). Values
-// <= 0 fall back to the default. Must be called before Start.
-func (cs *CronService) SetMaxConcurrentRuns(n int) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	if n <= 0 {
-		n = defaultMaxConcurrentRuns
-	}
-	cs.maxConcurrentRuns = n
-	cs.laneSem = make(chan struct{}, n)
 }
 
 // SetRetryBackoff configures the FR-010 transient-error backoff schedule (ms
@@ -722,7 +709,7 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 	// Snapshot this run window and count its dispatches while still holding
 	// the lock that proved running==true, so a concurrent Stop always drains
 	// them and never waits on a WaitGroup that is still being added to.
-	win := laneWindow{ctx: cs.laneCtx, sem: cs.laneSem, runs: cs.laneRuns}
+	win := laneWindow{ctx: cs.laneCtx, runs: cs.laneRuns}
 	cs.laneAddUnsafe(win.runs, len(dueJobIDs))
 
 	cs.mu.Unlock()
@@ -734,10 +721,10 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 }
 
 // laneWindow is the run-window state a dispatch is bound to: the lane context
-// Stop cancels, the concurrency semaphore and the window's run WaitGroup.
+// Stop cancels and the window's run WaitGroup. Admission is the engine-wide
+// memory gate (admission.go), not a per-window semaphore.
 type laneWindow struct {
 	ctx  context.Context
-	sem  chan struct{}
 	runs *sync.WaitGroup
 }
 
@@ -775,7 +762,6 @@ func (cs *CronService) WaitForLane() {
 // The caller has already counted this run with laneAddUnsafe(win.runs, ...).
 func (cs *CronService) dispatch(jobID string, win laneWindow) {
 	laneCtx := win.ctx
-	sem := win.sem
 	if laneCtx == nil {
 		laneCtx = context.Background()
 	}
@@ -800,13 +786,11 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 			}
 		}()
 
-		// Acquire a lane slot (queues when the cap is reached, FR-007).
-		select {
-		case sem <- struct{}{}:
-		case <-laneCtx.Done():
+		// Memory-governed admission (FR-07): queues while memory binds.
+		if !cs.admit(laneCtx, jobID) {
 			return
 		}
-		defer func() { <-sem }()
+		defer cs.release()
 
 		if hook := cs.beforeRunHook(); hook != nil {
 			hook(jobID)
@@ -1339,7 +1323,6 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 		}
 	}
 	laneCtx := cs.laneCtx
-	sem := cs.laneSem
 	cs.mu.RUnlock()
 	if !exists {
 		return "", "", fmt.Errorf("job not found")
@@ -1358,13 +1341,11 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	// "a new run was appended" signal.
 	beforeLen, beforeRec := cs.runStateSnapshot(jobID)
 
-	// Acquire a lane slot (queues when the cap is reached, FR-007). The job
-	// counts as dispatched while it waits and runs (JobDispatchInFlight).
+	// Memory-governed admission (FR-07). The job counts as dispatched while
+	// it waits and runs (JobDispatchInFlight).
 	cs.markDispatchPending(jobID)
 	defer cs.clearDispatchPending(jobID)
-	select {
-	case sem <- struct{}{}:
-	case <-laneCtx.Done():
+	if !cs.admit(laneCtx, jobID) {
 		return "skipped", "", nil
 	}
 	// Count the run under mu against the current window (if any), so a
@@ -1375,7 +1356,7 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	cs.mu.RUnlock()
 	func() {
 		defer cs.laneDone(runs)
-		defer func() { <-sem }()
+		defer cs.release()
 		cs.executeJobByID(laneCtx, jobID)
 	}()
 

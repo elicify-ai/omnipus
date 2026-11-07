@@ -114,7 +114,7 @@ func TestT8TaskTrigger_ReservationPublishedBeforeDispatchEntry(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			al, sched, clock, pe, p := t8PlanWaitFixture(t)
-			sched.cs.SetMaxConcurrentRuns(1)
+			sched.cs.SetAdmissionRule(func() (int, bool) { return 1, true })
 			tID, uID, tJob, uJob, at := t8DueMembers(t, al, sched, p, clock, batch)
 
 			gate := newT8Gate(t)

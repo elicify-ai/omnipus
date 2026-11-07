@@ -26,7 +26,7 @@ func TestOldTimeLimitKeysAreIgnoredOnLoad(t *testing.T) {
   "version": 1,
   "agents": {"defaults": {"timeout_seconds": 900, "max_tool_iterations": 42}},
   "performance": {"max_delegation_depth": 4, "delegation_timeout_minutes": 30},
-  "schedules": {"max_concurrent_runs": 3, "run_timeout_seconds": 300}
+  "schedules": {"max_concurrent_runs": 3, "run_timeout_seconds": 300, "retry_backoff_ms": [1000, 2000]}
 }`
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
@@ -36,9 +36,12 @@ func TestOldTimeLimitKeysAreIgnoredOnLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig(config with retired time-limit keys) = %v; the new binary must boot with them", err)
 	}
-	if cfg.Agents.Defaults.MaxToolIterations != 42 || cfg.Performance.MaxDelegationDepth != 4 || cfg.Schedules.MaxConcurrentRuns != 3 {
-		t.Fatalf("sibling values lost while ignoring the retired keys: max_tool_iterations=%d depth=%d runs=%d",
-			cfg.Agents.Defaults.MaxToolIterations, cfg.Performance.MaxDelegationDepth, cfg.Schedules.MaxConcurrentRuns)
+	// schedules.max_concurrent_runs is retired too (T10 spec r6 FR-07); the
+	// schedules sibling that must survive is retry_backoff_ms.
+	if cfg.Agents.Defaults.MaxToolIterations != 42 || cfg.Performance.MaxDelegationDepth != 4 ||
+		len(cfg.Schedules.RetryBackoffMs) != 2 || cfg.Schedules.RetryBackoffMs[0] != 1000 || cfg.Schedules.RetryBackoffMs[1] != 2000 {
+		t.Fatalf("sibling values lost while ignoring the retired keys: max_tool_iterations=%d depth=%d retry_backoff_ms=%v",
+			cfg.Agents.Defaults.MaxToolIterations, cfg.Performance.MaxDelegationDepth, cfg.Schedules.RetryBackoffMs)
 	}
 
 	if serr := SaveConfig(path, cfg); serr != nil {
@@ -67,6 +70,7 @@ func TestOldTimeLimitKeysAreIgnoredOnLoad(t *testing.T) {
 		{[]string{"agents", "defaults"}, "timeout_seconds"},
 		{[]string{"performance"}, "delegation_timeout_minutes"},
 		{[]string{"schedules"}, "run_timeout_seconds"},
+		{[]string{"schedules"}, "max_concurrent_runs"},
 	} {
 		if _, present := section(c.path...)[c.key]; present {
 			t.Errorf("saved config still carries retired key %s.%s", strings.Join(c.path, "."), c.key)

@@ -1344,14 +1344,14 @@ type MailboxConfig struct {
 // cap-1 per workspace" model was lifted 2026-07-03, operator-approved).
 type MailboxesConfig map[string]map[string]MailboxConfig
 
-// SchedulesConfig holds global guardrail settings for scheduled agent runs
-// (#264): the concurrency bound and the transient-error retry backoff. There
-// is no run deadline — a scheduled run ends when it finishes or is explicitly
-// stopped (issue #1306).
+// SchedulesConfig holds global settings for scheduled runs: the
+// transient-error retry backoff. There is no run deadline — a scheduled run
+// ends when it finishes or is explicitly stopped (issue #1306) — and no
+// concurrency setting: schedules.max_concurrent_runs and the fixed lane limit
+// were removed (T10 spec r6 FR-07, founder T10-Q8). Scheduled-run admission is
+// memory-governed (MemoryAdmissionCap); an old config.json key is ignored on
+// load and dropped on the next save.
 type SchedulesConfig struct {
-	// MaxConcurrentRuns bounds the parallel autonomous-run lane (FR-007).
-	// Default 8; values <= 0 fall back to the default on load.
-	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty" env:"OMNIPUS_SCHEDULES_MAX_CONCURRENT_RUNS"`
 	// schedules.run_timeout_seconds is retired (issue #1306): a scheduled run
 	// has no time limit. An old config.json key is ignored on load.
 

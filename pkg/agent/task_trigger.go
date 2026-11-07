@@ -148,7 +148,7 @@ type TaskTriggerScheduler struct {
 	// State.Running false. RunDueJobs clears NextRunAtMS (under cs.mu)
 	// before dispatching, and executeJobByID does not persist
 	// State.Running=true until AFTER it acquires a lane slot on the
-	// (8-slot) semaphore — so a due-but-queued dispatch under lane
+	// memory-governed admission gate — so a due-but-queued dispatch under lane
 	// saturation is, for a sweep landing in that window, byte-for-byte the
 	// same shape as a genuine pre-Running-flag crash orphan. Escalating to
 	// a re-arm only once the SAME task stays in that shape across two
@@ -1231,7 +1231,7 @@ func (s *TaskTriggerScheduler) ArmedOccurrenceMS(taskID string) (int64, bool) {
 // due-but-queued dispatch: RunDueJobs clears a job's State.NextRunAtMS
 // (under cs.mu) before dispatching it, and executeJobByID does not persist
 // State.Running=true until AFTER it acquires a lane slot on the cron
-// engine's bounded (8-slot) semaphore. Under lane saturation, a sweep tick
+// engine's memory-governed admission gate. Under lane saturation, a sweep tick
 // landing in that window sees a legitimately queued fire in EXACTLY the
 // same shape as a genuine "crashed between the clear and the Running flag"
 // orphan: job present, NextRunAtMS nil, not Running.

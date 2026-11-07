@@ -69,7 +69,7 @@ func TestT8CronDispatch_OriginalIDSettlement(t *testing.T) {
 	t.Run("cancellation while genuinely queued", func(t *testing.T) {
 		clk := newFakeClock(time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC))
 		cs, _ := newAutonomyService(t, clk)
-		cs.SetMaxConcurrentRuns(1)
+		cs.SetAdmissionRule(func() (int, bool) { return 1, true })
 		entered, release := make(chan struct{}), make(chan struct{})
 		var releaseOnce sync.Once
 		unblock := func() { releaseOnce.Do(func() { close(release) }) }

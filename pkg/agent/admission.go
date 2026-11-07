@@ -47,7 +47,7 @@ import (
 //
 // This is NOT a per-agent memory budget in disguise. It is a count, chosen
 // for what it preserves, and nothing multiplies it by a byte figure.
-const unmeasurableHostAgentFloor = 2
+const unmeasurableHostAgentFloor = config.MemoryAdmissionFloor
 
 // memoryAdmissionCap reports the cap the live memory mechanism imposes on
 // concurrent agent turns right now, and whether it imposes one at all.
@@ -66,11 +66,7 @@ const unmeasurableHostAgentFloor = 2
 // short of memory" and "I cannot tell whether this host is short of memory"
 // are the same instruction to an admission gate: do not add load.
 func memoryAdmissionCap() (int, bool) {
-	high, ok := config.MemoryPressureHigh()
-	if !ok || high {
-		return unmeasurableHostAgentFloor, true
-	}
-	return 0, false
+	return config.MemoryAdmissionCap()
 }
 
 // applyMemoryCap folds the live memory cap into a configured cap, returning

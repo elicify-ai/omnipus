@@ -174,23 +174,14 @@ func (c SessionConfig) EffectiveStatsFlushInterval() time.Duration {
 	return DefaultSessionStatsFlushInterval
 }
 
-// Schedules config defaults (#264).
-const (
-	// DefaultSchedulesMaxConcurrentRuns is the fallback parallel-lane capacity.
-	DefaultSchedulesMaxConcurrentRuns = 8
-)
-
 // DefaultSchedulesRetryBackoffMs is the fallback transient-error retry backoff
 // schedule (FR-010): 1m, 2m, 5m offsets keyed by retry attempt.
 var DefaultSchedulesRetryBackoffMs = []int64{60000, 120000, 300000}
 
-// ApplyDefaults fills any unset/invalid field with its documented default
-// (FR-003/FR-007). Idempotent. Bounds-checked: non-positive values reset to
-// the default rather than being honored.
+// ApplyDefaults fills an unset retry-backoff schedule with its documented
+// default (FR-010). Idempotent. There is no concurrency default: scheduled-run
+// admission is memory-governed (T10 spec r6 FR-07).
 func (s *SchedulesConfig) ApplyDefaults() {
-	if s.MaxConcurrentRuns <= 0 {
-		s.MaxConcurrentRuns = DefaultSchedulesMaxConcurrentRuns
-	}
 	if len(s.RetryBackoffMs) == 0 {
 		s.RetryBackoffMs = append([]int64(nil), DefaultSchedulesRetryBackoffMs...)
 	}

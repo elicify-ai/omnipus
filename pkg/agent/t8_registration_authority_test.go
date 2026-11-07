@@ -19,7 +19,7 @@ func TestTaskTrigger_RevokedRecurringRearmKeepsQueuedSuccessor(t *testing.T) {
 	for _, mode := range []string{"18.38 identical reattach", "18.38 different rule control", "18.38 ordinary continuation control"} {
 		t.Run(mode, func(t *testing.T) {
 			sched, store, clk, rec := newTriggerSchedulerForTest(t)
-			sched.cs.SetMaxConcurrentRuns(1)
+			sched.cs.SetAdmissionRule(func() (int, bool) { return 1, true })
 			dt := secondAligned(clk.Now().Add(time.Minute))
 			tk := makeRruleTask(t, store, "t8-registration", "FREQ=DAILY", dt, "UTC")
 			waiting := task.StatusInbox

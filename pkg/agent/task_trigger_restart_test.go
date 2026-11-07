@@ -40,7 +40,7 @@ func TestTaskTriggerRestart(t *testing.T) {
 		for boot := 1; boot <= 3; boot++ {
 			sched = NewTaskTriggerScheduler(path, al.taskStore, al.taskExecutor)
 			sched.SetClock(clk)
-			sched.cs.SetMaxConcurrentRuns(1)
+			sched.cs.SetAdmissionRule(func() (int, bool) { return 1, true })
 			run := sched.dispatch
 			sched.dispatch = func(ctx context.Context, id string, occurrence *int64) error {
 				dispatched = append(dispatched, id)

@@ -191,7 +191,7 @@ func TestRunDueJobs_OverlapSkip(t *testing.T) {
 func TestRunDueJobs_ConcurrencyCapQueues(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	cs, _ := newAutonomyService(t, clk)
-	cs.SetMaxConcurrentRuns(2)
+	cs.SetAdmissionRule(func() (int, bool) { return 2, true })
 
 	release := make(chan struct{})
 	var inFlight int32

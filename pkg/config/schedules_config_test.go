@@ -1,30 +1,34 @@
 package config
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
-// TestSchedulesConfig_ApplyDefaults verifies the 8-run default and the
-// bounds-check that resets a non-positive value (#264 FR-007). There is no
-// run-timeout default any more: scheduled runs have no time limit (#1306).
+// TestSchedulesConfig_ApplyDefaults verifies the retry-backoff default and that
+// an explicit schedule is kept. There is no run-timeout default (scheduled runs
+// have no time limit, #1306) and no concurrency default: the
+// schedules.max_concurrent_runs setting was removed (T10 spec r6 FR-07; the
+// absence is asserted by t10_schedules_red_test.go).
 func TestSchedulesConfig_ApplyDefaults(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      SchedulesConfig
-		wantMax int
+		name string
+		in   SchedulesConfig
+		want []int64
 	}{
-		{"zero -> defaults", SchedulesConfig{}, 8},
-		{"negative -> defaults", SchedulesConfig{MaxConcurrentRuns: -3}, 8},
-		{"explicit kept", SchedulesConfig{MaxConcurrentRuns: 4}, 4},
+		{"zero -> defaults", SchedulesConfig{}, []int64{60000, 120000, 300000}},
+		{"explicit kept", SchedulesConfig{RetryBackoffMs: []int64{1000, 2000}}, []int64{1000, 2000}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := tc.in
 			s.ApplyDefaults()
-			if s.MaxConcurrentRuns != tc.wantMax {
-				t.Fatalf("MaxConcurrentRuns = %d, want %d", s.MaxConcurrentRuns, tc.wantMax)
+			if !reflect.DeepEqual(s.RetryBackoffMs, tc.want) {
+				t.Fatalf("RetryBackoffMs = %v, want %v", s.RetryBackoffMs, tc.want)
 			}
 			// Idempotent.
 			s.ApplyDefaults()
-			if s.MaxConcurrentRuns != tc.wantMax {
+			if !reflect.DeepEqual(s.RetryBackoffMs, tc.want) {
 				t.Fatalf("ApplyDefaults not idempotent: %+v", s)
 			}
 		})
@@ -32,10 +36,10 @@ func TestSchedulesConfig_ApplyDefaults(t *testing.T) {
 }
 
 // TestDefaultConfig_SchedulesSeeded verifies a fresh DefaultConfig carries the
-// schedules guardrail defaults.
+// schedules retry-backoff default.
 func TestDefaultConfig_SchedulesSeeded(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Schedules.MaxConcurrentRuns != 8 {
-		t.Fatalf("default MaxConcurrentRuns = %d, want 8", cfg.Schedules.MaxConcurrentRuns)
+	if want := []int64{60000, 120000, 300000}; !reflect.DeepEqual(cfg.Schedules.RetryBackoffMs, want) {
+		t.Fatalf("default RetryBackoffMs = %v, want %v", cfg.Schedules.RetryBackoffMs, want)
 	}
 }

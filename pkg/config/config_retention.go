@@ -196,6 +196,34 @@ func MemoryPressureHigh() (high bool, ok bool) {
 	return memoryProvider()
 }
 
+// MemoryAdmissionFloor is how many concurrent units of work an admission gate
+// admits on a host whose memory cannot be measured, or one already above the
+// pressure threshold. TWO, not one and not zero: one would serialize the
+// whole gateway on a Windows box; zero would refuse to work at all. Two lets
+// one unit run while a background one runs alongside it — refuse to GROW,
+// never refuse to RUN. It is a count, never multiplied by a byte figure.
+//
+// It is shared by agent-turn admission (pkg/agent memoryAdmissionCap) and
+// scheduled-run admission (pkg/cron, T10 spec r6 FR-07), so there is exactly
+// one floor literal and one threshold (MemoryPressureHigh).
+const MemoryAdmissionFloor = 2
+
+// MemoryAdmissionCap reports the cap the live memory mechanism imposes on
+// concurrent admissions right now, and whether it imposes one at all:
+//
+//   - measured, headroom available  -> (0, false): memory imposes no cap.
+//   - measured, above the threshold -> (MemoryAdmissionFloor, true).
+//   - not measurable at all         -> (MemoryAdmissionFloor, true).
+//
+// It is consulted fresh at every admission decision, never cached.
+func MemoryAdmissionCap() (limit int, limited bool) {
+	high, ok := MemoryPressureHigh()
+	if !ok || high {
+		return MemoryAdmissionFloor, true
+	}
+	return 0, false
+}
+
 // AvailableMemoryBytes is the exported two-valued live-memory accessor:
 // bytes of headroom, and whether that could be determined at all.
 //

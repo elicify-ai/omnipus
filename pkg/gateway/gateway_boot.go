@@ -2167,7 +2167,6 @@ func setupCronTool(
 	cronService.SetRunner(runner)
 
 	if cfg != nil {
-		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)
 		cronService.SetRetryBackoff(cfg.Schedules.RetryBackoffMs)
 	}
 

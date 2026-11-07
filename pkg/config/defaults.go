@@ -172,8 +172,7 @@ func DefaultConfig() *Config {
 		Context: DefaultContextSettings(),
 		Tools:   defaultToolsConfig(),
 		Schedules: SchedulesConfig{
-			MaxConcurrentRuns: DefaultSchedulesMaxConcurrentRuns,
-			RetryBackoffMs:    append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
+			RetryBackoffMs: append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
 		},
 		Voice: VoiceConfig{
 			ModelName:         "",

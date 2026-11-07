@@ -109,7 +109,7 @@ func TestT8Scheduler_StaleProducerCannotRestoreClearedTrigger(t *testing.T) {
 
 func TestT8TaskTrigger_PendingLaneWaitProtectsPlan(t *testing.T) {
 	al, sched, clock, pe, p := t8PlanWaitFixture(t)
-	sched.cs.SetMaxConcurrentRuns(1)
+	sched.cs.SetAdmissionRule(func() (int, bool) { return 1, true })
 	at := clock.Now().Add(14 * 24 * time.Hour).UnixMilli()
 	// Hold an unrelated recurring callback at the existing pre-rearm seam.
 	// This occupies the real cron lane without replacing the task dispatcher.
