@@ -319,22 +319,28 @@ func TestOfficePreviewRefusesOverlapsPublishedDuringPreview(t *testing.T) {
 		outcome <- publishOutcome{result, previewErr}
 	}()
 
-	// Discover the call's scratch folder as soon as the record exists. The
-	// scratch root itself may not exist yet in the first polls.
+	// §3.4 D1: owner.json is tmp/preview-calls/<id>/owner.json. The converter's
+	// working folder is <id>/work, so the plan the child reads from its cwd is
+	// written there, not beside the record.
 	callDir := ""
 	deadline := time.Now().Add(30 * time.Second)
 	for callDir == "" {
-		entries, readErr := os.ReadDir(filepath.Join(home, "tmp", "preview"))
+		entries, readErr := os.ReadDir(filepath.Join(home, "tmp", "preview-calls"))
 		if readErr == nil {
 			for _, e := range entries {
-				if _, statErr := os.Stat(filepath.Join(home, "tmp", "preview", e.Name(), "owner.json")); statErr == nil {
-					callDir = filepath.Join(home, "tmp", "preview", e.Name())
+				idDir := filepath.Join(home, "tmp", "preview-calls", e.Name())
+				// work is created after the record (§3.4 D2). Wait for both so the
+				// plan is written into a folder the converter can already see.
+				workInfo, workErr := os.Stat(filepath.Join(idDir, "work"))
+				if _, statErr := os.Stat(filepath.Join(idDir, "owner.json")); statErr == nil && workErr == nil && workInfo.IsDir() {
+					callDir = idDir
 				}
 			}
 		} else if !errors.Is(readErr, os.ErrNotExist) {
 			require.NoError(t, readErr)
 		}
-		require.Less(t, time.Now().UnixNano(), deadline.UnixNano(), "the preview never created its scratch record")
+		require.Less(t, time.Now().UnixNano(), deadline.UnixNano(),
+			"§3.4 D1: owner.json never appeared at tmp/preview-calls/<id>/owner.json, one level above work")
 		time.Sleep(2 * time.Millisecond)
 	}
 	// Choreography lives in a test-owned coordination directory: the gateway
@@ -344,7 +350,8 @@ func TestOfficePreviewRefusesOverlapsPublishedDuringPreview(t *testing.T) {
 	require.NoError(t, os.MkdirAll(publishCoord, 0700))
 	plan, err := json.Marshal(map[string]string{"coord": publishCoord})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(callDir, publishPlanFile), plan, 0600))
+	scratchWork := filepath.Join(callDir, "work")
+	require.NoError(t, os.WriteFile(filepath.Join(scratchWork, publishPlanFile), plan, 0600))
 
 	// Barrier (a): after the component check. The owner record's "running"
 	// state is published before the go-byte, so reaching it proves the check

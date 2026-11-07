@@ -17,10 +17,12 @@ import (
 
 // forgeRecordOfficeProcess is the fake converter for T-93: it forges an
 // owner.json in the folder it can write (scratch), naming a separate harmless
-// process as the launcher, that process's group as the pgid, and a
-// valid-shaped socket folder. It first records the REAL launcher's identity,
-// then writes the forge-ready marker and blocks, so recovery runs against the
-// forged record while the real call is still mid-flight.
+// process as the launcher and a valid-shaped socket folder. §3.4 D4 stores no
+// process-group number, so the forge does not carry one; the harmless
+// process's PID as the launcher is what a trusted record would be stopped by.
+// It first records the REAL launcher's identity, then writes the forge-ready
+// marker and blocks, so recovery runs against the forged record while the
+// real call is still mid-flight.
 func forgeRecordOfficeProcess() int {
 	raw, err := os.ReadFile("forge-plan.json")
 	if err != nil {
@@ -49,7 +51,6 @@ func forgeRecordOfficeProcess() int {
 		GatewayPID:   424242,
 		GatewayStart: "forged-gateway-start",
 		Launcher:     &procIdentity{PID: plan.PID, Start: plan.Start, Executable: plan.Executable},
-		PGID:         plan.PID,
 		Executables:  []string{plan.Executable},
 		SocketDir:    plan.SocketDir,
 	})

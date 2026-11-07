@@ -69,17 +69,21 @@ func TestPreviewRecovery_StopsOnlyTheVerifiedProcessGroup(t *testing.T) {
 	unrelatedPID, _, closeUnrelated := spawnGroupedSleep(t, "60")
 	defer closeUnrelated()
 
-	// A record the gateway could have written — plus the legacy pgid key that
-	// names the UNRELATED group. Every other fact matches the live launcher.
+	// A record the gateway could have written, plus a legacy "pgid" key that
+	// names the UNRELATED group. Section 3.4 D4 deletes that field from
+	// ownerRecord, so the key is raw JSON, not a struct field. Every other
+	// fact matches the live launcher.
 	dir := filepath.Join(scratchRoot(t.TempDir()), "legacy-pgid")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
-	record, err := json.Marshal(ownerRecord{
-		State:        stateRunning,
-		GatewayPID:   os.Getpid(),
-		GatewayStart: "not-current-start",
-		Launcher:     &procIdentity{PID: launcherPID, Start: launcherStart, Executable: "/bin/sleep"},
-		PGID:         unrelatedPID,
-		Executables:  []string{"/bin/sleep"},
+	record, err := json.Marshal(map[string]any{
+		"state":         stateRunning,
+		"gateway_pid":   os.Getpid(),
+		"gateway_start": "not-current-start",
+		"launcher": map[string]any{
+			"pid": launcherPID, "start": launcherStart, "executable": "/bin/sleep",
+		},
+		"pgid":        unrelatedPID,
+		"executables": []string{"/bin/sleep"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ownerFile), record, 0o600))
@@ -151,7 +155,6 @@ func TestPreviewRecovery_OldLayoutIsInert(t *testing.T) {
 		GatewayPID:   os.Getpid(),
 		GatewayStart: "not-current-start",
 		Launcher:     &procIdentity{PID: pid, Start: mustProcessStart(t, pid), Executable: "/bin/sleep"},
-		PGID:         pid,
 		Executables:  []string{"/bin/sleep"},
 	})
 	require.NoError(t, err)

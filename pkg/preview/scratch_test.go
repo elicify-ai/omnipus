@@ -9,10 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// readPreviewOwner reads the trusted owner record. §3.4 D1 puts it in the call
+// folder, one level above the work folder (c.dir). Reading c.dir/owner.json
+// would accept a file the converter can replace.
 func readPreviewOwner(t *testing.T, c *call) ownerRecord {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(c.dir, "owner.json"))
-	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(c.dir), ownerFile))
+	require.NoError(t, err, "§3.4 D1: owner.json lives in the call folder, one level above the work folder")
 	var record ownerRecord
 	require.NoError(t, json.Unmarshal(data, &record))
 	return record
@@ -28,8 +31,10 @@ func TestPreviewScratch_PublishesPreparingRunningAndCleansDone(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0700), info.Mode().Perm())
 	id := procIdentity{PID: 43, Start: "launcher-start", Executable: "/trusted/omnipus"}
-	require.NoError(t, c.running(id, 43, []string{"/trusted/omnipus", "/trusted/omnipus-pdfium"}))
-	require.Equal(t, ownerRecord{State: "running", GatewayPID: 42, GatewayStart: "gateway-start", Launcher: &id, PGID: 43, Executables: []string{"/trusted/omnipus", "/trusted/omnipus-pdfium"}}, readPreviewOwner(t, c))
+	// §3.4 D4: running publishes the launcher identity and the allowed
+	// executables. There is no stored process-group number.
+	require.NoError(t, c.running(id, []string{"/trusted/omnipus", "/trusted/omnipus-pdfium"}))
+	require.Equal(t, ownerRecord{State: "running", GatewayPID: 42, GatewayStart: "gateway-start", Launcher: &id, Executables: []string{"/trusted/omnipus", "/trusted/omnipus-pdfium"}}, readPreviewOwner(t, c))
 	require.NoError(t, c.idle())
 	require.Equal(t, ownerRecord{State: "preparing", GatewayPID: 42, GatewayStart: "gateway-start"}, readPreviewOwner(t, c))
 	c.finish()

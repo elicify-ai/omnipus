@@ -146,7 +146,7 @@ func TestPreviewRecovery_SocketFolderRecordedAtCreation(t *testing.T) {
 		"T-97 (a) §3.4 D2: creating the socket folder publishes it at once")
 
 	var report RecoveryReport
-	recoverOne(c.dir, os.Getpid(), start, &report)
+	recoverOne(filepath.Dir(c.dir), os.Getpid(), start, &report)
 
 	_, err = os.Stat(socketDir)
 	require.ErrorIs(t, err, os.ErrNotExist,
@@ -177,11 +177,14 @@ func TestPreviewRecovery_UnnamedSocketFolderSurvives(t *testing.T) {
 	recorded, err := c.makeSocketDir()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(recorded) })
-	require.NoError(t, c.running(procIdentity{PID: 999_999, Start: "dead-launcher", Executable: "/trusted/omnipus"}, 999_999, nil))
+	require.NoError(t, c.running(procIdentity{PID: 999_999, Start: "dead-launcher", Executable: "/trusted/omnipus"}, nil))
 	require.NotEqual(t, recorded, unnamed, "instrument: the two fixtures are different folders")
+	published := readPreviewOwner(t, c)
+	require.Equal(t, recorded, published.SocketDir,
+		"T-97 (b) §3.4 D1: the trusted record in the call folder names the socket folder recovery may remove")
 
 	var report RecoveryReport
-	recoverOne(c.dir, os.Getpid(), start, &report)
+	recoverOne(filepath.Dir(c.dir), os.Getpid(), start, &report)
 
 	_, err = os.Stat(unnamed)
 	require.NoError(t, err,
@@ -215,13 +218,13 @@ func TestPreviewRecovery_GenuineRecordSocketFolderStillRemoved(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(socketDir, "/private/tmp/o-"), "instrument: the genuine socket folder uses the legitimate prefix")
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
-	require.NoError(t, c.running(procIdentity{PID: 999_999, Start: "dead-launcher", Executable: "/trusted/omnipus"}, 999_999, nil))
+	require.NoError(t, c.running(procIdentity{PID: 999_999, Start: "dead-launcher", Executable: "/trusted/omnipus"}, nil))
 	require.NoError(t, c.idle())
 	published := readPreviewOwner(t, c)
 	require.Equal(t, socketDir, published.SocketDir, "instrument: the genuine record really names its socket folder")
 
 	var report RecoveryReport
-	recoverOne(c.dir, os.Getpid(), start, &report)
+	recoverOne(filepath.Dir(c.dir), os.Getpid(), start, &report)
 
 	_, err = os.Stat(socketDir)
 	require.ErrorIs(t, err, os.ErrNotExist, "a genuine record's socket folder must still be removed")
