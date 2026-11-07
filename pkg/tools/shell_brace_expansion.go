@@ -1,45 +1,39 @@
-// shell_brace_expansion.go: decides whether any text the shell will parse in a
-// bash command contains an unquoted "{" or "}" — the precondition for shell
-// brace expansion. The T11 stand-alone quoted-literal rule (#882) is withheld
-// whenever this is true (founder decision 2026-10-30, "simplify the guard"),
-// so a quoted fragment can never be glued into a real path by
-// `{'/tm',}p/x`-style expansion.
-//
-// Text the shell parses:
+// shell_brace_expansion.go: decides when the T11 stand-alone quoted-literal
+// rule (#882) is withheld for a bash command (founder decisions 2026-10-30
+// "simplify the guard", 2026-11-01 "S5c A" and Q11 A). A quoted fragment can
+// otherwise be glued into a real path by `{'/tm',}p/x`-style brace expansion,
+// which needs an unquoted "{" or "}" in text the shell parses:
 //   - the command itself (quotes tracked by shellQuoteMask; escaped braces are
 //     quoted);
 //   - the script of a nested shell: `sh|bash|zsh|dash|ksh|mksh|ash|fish -c
 //     SCRIPT` anywhere in the command (so `find -exec sh -c`, `xargs sh -c`,
-//     `env bash -c` are covered), and the arguments of `eval`;
-//   - a here-document body whose command is one of those shells or `eval`.
+//     `env bash -c` are covered), and the arguments of `eval`.
 //
-// A here-document body fed to any other program (python3 <<'PY' ...) is data
-// and is skipped: the shell never brace-expands here-document bodies.
+// Here-documents (Q11 A): exactly one form keeps the rule, the whole command
+// being a plain non-shell program and one plain single-quoted marker
+// (isPlainHereDocument). Any other `<<`, wherever it appears in any text
+// scanned here, withholds the rule. There is deliberately no scanner for where
+// other forms end: comments, arithmetic, delimiter quoting and line joining
+// each made such a scanner read live shell text as document data.
 //
 // When the scan cannot be sure where a nested shell's script is, it answers
-// "may expand" and the exemption is withheld (T11 round 4, founder: keep it
+// "may expand" and the rule is withheld (T11 round 4, founder: keep it
 // simple): text that cannot be parsed (unbalanced quotes, a `$(...)` the
 // tokenizer refuses, nesting deeper than maxBraceScanDepth), a long or
 // argument-taking option before -c (`bash --norc -c`, `bash -o x -c`), and a
-// shell reading its script from standard input (a pipe, -s, a here-string,
-// a script file named "-" or /dev/stdin, or a here-document behind a wrapper
-// such as env, command or nice). Unquoted separators end a simple command
-// even without whitespace (`true;bash -c ...`), and a shell's arguments are
-// read only from its own simple command. A backslash-newline line
-// continuation outside quotes in any text scanned here also answers "may
-// expand" (T11 round 7, S5c, founder 2026-11-01 "S5c A"): bash removes the
-// pair before it splits words, so `ba\<newline>sh` is the word bash, while
-// shellQuoteMask reads the pair as one escaped character and would hide it.
-//
-// A here-document's end is found where bash finds it (T11 F1, founder Q8 A):
-// with an unquoted delimiter bash joins backslash-newline pairs before it
-// compares a line with the delimiter, so the text after a split delimiter is
-// shell text, not data. dash and ksh were measured not joining there; ending
-// the document at the joined line then only scans more text as shell.
+// shell reading its script from standard input (a pipe, -s, or a script file
+// named "-" or /dev/stdin). Unquoted separators end a simple command even
+// without whitespace (`true;bash -c ...`), and a shell's arguments are read
+// only from its own simple command. A backslash-newline line continuation
+// outside quotes in any text scanned here also answers "may expand" (T11 round
+// 7, S5c): bash removes the pair before it splits words, so `ba\<newline>sh`
+// is the word bash, while shellQuoteMask reads the pair as one escaped
+// character and would hide it.
 //
 // Residual, stated: a non-shell program that hands its own data to a shell
-// (Python's os.system, perl system) is not followed; the guard reads command
-// text only.
+// (Python's os.system, perl system, or a program told to run its input) is not
+// followed; the guard reads command text only. The here-document form promises
+// only that the launching shell treats the text as data.
 
 package tools
 
@@ -57,36 +51,74 @@ var braceExpandingShells = map[string]bool{
 	"mksh": true, "ash": true, "fish": true,
 }
 
-// commandMayBraceExpand reports whether cmd, or any shell text nested in it,
-// contains an unquoted brace.
+// commandMayBraceExpand reports whether the stand-alone literal rule must be
+// withheld for cmd: unless cmd is the approved here-document form, because it,
+// or any shell text nested in it, holds `<<`, an unquoted brace or an unquoted
+// line continuation, or a nested script the scan cannot locate.
 func commandMayBraceExpand(cmd string) bool {
-	return mayBraceExpand(cmd, 0)
+	return !isPlainHereDocument(cmd) && mayBraceExpand(cmd, 0)
+}
+
+// isPlainHereDocument reports whether cmd is the one here-document form that
+// keeps the rule (founder ruling Q11 A), compared byte for byte with no
+// normalisation. cmd must be the text the shell receives (executeRun trims the
+// command once, before both this check and the run):
+//
+//	PROGRAM <<'MARKER'
+//	text
+//	MARKER
+//
+// PROGRAM and MARKER are plain words and PROGRAM is not a shell or eval. Lines
+// end at LF only, so a CR makes a line differ from the marker exactly as it
+// does for the shell. The first line equal to the marker must be the last line
+// of the command: the shell ends the document there, so anything after it
+// would be live shell text. The text in between is data to the launching
+// shell, whatever it looks like. This decides eligibility only; every other
+// check on a literal still applies.
+func isPlainHereDocument(cmd string) bool {
+	header, rest, ok := strings.Cut(cmd, "\n")
+	if !ok {
+		return false
+	}
+	program, word, ok := strings.Cut(header, " <<'")
+	if !ok || !isPlainWord(program) || isShellOrEval(program) {
+		return false
+	}
+	marker, ok := strings.CutSuffix(word, "'")
+	if !ok || !isPlainWord(marker) {
+		return false
+	}
+	lines := "\n" + rest + "\n"
+	closer := "\n" + marker + "\n"
+	first := strings.Index(lines, closer)
+	return first >= 0 && first == len(lines)-len(closer)
+}
+
+// isPlainWord reports a nonempty run of ASCII letters, digits and underscores:
+// nothing a shell quotes, expands or splits.
+func isPlainWord(w string) bool {
+	for i := 0; i < len(w); i++ {
+		if !isShellWordChar(w[i]) {
+			return false
+		}
+	}
+	return w != ""
+}
+
+// isShellOrEval reports a program whose standard input is shell text. Case is
+// ignored: on a case-insensitive filesystem, such as the macOS default, `BASH`
+// runs bash.
+func isShellOrEval(program string) bool {
+	name := strings.ToLower(program)
+	return braceExpandingShells[name] || name == "eval"
 }
 
 func mayBraceExpand(cmd string, depth int) bool {
-	if depth > maxBraceScanDepth {
+	if depth > maxBraceScanDepth || strings.Contains(cmd, "<<") {
 		return true
 	}
 	mask, balanced := shellQuoteMask(cmd)
-	if !balanced {
-		return true
-	}
-	bodies, ok := hereDocBodies(cmd, mask)
-	if !ok {
-		return true
-	}
-	inBody := make([]bool, len(cmd))
-	inDocument := make([]bool, len(cmd))
-	for _, b := range bodies {
-		for i := b.start; i < b.skipEnd; i++ {
-			inDocument[i] = true
-			inBody[i] = i < b.end
-		}
-		if b.shell && mayBraceExpand(cmd[b.start:b.end], depth+1) {
-			return true
-		}
-	}
-	if hasUnquotedLineContinuation(cmd, inDocument) {
+	if !balanced || hasUnquotedLineContinuation(cmd) {
 		return true
 	}
 	// An unquoted command separator ends a simple command even without
@@ -103,9 +135,6 @@ func mayBraceExpand(cmd string, depth int) bool {
 	var cur strings.Builder
 	wordStart := 0
 	for i := 0; i < len(cmd); i++ {
-		if inBody[i] {
-			continue
-		}
 		c := cmd[i]
 		if (c == '{' || c == '}') && !mask[i] {
 			return true
@@ -146,20 +175,17 @@ func mayBraceExpand(cmd string, depth int) bool {
 }
 
 // hasUnquotedLineContinuation reports whether cmd holds a backslash followed
-// by a newline outside quotes, using shellQuoteMask's quoting rules, ignoring
-// positions marked in skip (here-document bodies: a body fed to a shell is
-// scanned on its own by the recursion, a body fed to another program is
-// data; plus an unquoted-delimiter document's ending line, whose pairs bash
-// joins as document text). Bash removes such a pair before it identifies words (Bash Reference
-// Manual, "Escape Character"). Inside single quotes the pair is literal;
-// inside double quotes bash removes it too, but it only joins text within one
-// quoted word and creates no new word, so it does not count here.
-func hasUnquotedLineContinuation(cmd string, skip []bool) bool {
+// by a newline outside quotes, using shellQuoteMask's quoting rules. Bash
+// removes such a pair before it identifies words (Bash Reference Manual,
+// "Escape Character"). Inside single quotes the pair is literal; inside double
+// quotes bash removes it too, but it only joins text within one quoted word and
+// creates no new word, so it does not count here.
+func hasUnquotedLineContinuation(cmd string) bool {
 	var quote byte // 0 = unquoted, '\'' or '"' = inside that quote
 	for i := 0; i < len(cmd); i++ {
 		ch := cmd[i]
 		if ch == '\\' && quote != '\'' {
-			if quote == 0 && !skip[i] && i+1 < len(cmd) && cmd[i+1] == '\n' {
+			if quote == 0 && i+1 < len(cmd) && cmd[i+1] == '\n' {
 				return true
 			}
 			i++
@@ -191,8 +217,8 @@ func isFDNumberWord(cmd string, mask []bool, start, op int) bool {
 }
 
 // redirectionOperatorEnd returns the index after the unquoted redirection
-// operator starting at op: `<`, `>`, `>>`, `<<`, `<<-`, `<<<`, `<>`, `>|`,
-// `>&`, `<&`.
+// operator starting at op: `<`, `>`, `>>`, `<>`, `>|`, `>&`, `<&`. mayBraceExpand
+// has already withheld the rule for any `<<`.
 func redirectionOperatorEnd(cmd string, mask []bool, op int) int {
 	j := op + 1
 	for j < len(cmd) && !mask[j] {
@@ -201,7 +227,6 @@ func redirectionOperatorEnd(cmd string, mask []bool, op int) int {
 		case c == '<' || c == '>':
 		case c == '|' && prev == '>':
 		case c == '&' && (prev == '<' || prev == '>'):
-		case c == '-' && prev == '<' && j-op == 2:
 		default:
 			return j
 		}
@@ -260,9 +285,6 @@ func nestedShellMayBraceExpand(args []string, depth int) bool {
 		j++
 	}
 	for j < len(args) && isRedirectionWord(args[j]) {
-		if strings.HasPrefix(strings.TrimLeft(args[j], "0123456789"), "<<<") {
-			return true // a here-string feeds the shell its script on standard input
-		}
 		if isBareRedirectionOperator(args[j]) {
 			j++ // `> out`, `< in`, `2> err`: the next word is the target, not a script
 		}
@@ -290,11 +312,11 @@ var stdinScriptNames = map[string]bool{
 }
 
 // isBareRedirectionOperator reports a redirection operator written apart from
-// its target word (`>`, `>>`, `<`, `2>`, `<<`, `>|`, `<>`); the target is the
+// its target word (`>`, `>>`, `<`, `2>`, `>|`, `<>`); the target is the
 // next word.
 func isBareRedirectionOperator(w string) bool {
 	switch strings.TrimLeft(w, "0123456789") {
-	case "<", ">", ">>", "<<", "<<-", ">|", "<>", "<&", ">&":
+	case "<", ">", ">>", ">|", "<>", "<&", ">&":
 		return true
 	}
 	return false
@@ -331,180 +353,4 @@ func isPlainShortOptionCluster(opt string) bool {
 func isRedirectionWord(w string) bool {
 	trimmed := strings.TrimLeft(w, "0123456789")
 	return strings.HasPrefix(trimmed, "<") || strings.HasPrefix(trimmed, ">")
-}
-
-// hereDocBody is one here-document body: cmd[start:end], and whether the
-// command consuming it is a shell (its body is then shell text). skipEnd is
-// where the line-continuation scan resumes: past the ending delimiter line
-// for an unquoted delimiter, end otherwise.
-type hereDocBody struct {
-	start, end, skipEnd int
-	shell               bool
-}
-
-// hereDocBodies finds the bodies of the unquoted `<<` / `<<-` here-documents
-// in cmd (not `<<<` here-strings). A body runs from the line after the
-// operator to the line equal to its delimiter (leading tabs ignored for
-// `<<-`), or to the end of the text when no such line exists, which is how
-// the shell treats it. With an unquoted delimiter those lines are logical
-// lines (hereDocLine). ok is false when a delimiter cannot be read, or when a
-// line continuation splits it, so the document's end stays undecided.
-func hereDocBodies(cmd string, mask []bool) ([]hereDocBody, bool) {
-	var out []hereDocBody
-	for i := 0; i+1 < len(cmd); i++ {
-		if mask[i] || cmd[i] != '<' || cmd[i+1] != '<' {
-			continue
-		}
-		if i+2 < len(cmd) && cmd[i+2] == '<' {
-			i += 2 // here-string, not a here-document
-			continue
-		}
-		op := i
-		j := i + 2
-		stripTabs := false
-		if j < len(cmd) && cmd[j] == '-' {
-			stripTabs = true
-			j++
-		}
-		for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
-			j++
-		}
-		delim, next, quoted, ok := readHereDocDelimiter(cmd, j)
-		if !ok {
-			return nil, false
-		}
-		nl := strings.IndexByte(cmd[next:], '\n')
-		if nl < 0 {
-			i = next
-			continue // operator on the last line: no body
-		}
-		start := next + nl + 1
-		end, resume := hereDocTerminator(cmd, start, delim, stripTabs, !quoted)
-		skipEnd := resume
-		if quoted {
-			skipEnd = end
-		}
-		out = append(out, hereDocBody{start: start, end: end, skipEnd: skipEnd, shell: hereDocConsumerIsShell(cmd, mask, op)})
-		i = resume
-	}
-	return out, true
-}
-
-// hereDocTerminator finds the line ending the document whose body starts at
-// start. It returns that line's start and the index just past its text, or
-// len(cmd) twice when no line matches.
-func hereDocTerminator(cmd string, start int, delim string, stripTabs, joinLines bool) (end, resume int) {
-	for pos := start; pos < len(cmd); {
-		line, lineEnd := hereDocLine(cmd, pos, joinLines)
-		if stripTabs {
-			line = strings.TrimLeft(line, "\t")
-		}
-		if line == delim {
-			return pos, lineEnd
-		}
-		pos = lineEnd + 1
-	}
-	return len(cmd), len(cmd)
-}
-
-// hereDocLine returns the line at cmd[pos:] and the index of the newline that
-// ends it (len(cmd) when none does). With joinLines it reads the logical line
-// of an unquoted-delimiter document as bash does (measured on bash 3.2 and
-// 5.3): a backslash removes a following newline and otherwise escapes the next
-// character, so in `\\<newline>` the second backslash is escaped and the
-// newline still ends the line.
-func hereDocLine(cmd string, pos int, joinLines bool) (string, int) {
-	if !joinLines {
-		if nl := strings.IndexByte(cmd[pos:], '\n'); nl >= 0 {
-			return cmd[pos : pos+nl], pos + nl
-		}
-		return cmd[pos:], len(cmd)
-	}
-	var b strings.Builder
-	for i := pos; i < len(cmd); i++ {
-		c := cmd[i]
-		switch {
-		case c == '\n':
-			return b.String(), i
-		case c == '\\' && i+1 < len(cmd):
-			i++
-			if cmd[i] != '\n' {
-				b.WriteByte(c)
-				b.WriteByte(cmd[i])
-			}
-		default:
-			b.WriteByte(c)
-		}
-	}
-	return b.String(), len(cmd)
-}
-
-// readHereDocDelimiter reads the delimiter word at cmd[j:], removing quotes
-// and backslashes as the shell does. It returns the word, the index after it
-// and whether any part of it was quoted. ok is false for a word it cannot
-// read, including one split by a line continuation.
-func readHereDocDelimiter(cmd string, j int) (delim string, next int, quoted, ok bool) {
-	var b strings.Builder
-	var quote byte
-	k := j
-	for ; k < len(cmd); k++ {
-		c := cmd[k]
-		switch {
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			} else {
-				b.WriteByte(c)
-			}
-		case c == '\'' || c == '"':
-			quote = c
-			quoted = true
-		case c == '\\' && k+1 < len(cmd):
-			k++
-			if cmd[k] == '\n' {
-				return "", k, false, false
-			}
-			quoted = true
-			b.WriteByte(cmd[k])
-		case c == ' ' || c == '\t' || c == '\n' || strings.IndexByte(";|&<>()", c) >= 0:
-			if b.Len() == 0 || quote != 0 {
-				return "", k, false, false
-			}
-			return b.String(), k, quoted, true
-		default:
-			b.WriteByte(c)
-		}
-	}
-	if quote != 0 || b.Len() == 0 {
-		return "", k, false, false
-	}
-	return b.String(), k, quoted, true
-}
-
-// hereDocConsumerIsShell reports whether the simple command that owns the
-// here-document operator at op runs a brace-expanding shell or eval anywhere
-// in its words. When it cannot tell, it answers true (the body is then
-// scanned as shell text).
-func hereDocConsumerIsShell(cmd string, mask []bool, op int) bool {
-	start := 0
-	for k := op - 1; k >= 0; k-- {
-		if !mask[k] && strings.IndexByte(";|&\n(", cmd[k]) >= 0 {
-			start = k + 1
-			break
-		}
-	}
-	words, ok := tokenizeShellWords(cmd[start:op])
-	if !ok || len(words) == 0 {
-		return true
-	}
-	// Any shell or eval word in the simple command counts, not only its head:
-	// a wrapper such as env, command, nice, exec, nohup, time or sudo puts
-	// the shell later in the word list (T11 round 4).
-	for _, w := range words {
-		base := filepath.Base(w)
-		if braceExpandingShells[base] || base == "eval" {
-			return true
-		}
-	}
-	return false
 }

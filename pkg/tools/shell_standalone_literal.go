@@ -26,18 +26,21 @@
 // A seventh condition (T11 fix round 3, founder "simplify the guard"): the
 // rule applies only when no unquoted "{" or "}" exists in any text the shell
 // will parse — the command itself, the script of a nested `sh -c` / `bash -c`
-// (and the other shells), an `eval`, or a here-document fed to a shell
-// (commandMayBraceExpand, shell_brace_expansion.go). Brace expansion needs
-// unquoted braces, so this closes every `{'/tm',}p` concatenation shape
-// without matching braces, while braces inside quoted script text (Python
-// dicts, f-strings) or a here-document fed to a non-shell program do not
-// disable the rule.
+// (and the other shells), or an `eval` (commandMayBraceExpand,
+// shell_brace_expansion.go). Brace expansion needs unquoted braces, so this
+// closes every `{'/tm',}p` concatenation shape without matching braces, while
+// braces inside quoted script text (Python dicts, f-strings) do not disable
+// the rule.
 //
 // The same scan also withholds the rule when any of that shell text holds a
 // backslash-newline line continuation outside quotes (T11 round 7, S5c,
 // founder 2026-11-01 "S5c A"): the shell joins the lines before it reads the
 // words, so a continued interpreter name such as `ba\<newline>sh` would
 // otherwise hide a shell reading its script from a pipe.
+//
+// Any `<<` withholds the rule too, except in the one whole-command here-document
+// form `PROGRAM <<'MARKER'` (founder ruling Q11 A, isPlainHereDocument), whose
+// text is data to the launching shell, so none of the scan above applies to it.
 //
 // The guard still reads command text only; this rule does not make it a
 // boundary. What stays refused is recorded in the spec ("Recorded
@@ -149,8 +152,8 @@ func standAloneQuotedLiteral(cmd string, start, end int) bool {
 	}
 	openQ, closeQ := start-1, end
 	// The literal's own quotes are either one top-level shell region (shell
-	// text such as `echo '/api/v1'`, or a here-document body scanned as shell
-	// text), or plain characters inside an enclosing region of the other
+	// text such as `echo '/api/v1'`, or a line of a here-document's text), or
+	// plain characters inside an enclosing region of the other
 	// quote kind (`python3 -c "print('/api/v1')"`). Anything else — the two
 	// quotes belong to different regions — is not one matching pair.
 	var outer *shellQuoteRegion
