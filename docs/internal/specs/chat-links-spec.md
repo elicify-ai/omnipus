@@ -796,6 +796,7 @@ IDs: `BS-<story>.<n>`; `SEC-n`. Categories: HP happy, AP alternate, EP error, EC
 | ref is a secret carve-out path | identical bytes to missing |
 | ref resolves to the Library root (empty relative path) | not-found/not-permitted text (identical bytes) |
 | ref is a folder | not-found/not-permitted text (identical bytes); only regular files open (C2, B1) |
+| ref is a relative symlink whose target stays inside the Library | opens the real file, the same as a clicked chat link; a link leaving the Library, an absolute-target link and a link to a secret are refused (D-symlink) |
 | ref names a missing file under a carve-out | not-found/not-permitted text, identical bytes to an existing carve-out file, never the "outside" text (C2, B2) |
 | turn has no workspace (empty `ToolWorkspaceID`) | no-workspace error |
 | turn is a delegated or steered worker session (`ToolTranscriptSessionID` ≠ `ToolRootChatSessionID`; the child's channel is `"webchat"`, so the channel gate does not catch it) | "only the chat the user is in can open the Library" |
