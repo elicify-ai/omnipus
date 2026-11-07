@@ -69,6 +69,9 @@ function saveFailureMessage(err: unknown): string {
   if (isApiError(err) && err.status === 401) {
     return 'Your session has ended. Sign in again, then save; your changes are still here.'
   }
+  // The write reached disk, so "Could not save" would be false; the server's
+  // text says what happened and what to do.
+  if (isApiError(err) && err.code === 'saved_not_refreshed') return err.userMessage
   return `Could not save: ${getErrorMessage(err, 'unknown error')}`
 }
 

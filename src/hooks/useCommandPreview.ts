@@ -35,6 +35,11 @@ import { MAX_TOOL_ITERATIONS_MIN, MAX_TOOL_ITERATIONS_MAX } from '@/components/s
 
 const DEBOUNCE_MS = 400
 
+// The 400 for a run refusal has no error code on the wire; its text is the
+// exact refusal a real run gives, and every such text opens with this prefix
+// (`thirdpartycli.NoPathText` and `CheckFailedText`).
+const RUN_REFUSAL_PREFIX = 'This agent cannot run:'
+
 export type CommandPreviewState =
   | { kind: 'idle' }
   | { kind: 'pending' }
@@ -52,8 +57,12 @@ export type CommandPreviewState =
    * still apply when this agent runs", since a value THIS endpoint rejects
    * as schema-invalid is likely to misbehave at real save/dispatch time too
    * (same shared schema family) — see the finding this fixes.
+   * `isRunRefusal` is present only on the 400 that means this CLI cannot run
+   * (no saved program, or the saved one fails its checks). Nothing the
+   * operator typed here is wrong, so it is neither a validation error nor a
+   * transport failure, and `message` is shown as it stands.
    */
-  | { kind: 'error'; message: string; isValidationError: boolean }
+  | { kind: 'error'; message: string; isValidationError: boolean; isRunRefusal?: true }
 
 export interface UseCommandPreview {
   status: CommandPreviewState
@@ -122,7 +131,12 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
               : 'Could not compute a live command preview.'
           // Any 4xx other than 429 (rate-limited, a transport-shaped
           // condition the operator can't fix by editing the field) means the
-          // server itself rejected this request body as invalid.
+          // server itself rejected this request body as invalid, except the
+          // run refusal, which is about the saved program and not this body.
+          if (isApiError(err) && err.status === 400 && message.startsWith(RUN_REFUSAL_PREFIX)) {
+            setStatus({ kind: 'error', message, isValidationError: false, isRunRefusal: true })
+            return
+          }
           const isValidationError = isApiError(err) && err.status >= 400 && err.status < 500 && err.status !== 429
           setStatus({ kind: 'error', message, isValidationError })
         })

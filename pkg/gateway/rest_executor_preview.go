@@ -118,10 +118,17 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	// free-form string.
 	cliArgs := runner.ParseCLIArgs(cliArgsRaw, "executor-preview")
 
+	row, _, refusal := a.executorProgram(cli)
+	if refusal != "" {
+		jsonErr(w, http.StatusBadRequest, refusal)
+		return
+	}
+
 	opts := runner.RunOptions{
-		Model:    model,
-		CLIArgs:  cliArgs,
-		MaxTurns: maxTurns,
+		Model:      model,
+		CLIArgs:    cliArgs,
+		PresetArgs: runner.ParseCLIArgs(row.PresetArgs, "executor-preview"),
+		MaxTurns:   maxTurns,
 		// Constant placeholder: inert for claude/codex (their buildArgs never
 		// reads opts.Input — the real prompt reaches them exclusively via
 		// stdin in Run(), not buildArgs), and for opencode it correctly shows
@@ -155,12 +162,6 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	droppedArgs := make([]executorPreviewDroppedArg, 0, len(droppedDetailed))
 	for _, d := range droppedDetailed {
 		droppedArgs = append(droppedArgs, executorPreviewDroppedArg{Flag: d.Flag, Reason: d.Reason})
-	}
-
-	row, _, refusal := a.executorProgram(cli)
-	if refusal != "" {
-		jsonErr(w, http.StatusBadRequest, refusal)
-		return
 	}
 
 	var promptDelivery gen.ExecutorCommandPreviewResponsePromptDelivery

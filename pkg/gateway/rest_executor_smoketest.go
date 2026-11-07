@@ -39,6 +39,10 @@
 //     configurable in this pass), a small MaxTurns cap, and a short
 //     TimeoutSeconds — see the consts below for the exact values and
 //     rationale.
+//   - The person's saved preset is applied after the filtered cli_args, as on
+//     a real run, and the audit entry records it like a run's (T11, founder
+//     Q14): the audit copy obeys tools.filter_sensitive_data and carries the
+//     preset-use note.
 //   - Dangerous cli_args are filtered via the SAME denylist executor-preview
 //     already surfaces (runner.FilterDangerousCLIArgsDetailed) before ever
 //     reaching RunOptions — defense in depth on top of each driver's own
@@ -116,6 +120,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -263,8 +268,8 @@ func (a *restAPI) postAgentsExecutorSmokeTest(w http.ResponseWriter, r *http.Req
 	cliArgsRaw := derefStr(req.CliArgs)
 	agentID := derefTrimStr(req.AgentId)
 
-	resp, resolvedBinary := a.runExecutorSmokeTest(r.Context(), cli, model, cliArgsRaw, agentID)
-	a.auditExecutorSmokeTest(r, cli, resolvedBinary, resp)
+	resp, resolvedBinary, presetApplied := a.runExecutorSmokeTest(r.Context(), cli, model, cliArgsRaw, agentID)
+	a.auditExecutorSmokeTest(r, cli, resolvedBinary, presetApplied, resp)
 	jsonOK(w, resp)
 }
 
@@ -310,6 +315,7 @@ type restAPIRunExecutorSmokeTest struct {
 	cliArgsRaw         string
 	durationMs         func() int
 	resolvedBinary     string
+	presetApplied      string
 	usedAgentWorkspace bool
 	runID              string
 	safeArgs           []string
@@ -320,12 +326,13 @@ type restAPIRunExecutorSmokeTest struct {
 
 // runExecutorSmokeTest performs the actual dispatch without any HTTP
 // concern, so it is directly unit-testable. It returns the wire response
-// plus the resolved binary path/name (for the caller's audit record — the
-// wire response schema deliberately does not carry this).
+// plus the resolved binary path/name and the preset text the started run
+// applied, "" for none (for the caller's audit record — the wire response
+// schema deliberately does not carry these).
 func (a *restAPI) runExecutorSmokeTest(
 	ctx context.Context,
 	cli, model, cliArgsRaw, agentID string,
-) (gen.ExecutorSmokeTestResponse, string) {
+) (gen.ExecutorSmokeTestResponse, string, string) {
 	ra := &restAPIRunExecutorSmokeTest{cli: cli, cliArgsRaw: cliArgsRaw}
 
 	start := time.Now()
@@ -338,7 +345,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	// every other failed run, and the audit record names the saved path.
 	row, resolved, refusal := a.executorProgram(ra.cli)
 	if refusal != "" {
-		return smokeTestFail(refusal, ra.durationMs(), false), row.Path
+		return smokeTestFail(refusal, ra.durationMs(), false), row.Path, ""
 	}
 	ra.resolvedBinary = resolved
 
@@ -416,7 +423,7 @@ func (a *restAPI) runExecutorSmokeTest(
 			return smokeTestFail(
 				smokeTestPrepText("could not prepare agent directory", mkErr),
 				ra.durationMs(), false,
-			), ra.resolvedBinary
+			), ra.resolvedBinary, ra.presetApplied
 		}
 		workDir = resolved
 		isEphemeralWorkspace = false
@@ -426,7 +433,7 @@ func (a *restAPI) runExecutorSmokeTest(
 			return smokeTestFail(
 				smokeTestPrepText("could not prepare scratch workspace", mkRootErr),
 				ra.durationMs(), false,
-			), ra.resolvedBinary
+			), ra.resolvedBinary, ra.presetApplied
 		}
 		dir, mkErr := os.MkdirTemp(root, "run-")
 		if mkErr != nil {
@@ -434,7 +441,7 @@ func (a *restAPI) runExecutorSmokeTest(
 				smokeTestPrepText("could not create scratch workspace", mkErr),
 				ra.durationMs(),
 				false,
-			), ra.resolvedBinary
+			), ra.resolvedBinary, ra.presetApplied
 		}
 		workDir = dir
 		isEphemeralWorkspace = true
@@ -481,7 +488,7 @@ func (a *restAPI) runExecutorSmokeTest(
 			smokeTestPrepText("could not construct driver", err),
 			ra.durationMs(),
 			ra.usedAgentWorkspace,
-		), ra.resolvedBinary
+		), ra.resolvedBinary, ra.presetApplied
 	}
 
 	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
@@ -493,6 +500,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		MaxTurns:       smokeTestMaxTurns,
 		CLIPath:        ra.resolvedBinary,
 		CLIArgs:        ra.safeArgs,
+		PresetArgs:     runner.ParseCLIArgs(row.PresetArgs, ra.runID),
 		Model:          model,
 	})
 	if runErr != nil {
@@ -500,8 +508,10 @@ func (a *restAPI) runExecutorSmokeTest(
 			smokeTestPrepText("failed to start "+ra.cli, runErr),
 			ra.durationMs(),
 			ra.usedAgentWorkspace,
-		), ra.resolvedBinary
+		), ra.resolvedBinary, ra.presetApplied
 	}
+
+	ra.presetApplied = row.PresetArgs
 
 	slog.Info("executor-smoke-test: run started",
 		"run_id", ra.runID, "cli", ra.cli, "timeout_s", smokeTestTimeoutSeconds, "max_turns", smokeTestMaxTurns)
@@ -570,7 +580,7 @@ func (ra *restAPIRunExecutorSmokeTest) prepareArguments() {
 }
 
 // buildResponse builds and logs the final smoke-test response.
-func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestResponse, string) {
+func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestResponse, string, string) {
 	var resp gen.ExecutorSmokeTestResponse
 	if ra.ok {
 		resp = smokeTestOK(ra.responseText, ra.durationMs(), ra.usedAgentWorkspace)
@@ -592,7 +602,7 @@ func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestRes
 	}
 	slog.Info("executor-smoke-test: run finished", finishArgs...)
 
-	return resp, ra.resolvedBinary
+	return resp, ra.resolvedBinary, ra.presetApplied
 }
 
 // smokeTestPermissionDeniedErr is the specific, non-generic error surfaced
@@ -810,7 +820,7 @@ func sweepSmokeTestOrphans() (removed int, errs []error) {
 // diagnostic.
 func (a *restAPI) auditExecutorSmokeTest(
 	r *http.Request,
-	cli, resolvedBinary string,
+	cli, resolvedBinary, presetApplied string,
 	resp gen.ExecutorSmokeTestResponse,
 ) {
 	if a.auditor == nil {
@@ -820,15 +830,20 @@ func (a *restAPI) auditExecutorSmokeTest(
 	if resp.Ok {
 		decision = audit.DecisionAllow
 	}
+	details := map[string]any{
+		"cli":    cli,
+		"binary": resolvedBinary,
+		"ok":     resp.Ok,
+	}
+	if presetApplied != "" {
+		details["preset_args"] = thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())(presetApplied)
+		details["note"] = thirdpartycli.PresetUseNote
+	}
 	if err := a.auditor.Log(&audit.Entry{
 		Event:    audit.EventExecutorSmokeTest,
 		Decision: decision,
 		User:     cliValidateAuditUser(r),
-		Details: map[string]any{
-			"cli":    cli,
-			"binary": resolvedBinary,
-			"ok":     resp.Ok,
-		},
+		Details:  details,
 	}); err != nil {
 		slog.Warn("audit write failed", "event", audit.EventExecutorSmokeTest, "error", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // EnvMask replaces every env_overrides value on every read (EX-01).
@@ -202,18 +203,60 @@ func MaskEnv(env map[string]string) map[string]string {
 	return out
 }
 
+// rootsIncomplete, as an entry of an agent-writable list, says the list could
+// not be completed, so ValidateProgramPath refuses every path. A missing root
+// would otherwise silently turn "refuse" into "allow". NUL cannot occur in a
+// real path, so no real entry can equal it.
+const rootsIncomplete = "\x00agent-writable-roots-incomplete"
+
 // AgentWritableRoots lists the agent-writable locations a program path must
 // stay outside beyond $OMNIPUS_HOME: the gateway's home folder (every
-// workspace root lives under it) and the sandbox's read+write grants
-// (sandbox.allowed_paths), r17 §3.5. The Settings save, the read model and
-// the agent tools all use this one list.
+// workspace root lives under it), the sandbox's read+write grants
+// (sandbox.allowed_paths) and the host folder of every workspace mount (T11
+// §5). It is read on every call, so a mount added after a program was saved
+// counts at the next check. The Settings save, every run, the read model and
+// the agent tools all use this one list. When the mounts cannot be listed
+// completely the failure is logged and the list carries rootsIncomplete.
 func AgentWritableRoots(home string, cfg *config.Config) []string {
 	out := []string{home}
 	if cfg != nil {
 		out = append(out, cfg.Sandbox.AllowedPaths...)
 	}
-	return out
+	mounts, err := workspaceMountRoots(home)
+	if err != nil {
+		slog.Error("third-party program check: every program path is refused until this is fixed", "error", err)
+		return append(out, rootsIncomplete)
+	}
+	return append(out, mounts...)
 }
+
+// workspaceMountRoots returns the host folder of every mount of every
+// workspace, or an error when a workspace listing or a mount record cannot be
+// read in full.
+func workspaceMountRoots(home string) ([]string, error) {
+	if strings.TrimSpace(home) == "" {
+		home = config.OmnipusHomeDir()
+	}
+	ids, err := workspace.ListWorkspaceIDs(home)
+	if err != nil {
+		return nil, fmt.Errorf("the workspaces could not be listed: %w", err)
+	}
+	var roots []string
+	for _, id := range ids {
+		mounts, ok, dropped := workspace.LoadMountsWithDropStatus(home, id)
+		if !ok || dropped {
+			return nil, fmt.Errorf("the mount record of workspace %q could not be read in full", id)
+		}
+		for _, m := range mounts {
+			roots = append(roots, m.HostPath)
+		}
+	}
+	return roots, nil
+}
+
+// PresetUseNote is the plain-text note on the audit entry of every run or test
+// message that applies preset parameters (T11 §4 Audit).
+const PresetUseNote = "person preset used; flag filter bypassed for preset parameters"
 
 // PresetAuditWithheld stands in for preset text in an audit entry when the
 // configuration is missing: the entry says so rather than holding clear text.

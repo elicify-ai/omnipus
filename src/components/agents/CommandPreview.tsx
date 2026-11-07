@@ -132,9 +132,11 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
     // settings below still apply when this agent runs" would be actively
     // misleading — a value this endpoint rejects as schema-invalid is likely
     // to misbehave at real save/dispatch time too (same shared schema
-    // family). Transport/network/5xx/429 failures keep the original
-    // reassuring copy — those say nothing about whether the settings
-    // themselves are valid.
+    // family). A run refusal is shown as it stands: it already says what a
+    // real run says and where to fix it, and no typed value is at fault.
+    // Transport/network/5xx/429 failures keep the original reassuring copy —
+    // those say nothing about whether the settings themselves are valid.
+    const isFault = status.isValidationError || status.isRunRefusal
     previewBlock = (
       <div
         data-testid={testId}
@@ -143,10 +145,12 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
       >
         <p
           className={`text-[length:var(--type-caption-size)] leading-snug ${
-            status.isValidationError ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]'
+            isFault ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]'
           }`}
         >
-          {status.isValidationError ? (
+          {status.isRunRefusal ? (
+            <>{status.message}</>
+          ) : status.isValidationError ? (
             <>This value couldn't be validated ({status.message}) — check it before saving.</>
           ) : (
             <>Couldn't compute a live command preview — the settings below still apply when this agent runs.</>

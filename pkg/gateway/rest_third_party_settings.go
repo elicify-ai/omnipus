@@ -68,15 +68,24 @@ func (a *restAPI) HandleThirdPartyAgentSettings(w http.ResponseWriter, r *http.R
 }
 
 // thirdPartyAgentWritable lists the agent-writable locations the path check
-// refuses beyond $OMNIPUS_HOME: the gateway's own home folder (every
-// workspace root lives under it) and the sandbox's read+write grants
-// (sandbox.allowed_paths). r17 §3.5.
+// refuses beyond $OMNIPUS_HOME; see thirdpartycli.AgentWritableRoots.
 func thirdPartyAgentWritable(homePath string, cfg *config.Config) []string {
 	return thirdpartycli.AgentWritableRoots(homePath, cfg)
 }
 
+// thirdPartySavedNotAppliedText is the 500 text when the write reached disk but
+// the running config could not be refreshed; thirdPartySavedNotAppliedCode lets
+// the Settings tab show it without calling the save a failure.
+const (
+	thirdPartySavedNotAppliedText = "third-party agent settings were saved, but they are not applied yet; " +
+		"save again or restart Omnipus to apply them"
+	thirdPartySavedNotAppliedCode = "saved_not_refreshed"
+)
+
 // putThirdPartyAgentSettings validates every row, then writes the whole
-// section in one config write and audits each changed path and preset.
+// section in one config write and audits each changed path and preset. A
+// change that reached disk is audited at once even when the refresh fails: a
+// retry reads the saved values back as "previous", so it could never record it.
 func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -87,7 +96,7 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body gen.ThirdPartyAgentSettings
-	if err := json.Unmarshal(raw, &body); err != nil {
+	if err = json.Unmarshal(raw, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -104,16 +113,23 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	var previous map[string]config.ThirdPartyCLIConfig
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
 		previous = readThirdPartyRows(m)
 		writeThirdPartyRows(m, rows)
 		return nil
-	}); err != nil {
+	})
+	var refreshErr *configRefreshError
+	if err != nil && !errors.As(err, &refreshErr) {
 		logsafeError("rest: PUT /settings/third-party-agents: failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to update third-party agent settings")
 		return
 	}
 	a.auditThirdPartyChanges(r, previous, rows)
+	if refreshErr != nil {
+		logsafeError("rest: PUT /settings/third-party-agents: saved but not applied", "error", err)
+		jsonErrCode(w, http.StatusInternalServerError, thirdPartySavedNotAppliedText, thirdPartySavedNotAppliedCode)
+		return
+	}
 	writeJSON(w, http.StatusOK, a.thirdPartySettingsView())
 }
 

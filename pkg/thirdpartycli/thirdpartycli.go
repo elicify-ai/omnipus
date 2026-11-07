@@ -38,7 +38,6 @@ const (
 	CheckNotRegularFile        = "not_regular_file"
 	CheckNotExecutable         = "not_executable"
 	CheckAgentWritableLocation = "agent_writable_location"
-	CheckWritableByOthers      = "writable_by_others"
 	CheckWindowsExtension      = "windows_extension"
 	CheckWindowsShortName      = "windows_short_name"
 	CheckWindowsStream         = "windows_stream"
@@ -55,7 +54,6 @@ var pathReasons = map[string]string{
 	CheckNotRegularFile:        "it is not a regular file",
 	CheckNotExecutable:         "it is not executable for the Omnipus user",
 	CheckAgentWritableLocation: "it is inside a folder agents can write to",
-	CheckWritableByOthers:      "it, or the folder holding it, can be changed by any user",
 	CheckWindowsExtension:      "it must end in .exe, .com, .cmd or .bat",
 	CheckWindowsShortName:      "short (8.3) names are not accepted; use the full name",
 	CheckWindowsStream:         "alternate data streams are not accepted",

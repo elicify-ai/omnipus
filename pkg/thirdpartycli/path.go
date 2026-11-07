@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -22,9 +23,11 @@ const maxLinkHops = 40
 // caller must exec; err is a *CheckError.
 //
 // Agent-writable locations are $OMNIPUS_HOME (every workspace root lives
-// under it) plus agentWritable: the caller passes the gateway's home folder
-// and the sandbox's agent-writable grants (sandbox.allowed_paths). A leading
-// "~" in an entry is expanded.
+// under it) plus agentWritable, which callers build with AgentWritableRoots.
+// A leading "~" in an entry is expanded. A list AgentWritableRoots could not
+// complete refuses every path as CheckAgentWritableLocation. File ownership
+// and permission bits are not checked (founder Q2b, Q13): protecting the
+// program is its owner's job.
 func ValidateProgramPath(cli, enteredPath string, agentWritable ...string) (resolvedPath string, err error) {
 	fail := func(check, at string) (string, error) {
 		return "", &CheckError{CLI: cli, Check: check, At: at}
@@ -34,6 +37,9 @@ func ValidateProgramPath(cli, enteredPath string, agentWritable ...string) (reso
 	}
 	if check := windowsNameCheck(enteredPath); check != "" {
 		return fail(check, enteredPath)
+	}
+	if slices.Contains(agentWritable, rootsIncomplete) {
+		return fail(CheckAgentWritableLocation, enteredPath)
 	}
 	roots := writableRoots(agentWritable)
 	final, hops, cerr := resolveChain(cli, enteredPath, roots)
@@ -95,10 +101,8 @@ func resolveChain(cli, enteredPath string, roots []string) (string, int, error) 
 			resolved = cur
 			continue
 		}
-		// A link's own mode bits are never checked (Linux reports 0777);
-		// its containing folder is.
-		if check := folderCheck(resolved, roots); check != "" {
-			return fail(check, cur)
+		if insideAny(resolved, roots) {
+			return fail(CheckAgentWritableLocation, cur)
 		}
 		if hops >= maxLinkHops {
 			return fail(CheckNotFound, cur)
@@ -148,49 +152,18 @@ func splitPath(p string) (root string, parts []string) {
 	return root, parts
 }
 
-// finalFileCheck applies the final-file and containing-folder rows of r17
-// §3.5 in their stated order and returns the failing check name or "".
+// finalFileCheck applies the final-file rows of r17 §3.5 in their stated order
+// and returns the failing check name or "".
 func finalFileCheck(path string, fi os.FileInfo, roots []string) string {
 	switch {
 	case !fi.Mode().IsRegular():
 		return CheckNotRegularFile
 	case canExecute(path) != nil:
 		return CheckNotExecutable
-	case worldWritable(fi):
-		return CheckWritableByOthers
 	case insideAny(path, roots):
 		return CheckAgentWritableLocation
 	}
-	if dir, err := os.Stat(filepath.Dir(path)); err == nil && worldWritable(dir) {
-		return CheckWritableByOthers
-	}
 	return ""
-}
-
-// folderCheck applies the link-folder rule: not inside an agent-writable
-// location, not world-writable.
-func folderCheck(dir string, roots []string) string {
-	if insideAny(dir, roots) {
-		return CheckAgentWritableLocation
-	}
-	fi, err := os.Stat(dir)
-	if err != nil {
-		return CheckNotFound
-	}
-	if worldWritable(fi) {
-		return CheckWritableByOthers
-	}
-	return ""
-}
-
-// worldWritable is the Unix other-write bit (o+w). Group-write is never
-// refused. Windows keeps no such bit (Go reports 0666 for every writable
-// file there), so the check does not apply on Windows.
-func worldWritable(fi os.FileInfo) bool {
-	if runtime.GOOS == "windows" {
-		return false
-	}
-	return fi.Mode().Perm()&0o002 != 0
 }
 
 // writableRoots returns $OMNIPUS_HOME plus the supplied agent-writable
