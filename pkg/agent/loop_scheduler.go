@@ -20,6 +20,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -325,9 +326,8 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		}
 		newJobID, aerr := s.AddOneShot(job.AgentID, sessionID, delayMS)
 		if aerr != nil {
-			logger.WarnCF("agent", "loop: failed to schedule next self-paced run",
-				map[string]any{"session_id": sessionID, "error": aerr.Error()})
-			return nil
+			// The run itself is recorded above; only its next step is missing.
+			return &loopNextStepError{err: aerr}
 		}
 		if perr := set(session.MetaPatch{LoopJobID: &newJobID, LoopNextDelayMS: &delayMS}); perr != nil {
 			logger.WarnCF("agent", "loop: failed to persist next-run job id",
@@ -337,6 +337,15 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		out.delayMS, out.state = &delayInt, "scheduled_next"
 		return nil
 	})
+	var nextErr *loopNextStepError
+	if errors.As(err, &nextErr) {
+		// The self-paced loop has no next step in this process. Its saved
+		// state is intact, so boot recovery (FR-05) gives it a fresh step at
+		// the next gateway start.
+		logger.ErrorCF("agent", "loop: could not schedule the next self-paced run; the loop resumes at the next gateway start",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": nextErr.err.Error()})
+		return
+	}
 	if err != nil {
 		logger.WarnCF("agent", "loop: post-turn settle could not read the session; no post-turn change applied",
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
@@ -352,6 +361,16 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		s.al.emitLoopStatusFrame(sessionID, out.mode, out.run, out.maxRuns, out.delayMS, out.state)
 	}
 }
+
+// loopNextStepError is settleTurn's outcome when a self-paced run completed
+// but its next step could not be added to the engine.
+type loopNextStepError struct{ err error }
+
+func (e *loopNextStepError) Error() string {
+	return "schedule the next self-paced run: " + e.err.Error()
+}
+
+func (e *loopNextStepError) Unwrap() error { return e.err }
 
 // effectiveLoopMaxRuns is the loop's saved run limit, defaulted when a saved
 // value is below 1.
