@@ -25,7 +25,7 @@ import { pendingCancelAckSids } from './chat/runtime-state'
 import { emptySessionState } from './chat/session'
 import { partitionMedia } from '@/components/chat/previewGroups'
 import type { ServerFrame } from '@/lib/ws'
-import type { MediaAttachment } from './types'
+import type { MediaAttachment } from './chat/types'
 
 const SID = 'session-office-shortened-history'
 
@@ -137,7 +137,7 @@ describe('preview-group facts on shortened history pages (§5.2)', () => {
       useChatStore.getState().handleFrame(pageFrame('call-2', 'complete'))
     })
     const media = sessionMedia()
-    expect(media.some((item) => item.unavailableReason !== undefined)).toBe(false, 'the marker must not survive the re-delivery')
+    expect(media.some((item) => item.unavailableReason !== undefined), 'the marker must not survive the re-delivery').toBe(false)
     expect(media).toHaveLength(2)
     expect(media.every((item) => item.pageNumber !== undefined)).toBe(true)
   })

@@ -114,11 +114,16 @@ func d9bBindMailbox(t *testing.T, api *restAPI, agentID, workspaceID string) {
 	require.Equal(t, http.StatusOK, w.Code, "instrument: the mailbox must bind cleanly; body=%s", w.Body.String())
 }
 
-func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
-	rows := []struct {
-		name  string
-		setup func(t *testing.T) (d9Outcome, string)
-	}{
+// d9bWriterRow is one §3.4 D9b writer. The table is outside the test
+// function so that function stays within the size budget. Rows, assertions
+// and subtest names are unchanged.
+type d9bWriterRow struct {
+	name  string
+	setup func(t *testing.T) (d9Outcome, string)
+}
+
+func d9bWriterRows() []d9bWriterRow {
+	return []d9bWriterRow{
 		{"21_login", func(t *testing.T) (d9Outcome, string) {
 			api, _ := newTestRestAPIWithUser(t, "d9buser", "Pass1111")
 			refusal, before := d9SeedOverlap(t, api)
@@ -298,6 +303,10 @@ func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
 			return d9Outcome{w.Code, w.Body.Bytes(), f.api.configPath(), before}, d9bOutboundFixedText
 		}},
 	}
+}
+
+func TestD9bWritersRefuseProgramFolderOverlap(t *testing.T) {
+	rows := d9bWriterRows()
 	require.Len(t, rows, 14, "§3.4 D9b: one row per route — the table must cover all 14 (rows 21 to 34)")
 
 	for _, row := range rows {
