@@ -328,19 +328,6 @@ func TestDeltaGW_WorkspaceDelete_CleanDeleteStillSucceeds(t *testing.T) {
 	assert.Error(t, err, "the main went with the workspace")
 }
 
-// Finding 12: the default-main lookup reads every workspace file from the
-// handler's own home, not a second source (the process environment).
-func TestDeltaGW_OwnerHasEligibleDefaultMain_UsesTheHandlersHome(t *testing.T) {
-	env := u1NewEnv(t, false)
-	env.seedWorkspace(t, deltaDefWS, true, "mia")
-	t.Setenv("OMNIPUS_HOME", t.TempDir()) // the environment now names a DIFFERENT home
-
-	ok, err := env.api.ownerHasEligibleDefaultMain("mia")
-
-	require.NoError(t, err)
-	assert.True(t, ok, "mia is on the default workspace's team under the handler's own home")
-}
-
 // Finding 12 (runner half): a scheduled main-mode run resolves the default
 // workspace and the owner's eligibility under the runner's OWN home.
 func TestDeltaGW_ScheduledMainRun_UsesTheRunnersHome(t *testing.T) {

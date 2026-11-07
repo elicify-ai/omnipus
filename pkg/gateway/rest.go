@@ -804,11 +804,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/activity", rae.a.withAuth(rae.a.HandleActivity))
 }
 
-// registerSettingsAndAccountRoutes registers schedules, notifications, settings, security, account, integration, automation, and voice routes.
+// registerSettingsAndAccountRoutes registers notifications, settings, security, account, integration, and voice routes.
+// The /api/v1/schedules and /api/v1/automations routes were removed (T10
+// FR-12); their paths fall through to the generic JSON 404 for unknown /api/ paths.
 func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes() {
-	// Schedules CRUD + run-now + pause (#264).
-	rae.cm.RegisterHTTPHandler("/api/v1/schedules", rae.a.withAuth(rae.a.HandleSchedules))
-	rae.cm.RegisterHTTPHandler("/api/v1/schedules/", rae.a.withAuth(rae.a.HandleSchedules))
 	// Header notification center (#264).
 	rae.cm.RegisterHTTPHandler("/api/v1/notifications", rae.a.withAuth(rae.a.HandleNotifications))
 	rae.cm.RegisterHTTPHandler("/api/v1/notifications/", rae.a.withAuth(rae.a.HandleNotifications))
@@ -956,9 +955,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// FR-12.1). GET lists; PUT configures.
 	rae.cm.RegisterHTTPHandler("/api/v1/integrations/providers", rae.a.withAuth(rae.a.HandleIntegrationProviders))
 	rae.cm.RegisterHTTPHandler("/api/v1/integrations/providers/", rae.a.withAuth(rae.a.HandleIntegrationProviders))
-	// Automations — trigger→action display projection over schedules (W3-AC
-	// UI reframe). Read-only; writes go through /api/v1/schedules.
-	rae.cm.RegisterHTTPHandler("/api/v1/automations", rae.a.withAuth(rae.a.HandleAutomations))
 	// Composer mic — voice transcription (Spec-6 FR-12.1).
 	rae.cm.RegisterHTTPHandler("/api/v1/voice/transcribe", rae.a.withAuth(rae.a.HandleTranscribe))
 	// Voice provider descriptor (agent-form spec §4.10.1). Drives the dropdown /

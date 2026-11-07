@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -291,35 +290,6 @@ func TestGW_M9_AskUserResumeFailureLogCarriesTheCause(t *testing.T) {
 type failingGateDispatcher struct{ err error }
 
 func (f failingGateDispatcher) DispatchResume(*askuser.PendingSet, string) error { return f.err }
-
-// M10 (finding 10): a schedule whose default workspace cannot be READ is not
-// silently saved as continue/isolated; the create fails visibly.
-func TestGW_M10_ScheduleModeIsNotSilentlyDowngradedOnAReadFailure(t *testing.T) {
-	// OMNIPUS_HOME first: newSchedulesTestAPI builds an agent loop, which reads
-	// $OMNIPUS_HOME - without this it would open the developer's real data.
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-	api, cs := newSchedulesTestAPI(t)
-	api.homePath = home
-	require.NoError(t, os.MkdirAll(filepath.Join(home, "workspaces"), 0o700))
-	// Parses as a default workspace record, but not as a stored workspace.
-	require.NoError(t, os.WriteFile(filepath.Join(home, "workspaces", "01JGWGATEM10WS000000000001.json"),
-		[]byte(`{"id":"01JGWGATEM10WS000000000001","is_default":true,"core_team":"not-a-list"}`), 0o600))
-	every := int64(60000)
-	body := gen.ScheduleCreate{Name: "n", Message: "m", OwnerAgentId: "mia"}
-	body.Trigger.Kind = "every"
-	body.Trigger.EveryMs = &every
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-	r := withUser(httptest.NewRequest(http.MethodPost, "/api/v1/schedules", bytes.NewBuffer(raw)), "alice")
-	w := httptest.NewRecorder()
-
-	api.HandleSchedules(w, r)
-
-	assert.Equal(t, http.StatusInternalServerError, w.Code, "a read failure must not be saved as a downgraded mode: %s", w.Body.String())
-	assert.Empty(t, cs.ListJobs(true), "no schedule may be saved")
-	r5AssertClean(t, w.Body.String(), "01JGWGATEM10WS000000000001", home)
-}
 
 // Founder ruling (S2 #6): "a main chat can only be deleted when the main agent is
 // deleted". DELETE /sessions/all never deletes a main (its history is kept), stops

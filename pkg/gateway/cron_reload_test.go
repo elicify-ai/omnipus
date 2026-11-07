@@ -2,7 +2,7 @@
 //
 // BDD scenarios:
 //   Scenario: restAPI.cronService atomic.Pointer Store/Load wiring
-//   Scenario: cronSvc() returns current pointer after Store
+//   Scenario: cronService.Load() returns current pointer after Store
 //
 // Traces to: project-task-management-level1-spec.md — #412 schedule reload
 
@@ -24,7 +24,7 @@ import (
 //
 //	Given a restAPI with cronService pointing to serviceA,
 //	When cronService.Store(serviceB) is called (simulating reload),
-//	Then cronSvc() returns serviceB — not serviceA.
+//	Then cronService.Load() returns serviceB — not serviceA.
 //
 // Guards against: the reload path failing to update restAPI.cronService (stale ptr).
 // Traces to: pkg/gateway/gateway.go executeReload → restAPIRef.cronService.Store — #412
@@ -33,8 +33,8 @@ func TestRestAPI_CronService_AtomicStoreLoad(t *testing.T) {
 
 	// Verify that cronService is a zero-value atomic.Pointer initially (no cron service
 	// wired in the test harness).
-	require.Nil(t, api.cronSvc(),
-		"cronSvc() must return nil when no CronService has been stored")
+	require.Nil(t, api.cronService.Load(),
+		"cronService.Load() must return nil when no CronService has been stored")
 
 	// Build two distinct CronService instances.
 	home := t.TempDir()
@@ -43,13 +43,13 @@ func TestRestAPI_CronService_AtomicStoreLoad(t *testing.T) {
 
 	// Store serviceA.
 	api.cronService.Store(serviceA)
-	assert.Equal(t, serviceA, api.cronSvc(),
-		"cronSvc() must return serviceA after storing serviceA")
+	assert.Equal(t, serviceA, api.cronService.Load(),
+		"cronService.Load() must return serviceA after storing serviceA")
 
 	// Simulate a reload: Store serviceB.
 	api.cronService.Store(serviceB)
-	assert.Equal(t, serviceB, api.cronSvc(),
-		"cronSvc() must return serviceB after storing serviceB (reload simulation)")
+	assert.Equal(t, serviceB, api.cronService.Load(),
+		"cronService.Load() must return serviceB after storing serviceB (reload simulation)")
 
 	// Verify they are distinct (differentiation test).
 	assert.NotEqual(t, serviceA, serviceB,
