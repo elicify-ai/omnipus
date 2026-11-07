@@ -544,7 +544,7 @@ Rules:
 
 ## 7. Wire contract changes (Hard Constraint #8)
 
-> Shapes decided here (architect owns contract shapes); `backend-lead` writes the YAML under `contracts/`, regenerates with `scripts/gen-contracts.sh`, and commits spec + generated artifacts atomically **before any Go/TS code** (WP-0). Field names below are the wire names. No YAML in this spec. **No schema here is a discriminated union**: every lifecycle variant is its own strict frame type, so the ADR-034 inline-union rule is not needed.
+> Shapes decided here (architect owns contract shapes); `backend-lead` writes the YAML under `contracts/`, regenerates with `scripts/gen-contracts.sh`, and commits spec + generated artifacts atomically **before any feature code** (WP-0; the one mechanical exception is stated below). Field names below are the wire names. No YAML in this spec. **No schema here is a discriminated union**: every lifecycle variant is its own strict frame type, so the ADR-034 inline-union rule is not needed.
 
 **Hand-kept inline copies (Team B review, 2026-11-06).** `contracts/asyncapi.yaml` holds its own inline copies of schemas that also exist as component files, and the generators read those copies. WP-0 changes both, or the generated types go stale. Besides the two `ProviderFallback` shapes named in §7.4: `ProviderRetryFrame`, `LLMError`, `ReplayErrorFrame`, `ReplayErrorPayload` and `NotificationFrame` (the frame message references this copy, not the component file). WP-0 also searches the file for "in sync by hand", so a copy not listed here is not missed.
 
