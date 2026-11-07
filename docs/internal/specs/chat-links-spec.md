@@ -1,7 +1,8 @@
 # Feature Specification: Chat links, show_to_user, and path display
 
 **Created**: 2026-10-15
-**Status**: Approved-draft (drift-synced 2026-10-29 to b7d4483c9)
+**Status**: Approved
+**Drift sync**: 2026-10-29 to b7d4483c9
 **Input**: Approved design note `coordination ledger `designs/chat-links/` design-note.md`, binding decisions `coordination ledger `designs/chat-links/` decisions.md`, grill round 1 `coordination ledger `designs/chat-links/` spec-review.md`, grill round 2 `coordination ledger `designs/chat-links/` spec-review-round2.md` (every round-2 MAJ/MIN answered in "Review response (round 2)"), and the drift check `(maintainer-local path)` (applied in "Drift sync 2026-10-29").
 **Code baseline**: `origin/release/v0.1.1` at `b7d4483c9` (2026-10-29). The design note and both grill rounds read an older checkout at `b45fd6f16` (2026-10-06); every `file::symbol` below was re-checked against `b7d4483c9` by `git show` / `git grep` on 2026-10-29.
 **Size**: Feature (cross-tree, wire contract change, touches `pkg/agent`, `pkg/tools`, gateway WebSocket). Needs the 5-reviewer gate and hands-on UAT on the exact landing commit.

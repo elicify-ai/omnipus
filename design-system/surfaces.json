@@ -8246,6 +8246,22 @@
     {
       "source": "src/components/chat/composer/OmnipusComposer.tsx",
       "lane": 3
+    },
+    {
+      "source": "src/components/chat/AssistantMediaItem.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatLibraryLink.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/LibraryOpenNotice.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/library/openLibraryAt.ts",
+      "lane": 4
     }
   ]
 }
