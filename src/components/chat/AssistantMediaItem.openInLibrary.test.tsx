@@ -24,6 +24,7 @@ describe('AssistantMediaItem Open in Library', () => {
     } catch (err) {
       throw new Error(
         `BLOCKED: AssistantMediaItem not implemented — required by FR-022 / BS-5.1 (${err instanceof Error ? err.message : String(err)})`,
+        { cause: err },
       )
     }
     useUiStore.getState().closePanel()

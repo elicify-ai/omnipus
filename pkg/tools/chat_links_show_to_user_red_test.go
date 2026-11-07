@@ -743,8 +743,8 @@ func TestShowToUser_RelativeSymlinkClimbingOutIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(outsideDir, "escaped.txt")
-	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(outside, []byte("outside"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	rel, err := filepath.Rel(linkDir, outside)
 	if err != nil {

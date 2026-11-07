@@ -659,9 +659,14 @@ const toolsPackagePath = "github.com/elicify-ai/omnipus/pkg/tools"
 // one". A new entry here is not a failure; it is a REVIEW: add it only after
 // checking that the symbol cannot reach a model.
 var allowedToolsSelectors = []string{
-	"BaseTool",          // embedded struct: name/schema plumbing only
-	"CategoryMemory",    // a category constant
-	"ErrorResult",       // constructs a ToolResult
+	"BaseTool",       // embedded struct: name/schema plumbing only
+	"CategoryMemory", // a category constant
+	"ErrorResult",    // constructs a ToolResult
+	// LinkLine builds the "link: omnipus://file/..." line (pkg/tools/link_line.go).
+	// It reads channel, workspace and agent id from the context, resolves the
+	// host path in pkg/library, and encodes the link. No provider, registry
+	// or model client.
+	"LinkLine",
 	"MemoryRateLimiter", // the limiter type reused by FR-055
 	// NewToolResult wraps a string in a ToolResult and does nothing else
 	// (pkg/tools/result.go). knowledge_describe needs it because its response is
