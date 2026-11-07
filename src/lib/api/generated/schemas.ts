@@ -437,7 +437,6 @@ type Message = {
         sent: string;
         reason:
           | "mapped"
-          | "provider_default"
           | "not_supported"
           | "continuation"
           | "rejected"
@@ -4325,7 +4324,6 @@ export const Message: z.ZodType<Message> = z.object({
       sent: z.string().max(32),
       reason: z.enum([
         "mapped",
-        "provider_default",
         "not_supported",
         "continuation",
         "rejected",
@@ -18740,7 +18738,7 @@ export const EffortRecord = z
   .object({
     chosen: z.string().max(32).optional(),
     sent: z.string().max(32).optional(),
-    reason: z.enum(["mapped", "provider_default", "not_supported", "continuation", "rejected", "rejected_earlier", "extra_body"]).optional(),
+    reason: z.enum(["mapped", "not_supported", "continuation", "rejected", "rejected_earlier", "extra_body"]).optional(),
     provider: z.string().optional(),
     model: z.string().optional(),
   })

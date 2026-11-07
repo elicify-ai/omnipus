@@ -6668,7 +6668,6 @@ const (
 	MessageEffortReasonExtraBody       MessageEffortReason = "extra_body"
 	MessageEffortReasonMapped          MessageEffortReason = "mapped"
 	MessageEffortReasonNotSupported    MessageEffortReason = "not_supported"
-	MessageEffortReasonProviderDefault MessageEffortReason = "provider_default"
 	MessageEffortReasonRejected        MessageEffortReason = "rejected"
 	MessageEffortReasonRejectedEarlier MessageEffortReason = "rejected_earlier"
 )
@@ -6683,8 +6682,6 @@ func (e MessageEffortReason) Valid() bool {
 	case MessageEffortReasonMapped:
 		return true
 	case MessageEffortReasonNotSupported:
-		return true
-	case MessageEffortReasonProviderDefault:
 		return true
 	case MessageEffortReasonRejected:
 		return true

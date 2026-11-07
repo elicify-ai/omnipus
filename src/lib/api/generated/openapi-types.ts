@@ -19342,7 +19342,7 @@ export interface components {
              * @example mapped
              * @enum {string}
              */
-            reason?: "mapped" | "provider_default" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+            reason?: "mapped" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
             /**
              * @description The answering candidate's provider id.
              * @example openrouter

@@ -28,7 +28,6 @@ properties:
     type: string
     enum:
       - mapped
-      - provider_default
       - not_supported
       - continuation
       - rejected
