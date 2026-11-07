@@ -48,6 +48,16 @@ func w2WaitOurReconnectHeld(t *testing.T, held <-chan struct{}) {
 	}
 }
 
+// w2ReconnectingUnderLock reads the reconnecting flag under reconnectMu, the
+// lock production writes it under (whatsapp_native.go::reconnectWithBackoff's
+// deferred reset, and handleKeepAliveTimeout's claim). An unlocked test read
+// has no happens-before edge to that write and is a data race under -race.
+func w2ReconnectingUnderLock(ch *WhatsAppNativeChannel) bool {
+	ch.reconnectMu.Lock()
+	defer ch.reconnectMu.Unlock()
+	return ch.reconnecting
+}
+
 // TestKeepAlive_PastMaxFailTimeDisconnectsAndDialsOnceThroughOurReconnect is R3's
 // positive case: one KeepAliveTimeout whose LastSuccess is already past
 // whatsmeow.KeepAliveMaxFailTime makes the channel disconnect and dial exactly
@@ -99,7 +109,7 @@ func TestKeepAlive_BelowMaxFailTimeThenRestoredDoesNotDial(t *testing.T) {
 	}
 	require.Equal(t, int32(1), server.handshakes.Load(),
 		"R3: KeepAliveRestored before whatsmeow.KeepAliveMaxFailTime causes no reconnect dial")
-	require.False(t, f.ch.reconnecting, "R3: a below-threshold keepalive failure must not leave a reconnect running")
+	require.False(t, w2ReconnectingUnderLock(f.ch), "R3: a below-threshold keepalive failure must not leave a reconnect running")
 }
 
 // TestKeepAlive_StopWhileReconnectPendingDoesNotDial is R3's stop rule, and the
@@ -179,5 +189,72 @@ func TestKeepAlive_RestoredAfterThresholdStillDialsOnceAndEndsConnected(t *testi
 		"R3 (d): a KeepAliveRestored after the threshold still produces exactly one reconnect dial, and it is the one that was already pending")
 	require.True(t, client.IsConnected(), "R3 (d): the channel ends connected")
 	require.True(t, f.ch.IsRunning(), "R3 (d): the channel is not left stopped")
-	require.False(t, f.ch.reconnecting, "R3 (d): the channel is not left stuck in a reconnect")
+	require.False(t, w2ReconnectingUnderLock(f.ch), "R3 (d): the channel is not left stuck in a reconnect")
+}
+
+// TestKeepAlive_RepeatedTimeoutsDuringAndAfterReconnectDialExactlyOnce is R3's
+// one-reconnect rule under repetition (issue #1687: "exactly one reconnect
+// (ours)"). Several KeepAliveTimeout events past whatsmeow.KeepAliveMaxFailTime
+// in a row — as keepAliveLoop emits them, one per failed ping — must cause
+// exactly ONE dial even though later events arrive with newer LastSuccess
+// values while the first reconnect is still pending, and stale events (their
+// LastSuccess not newer than the one that triggered) arrive after that
+// reconnect completed. The dial while ours is held, and the dial after the
+// release, are attributed by ordering as in the other tests; anything else
+// dialling is the defect.
+func TestKeepAlive_RepeatedTimeoutsDuringAndAfterReconnectDialExactlyOnce(t *testing.T) {
+	f, server, client, _ := w2StartLinkedAgainstFakeServer(t)
+	require.Equal(t, int32(1), server.handshakes.Load(), "instrument: exactly the initial dial so far")
+	held, release := fix1HoldCapturedReconnect(t)
+	first := w2KeepAliveTimeout(whatsmeow.KeepAliveMaxFailTime+time.Second, 1)
+	f.ch.eventHandler(first)
+	w2WaitOurReconnectHeld(t, held)
+	// More dead-connection timeouts while the one reconnect is still pending:
+	// keepAliveLoop would keep emitting them, each newer than the last.
+	for n := 2; n <= 4; n++ {
+		f.ch.eventHandler(w2KeepAliveTimeout(whatsmeow.KeepAliveMaxFailTime+time.Second, n))
+	}
+	select {
+	case <-server.connected:
+		t.Fatalf("a handshake completed while the one reconnect was held and later timeouts were being dropped (handshakes=%d)", server.handshakes.Load())
+	case <-time.After(5 * time.Second):
+	}
+	require.Equal(t, int32(1), server.handshakes.Load(),
+		"R3: repeated past-threshold timeouts during a pending reconnect must not dial; the one reconnect is still held")
+	release()
+	select {
+	case <-server.connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the single reconnectWithBackoff did not dial after the repeated timeouts")
+	}
+	// The reconnect's bookkeeping (reconnecting reset) happens after its dial
+	// receipt; wait for it under the lock so the stale events below can only be
+	// dropped by the late-timeout guard, never by a still-claimed reconnect.
+	deadline := time.After(5 * time.Second)
+	for w2ReconnectingUnderLock(f.ch) {
+		select {
+		case <-deadline:
+			t.Fatal("HARNESS: the reconnect never released the reconnecting claim after its dial")
+		default:
+			runtime.Gosched()
+		}
+	}
+	// Stale events from the dead connection this reconnect replaced: their
+	// LastSuccess is not newer than the one that triggered. Equal tests the
+	// guard's boundary; earlier tests a genuinely old event.
+	for _, stale := range []*events.KeepAliveTimeout{
+		{ErrorCount: 5, LastSuccess: first.LastSuccess},
+		{ErrorCount: 6, LastSuccess: first.LastSuccess.Add(-2 * time.Second)},
+	} {
+		f.ch.eventHandler(stale)
+	}
+	select {
+	case <-server.connected:
+		t.Fatalf("a stale past-threshold timeout after the completed reconnect dialled again (handshakes=%d)", server.handshakes.Load())
+	case <-time.After(5 * time.Second):
+	}
+	require.Equal(t, int32(2), server.handshakes.Load(),
+		"R3: repeated timeouts during and after one keepalive reconnect still produce exactly one reconnect dial, and it is ours")
+	require.False(t, w2ReconnectingUnderLock(f.ch), "R3: no reconnect is left running after the repeated timeouts")
+	require.True(t, client.IsConnected(), "R3: the channel ends connected after the repeated timeouts")
 }
