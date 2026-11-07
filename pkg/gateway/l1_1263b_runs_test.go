@@ -91,7 +91,7 @@ func TestL11263B_AutoApprovedTaskAndPlanRun(t *testing.T) {
 			require.Equal(t, l11263Content, string(data))
 			result, ok := worker.result("approval-write")
 			require.True(t, ok)
-			require.Equal(t, "File written: "+l11263File, result)
+			require.Equal(t, "File written: "+l11263File+"\nlink: omnipus://file/"+testHarnessWorkspaceMembershipID+"/"+l11263File, result)
 		})
 	}
 }

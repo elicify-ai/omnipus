@@ -120,7 +120,8 @@ describe('chat-links contract parser (CHECK c)', () => {
   })
 
   it('rejects open_in_library whose request_id is missing or not 32 lowercase hex', () => {
-    const { request_id: _drop, ...missing } = openFrame()
+    const { request_id: omittedRequestID, ...missing } = openFrame()
+    expect(omittedRequestID).toBe(REQ)
     expectRejected(missing, 'missing request_id')
 
     resetDroppedFrameCount()
@@ -166,7 +167,8 @@ describe('chat-links contract parser (CHECK c)', () => {
   })
 
   it('rejects chat_presence that omits watching', () => {
-    const { watching: _drop, ...missing } = presenceFrame()
+    const { watching: omittedWatching, ...missing } = presenceFrame()
+    expect(omittedWatching).toBe(true)
     expectRejected(missing, 'chat_presence missing watching')
   })
 

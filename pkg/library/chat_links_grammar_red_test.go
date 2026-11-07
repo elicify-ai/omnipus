@@ -14,14 +14,14 @@ import (
 func TestEncodeLibraryLink_SharedGrammarFixture(t *testing.T) {
 	var fixture struct {
 		RoundTrip []struct {
-			Workspace string `json:"workspace"`
-			Path      string `json:"path"`
-			Link      string `json:"link"`
+			WorkspaceID string `json:"workspace"`
+			Path        string `json:"path"`
+			Link        string `json:"link"`
 		} `json:"roundTrip"`
 		RejectHref []string `json:"rejectHref"`
 		RejectPath []struct {
-			Workspace string `json:"workspace"`
-			Path      string `json:"path"`
+			WorkspaceID string `json:"workspace"`
+			Path        string `json:"path"`
 		} `json:"rejectPath"`
 	}
 	raw, err := os.ReadFile(chatLinksGrammarFixture(t))
@@ -39,13 +39,13 @@ func TestEncodeLibraryLink_SharedGrammarFixture(t *testing.T) {
 		if err != nil || cleaned != row.Path {
 			t.Fatalf("CleanRelPath(%q) = %q, %v; a browser-accepted path must pass unchanged (SC-001)", row.Path, cleaned, err)
 		}
-		got, ok := EncodeLibraryLink(row.Workspace, row.Path)
+		got, ok := EncodeLibraryLink(row.WorkspaceID, row.Path)
 		if !ok || got != row.Link {
-			t.Fatalf("Encode(%s, %s) = %q, %v; want %q (BS-1.8)", row.Workspace, row.Path, got, ok, row.Link)
+			t.Fatalf("Encode(%s, %s) = %q, %v; want %q (BS-1.8)", row.WorkspaceID, row.Path, got, ok, row.Link)
 		}
 		ws, rel, parsed := ParseLibraryLink(got)
-		if !parsed || ws != row.Workspace || rel != row.Path {
-			t.Fatalf("Parse(%q) = %s %s %v; want %s %s (BS-1.8)", got, ws, rel, parsed, row.Workspace, row.Path)
+		if !parsed || ws != row.WorkspaceID || rel != row.Path {
+			t.Fatalf("Parse(%q) = %s %s %v; want %s %s (BS-1.8)", got, ws, rel, parsed, row.WorkspaceID, row.Path)
 		}
 	}
 	for _, href := range fixture.RejectHref {
@@ -54,7 +54,7 @@ func TestEncodeLibraryLink_SharedGrammarFixture(t *testing.T) {
 		}
 	}
 	for _, row := range fixture.RejectPath {
-		if _, ok := EncodeLibraryLink(row.Workspace, row.Path); ok {
+		if _, ok := EncodeLibraryLink(row.WorkspaceID, row.Path); ok {
 			t.Fatalf("Encode accepted %q; forbidden characters get no link (SEC-13)", row.Path)
 		}
 	}

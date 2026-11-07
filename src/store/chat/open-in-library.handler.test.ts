@@ -39,6 +39,7 @@ async function loadDecide(): Promise<Decide> {
   } catch (err) {
     throw new Error(
       `BLOCKED: decideLibraryOpen not implemented — required by FR-018 / BS-6.5 (${err instanceof Error ? err.message : String(err)})`,
+      { cause: err },
     )
   }
 }

@@ -113,6 +113,7 @@
     "set_config": "deny",
     "set_goal": "deny",
     "set_todos": "deny",
+    "show_to_user": "deny",
     "stop_plan": "deny",
     "test_channel": "deny",
     "test_provider": "deny",
@@ -169,6 +170,7 @@
     "serve_web": "deny",
     "set_config": "deny",
     "set_todos": "deny",
+    "show_to_user": "deny",
     "stop_plan": "deny",
     "update_plan": "deny"
   },
@@ -285,6 +287,7 @@
     "set_config": "deny",
     "set_goal": "deny",
     "set_todos": "deny",
+    "show_to_user": "deny",
     "stop_plan": "deny",
     "test_channel": "deny",
     "test_provider": "deny",
