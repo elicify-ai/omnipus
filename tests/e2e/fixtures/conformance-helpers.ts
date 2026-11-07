@@ -530,7 +530,13 @@ export async function createStubCliWorkerAgent(page: Page, name: string, texts: 
     type: 'subagent_3p',
     name,
     description: 'Stub external-CLI worker for a conformance e2e: its CLI ignores the prompt and prints a fixed reply.',
-    soul: 'You are a stub. Your CLI process prints a fixed reply regardless of input.',
+    // No `soul` key: AgentCreateRequestSubagent3p has additionalProperties:false
+    // and no soul field ("There is no soul: a third-party agent has no SOUL.md"),
+    // and the create handler decodes variant bodies with
+    // json.Decoder.DisallowUnknownFields (pkg/gateway/rest_agents_create.go), so
+    // a soul key is refused 400 "unknown field \"soul\"" (#1661, CI run
+    // 42279413808). The stub's behaviour rides executor.env_overrides
+    // (stubCliExecutor) — nothing here needs a soul.
     executor: stubCliExecutor(texts),
   })
   if (!res.ok) {
