@@ -2638,6 +2638,17 @@ func TestRunWorker_NoConfigRaceAcrossReload(t *testing.T) {
 		config:        &config.Config{},
 		channelHashes: make(map[string]string),
 	}
+	// #1676: join the last dispatch generation before the test ends. A
+	// cancel alone left a straggling dispatcher that logged its full-queue drop
+	// into a later test's log file. StopAll cancels AND waits for the
+	// dispatchers and workers (Reload already joins every older generation).
+	t.Cleanup(func() {
+		stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if err := m.StopAll(stopCtx); err != nil {
+			t.Errorf("cleanup StopAll: %v", err)
+		}
+	})
 
 	newCfg := func(splitOnMarker bool) *config.Config {
 		cfg := &config.Config{
