@@ -42,6 +42,24 @@ func fakeOfficeProcess() int {
 	if strings.HasPrefix(string(behavior), "scratch_") {
 		return scratchLinkOfficeProcess()
 	}
+	if strings.HasPrefix(string(behavior), "record_") {
+		return recordAttackOfficeProcess()
+	}
+	if strings.HasPrefix(string(behavior), "forge_") {
+		return forgeRecordOfficeProcess()
+	}
+	if strings.HasPrefix(string(behavior), "guard_") {
+		return guardSwapOfficeProcess()
+	}
+	if strings.HasPrefix(string(behavior), "rootswap_") {
+		return confinedRootSwapOfficeProcess()
+	}
+	if strings.HasPrefix(string(behavior), "crashgw_") {
+		return crashGatewayTargetProcess()
+	}
+	if strings.HasPrefix(string(behavior), "cwd_") {
+		return cwdReceiptOfficeProcess(string(behavior) == "cwd_valid")
+	}
 	receipt := fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}
 	if string(behavior) == "tree" {
 		child := exec.Command("/bin/sleep", "30")
