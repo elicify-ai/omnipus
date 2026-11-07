@@ -450,6 +450,10 @@ func taskRunNoticeStatus(t *task.Task) string {
 // upward delivery (inbox append, dedupe, wake, stopped-parent retention) with
 // one explicit recipient per call.
 //
+// The task's agent creator gets one copy of the same notice when it is not
+// already a captured recipient (T10 FR-18/FR-19, noticeTargets); it is never
+// added to the run's captured recipients.
+//
 // Each recipient's visibility is checked again at send time (BDD-01.3/06.4): a
 // hidden or removed main is skipped with a log — no wake, no substitute — and
 // the result stays in the task/run view. A nil run (a status change made by
@@ -461,9 +465,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 	}
 	deliverer := te.agentLoop.getUpwardDeliverer()
 	if deliverer == nil {
-		for _, recipient := range run.recipients {
-			te.recordNoticeLoss(t, recipient, "no upward deliverer is wired")
-		}
+		te.recordNoticeLossAll(t, run, "no upward deliverer is wired")
 		return
 	}
 
@@ -511,7 +513,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 		return
 	}
 
-	for _, recipient := range run.recipients {
+	for _, recipient := range noticeTargets(t, run) {
 		visible, lost := te.recipientStillVisible(t, recipient)
 		if lost != nil {
 			te.recordNoticeLoss(t, recipient, lost.Error())
@@ -559,10 +561,10 @@ func (te *TaskExecutor) recipientStillVisible(t *task.Task, recipient string) (v
 // but could not be delivered.
 var taskNoticeLosses atomic.Int64
 
-// recordNoticeLossAll records the loss of the notice for every captured
-// recipient of run.
+// recordNoticeLossAll records the loss of the notice for every recipient it
+// was owed to: the captured recipients of run and the creator copy.
 func (te *TaskExecutor) recordNoticeLossAll(t *task.Task, run *activeRun, reason string) {
-	for _, recipient := range run.recipients {
+	for _, recipient := range noticeTargets(t, run) {
 		te.recordNoticeLoss(t, recipient, reason)
 	}
 }
