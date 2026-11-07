@@ -204,9 +204,13 @@ func TestReload_DoesNotRestartEngineOrStrandRunning(t *testing.T) {
 func TestT10_BootReconciliationsFinishBeforeFirstCollection(t *testing.T) {
 	st := t10BootStage(t)
 	t10SeedRecurringTask(t, st)
+	// CHECK4 M10: also seed a loop that owes a step, so the loop reconciler's
+	// real effect (not only its observer label) is visible to the first collection.
+	loopSession := t10SeedIntervalLoop(t, st, 0, 10)
 	var mu sync.Mutex
 	events := []string{}
 	collectKinds := map[string]int{}
+	collectLoopSteps := 0
 	collected := make(chan struct{})
 	var first sync.Once
 	// Missing hook is a binding prerequisite only. The callback observes the
@@ -225,6 +229,9 @@ func TestT10_BootReconciliationsFinishBeforeFirstCollection(t *testing.T) {
 			first.Do(func() {
 				for _, j := range cs.ListJobs(true) {
 					collectKinds[j.Payload.Kind]++
+					if j.Payload.Kind == cron.KindLoop && j.Payload.Message == loopSession {
+						collectLoopSteps++
+					}
 				}
 				close(collected)
 			})
@@ -246,6 +253,7 @@ func TestT10_BootReconciliationsFinishBeforeFirstCollection(t *testing.T) {
 	assert.ElementsMatch(t, []string{"task_reconciled", "loop_reconciled", "heartbeat_reconciled"}, events[2:5], "spec requires all reconcilers before activation, not a relative order between them")
 	assert.Equal(t, []string{"activate", "first_collection"}, events[5:])
 	assert.Equal(t, 1, collectKinds["task"], "first collection sees real reconciled task, not an empty boot")
+	assert.Equal(t, 1, collectLoopSteps, "first collection sees the loop's recovered step: loop reconciliation really ran before activation")
 	assert.NotNil(t, st.runningServices.TaskTrigger)
 	assert.NotNil(t, st.runningServices.LoopScheduler)
 }

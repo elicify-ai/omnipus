@@ -169,6 +169,8 @@ func TestT10_LoopStopStateWriteFailureIsNotReportedAsStopped(t *testing.T) {
 			f := t10LoopSetup(t, false)
 			f.command(t, "/loop original")
 			before := f.meta(t)
+			sub := f.al.SubscribeEvents(64)
+			defer f.al.UnsubscribeEvents(sub.ID)
 			injected := errors.New("injected stopped-state write failure")
 			failures := 0
 			restore := t10InterceptLoopWrites(t, func(sid string, p session.MetaPatch) error {
@@ -186,6 +188,9 @@ func TestT10_LoopStopStateWriteFailureIsNotReportedAsStopped(t *testing.T) {
 			restore()
 			assert.True(t, strings.HasPrefix(reply, tc.wantReply), "reply %q", reply)
 			assert.NotEqual(t, "Loop stopped.", reply)
+			// CHECK4 M7: a stop that was never saved publishes no loop status
+			// frame at all (no false "stopped", no "active" for the replacement).
+			assert.Empty(t, t10LoopStates(sub.C), "an unsaved stop must publish no loop status frame")
 
 			after := f.meta(t)
 			assert.Equal(t, before.LoopMode, after.LoopMode)
