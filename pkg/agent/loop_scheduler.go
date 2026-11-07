@@ -225,6 +225,12 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 			map[string]any{"session_id": sessionID, "job_id": job.ID})
 		return "", nil
 	}
+	if meta.LoopRunCount >= effectiveLoopMaxRuns(meta) {
+		// The run limit was reached but its stop was not saved (settleTurn
+		// failed to save it). No turn runs past the limit; the stop is
+		// retried here (spec section 8).
+		return "", s.stopAtRunLimit(store, sessionID, job)
+	}
 	if oerr := s.checkOwner(job.AgentID); oerr != nil {
 		logger.WarnCF("agent", "loop: run refused",
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": oerr.Error()})
@@ -244,6 +250,23 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 	}
 	s.settleTurn(store, sessionID, job, reply)
 	return reply, runErr
+}
+
+// stopAtRunLimit retries the stop of a loop whose saved run count already
+// reached its limit, without running a turn.
+func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID string, job *cron.CronJob) error {
+	_, err := s.al.stopSessionLoop(sessionID, store, s, "run limit reached")
+	var left *loopJobsLeftError
+	if err != nil && !errors.As(err, &left) {
+		logger.ErrorCF("agent", "loop: at its run limit and the stopped state still cannot be saved; no turn runs",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
+		return fmt.Errorf("loop_scheduler: stop the loop at its run limit: %w", err)
+	}
+	if left != nil {
+		logger.WarnCF("agent", "loop: stopped at its run limit but some of its jobs could not be removed",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
+	}
+	return nil
 }
 
 // checkOwner applies the G5 owner rules of the schedule runner (FR-10 (a) and
@@ -267,11 +290,9 @@ func (s *LoopScheduler) checkOwner(owner string) error {
 	return nil
 }
 
-// loopSettleOutcome is what settleTurn decided under the session lock; the
-// status frame and admission release are published after the lock is gone.
+// loopSettleOutcome is what settleTurn decided under the session lock.
 type loopSettleOutcome struct {
 	revoked bool
-	stopped bool
 	mode    string
 	run     int
 	maxRuns int
@@ -279,10 +300,13 @@ type loopSettleOutcome struct {
 	state   string
 }
 
-// settleTurn applies the post-turn mutations atomically with the
-// selected-step check under the session's lock (FR-05(g); lock order session
-// then engine). A revoked callback — its job replaced, stopped or no longer
-// the selected step — changes nothing and publishes nothing.
+// settleTurn applies the post-turn mutations and publishes their status
+// frame atomically with the selected-step check under the session's lock
+// (FR-05(g); lock order session then engine), so a stop that follows it
+// publishes after it. A revoked callback — its job replaced, stopped or no
+// longer the selected step — changes nothing and publishes nothing. At the
+// run limit the stopped state is saved before anything else; a failed save
+// changes nothing more and publishes nothing.
 func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string, job *cron.CronJob, reply string) {
 	var out loopSettleOutcome
 	err := store.UpdateMetaLocked(sessionID, func(meta *session.UnifiedMeta, set func(session.MetaPatch) error) error {
@@ -301,21 +325,23 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		}
 		if out.run >= out.maxRuns {
 			if perr := set(loopStoppedPatch()); perr != nil {
-				logger.WarnCF("agent", "loop: failed to clear loop state at the run cap",
-					map[string]any{"session_id": sessionID, "error": perr.Error()})
+				// Nothing else changes and nothing is published: the next
+				// fire runs no turn and retries the stop (RunScheduled).
+				return &loopCapStopError{err: perr}
 			}
+			s.al.finishLoopStop(sessionID, out.mode, out.maxRuns, out.run)
 			if rerr := s.removeSessionJobs(sessionID); rerr != nil {
 				// The cleared state makes any surviving job remove itself on
 				// its next fire (step 1 of RunScheduled).
 				logger.WarnCF("agent", "loop: failed to remove the loop's jobs at the run cap",
 					map[string]any{"session_id": sessionID, "error": rerr.Error()})
 			}
-			out.stopped = true
 			return nil
 		}
 		if meta.LoopMode != loopModeSelfPaced {
 			// Interval mode: the engine's computeNextRun re-arms the `every` job.
 			out.state = "run_completed"
+			s.al.emitLoopStatusFrame(sessionID, out.mode, out.run, out.maxRuns, nil, out.state)
 			return nil
 		}
 		delayMS, _ := parseLoopNextMarker(reply)
@@ -335,8 +361,15 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		}
 		delayInt := int(delayMS)
 		out.delayMS, out.state = &delayInt, "scheduled_next"
+		s.al.emitLoopStatusFrame(sessionID, out.mode, out.run, out.maxRuns, out.delayMS, out.state)
 		return nil
 	})
+	var capErr *loopCapStopError
+	if errors.As(err, &capErr) {
+		logger.ErrorCF("agent", "loop: reached its run limit but the stopped state could not be saved; no further turn runs and the stop is retried at the next fire or gateway start",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": capErr.err.Error()})
+		return
+	}
 	var nextErr *loopNextStepError
 	if errors.As(err, &nextErr) {
 		// The self-paced loop has no next step in this process. Its saved
@@ -351,16 +384,21 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
 		return
 	}
-	switch {
-	case out.revoked:
+	if out.revoked {
 		logger.InfoCF("agent", "loop: a settled run is no longer the session's selected step; no post-turn change applied",
 			map[string]any{"session_id": sessionID, "job_id": job.ID})
-	case out.stopped:
-		s.al.finishLoopStop(sessionID, out.mode, out.maxRuns, out.run)
-	case out.state != "":
-		s.al.emitLoopStatusFrame(sessionID, out.mode, out.run, out.maxRuns, out.delayMS, out.state)
 	}
 }
+
+// loopCapStopError is settleTurn's outcome when a run reached the loop's run
+// limit but the stopped state could not be saved.
+type loopCapStopError struct{ err error }
+
+func (e *loopCapStopError) Error() string {
+	return "save the stopped loop state at the run limit: " + e.err.Error()
+}
+
+func (e *loopCapStopError) Unwrap() error { return e.err }
 
 // loopNextStepError is settleTurn's outcome when a self-paced run completed
 // but its next step could not be added to the engine.
@@ -433,18 +471,20 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 		// The stopped state and every loop job of the session go together
 		// under the session's lock (FR-05): a leftover step must not survive
 		// the expiry, and a settling turn cannot add one after it.
-		prior, serr := s.al.stopSessionLoop(sessionID, store, s, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
-		if serr != nil {
+		// stopSessionLoop also publishes the stopped frame and the "loop"
+		// admission release once the stop is saved.
+		_, serr := s.al.stopSessionLoop(sessionID, store, s, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+		var left *loopJobsLeftError
+		if errors.As(serr, &left) {
+			// The stop is saved; a leftover job removes itself when it fires.
+			logger.WarnCF("agent", "loop idle sweep: the loop is stopped but some of its jobs could not be removed",
+				map[string]any{"session_id": sessionID, "error": serr.Error()})
+		} else if serr != nil {
 			logger.WarnCF("agent", "loop idle sweep: could not save the stopped loop state — not expiring this pass",
 				map[string]any{"session_id": sessionID, "error": serr.Error()})
 			continue
 		}
 		expired[sessionID] = true
-		if prior.mode != "" {
-			// Releases the "loop" R5 admission-cap slot (paired with the
-			// Admit("loop") call at set time) and publishes the stopped frame.
-			s.al.finishLoopStop(sessionID, prior.mode, prior.maxRuns, prior.run)
-		}
 	}
 }
 
