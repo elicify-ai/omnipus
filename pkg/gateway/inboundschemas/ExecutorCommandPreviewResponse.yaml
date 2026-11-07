@@ -32,7 +32,8 @@ properties:
       The exact, ordered argument list that would be passed to the binary,
       already reflecting the previewed model/cli_args/
       max_tool_iterations and with any denylisted cli_args tokens already
-      removed (see dropped_args for what was removed and why). Does not
+      removed (see dropped_args for what was removed and why), followed by
+      the person's saved standard parameters, which are not filtered. Does not
       include a token for the task prompt itself for claude-code or codex
       (delivered via stdin, not argv — see prompt_delivery); for opencode the
       literal placeholder "<prompt>" appears in the position the real task

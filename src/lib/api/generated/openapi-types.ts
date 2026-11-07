@@ -563,7 +563,7 @@ export interface paths {
         put?: never;
         /**
          * Test an external-CLI runner connection for an agent
-         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
+         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the program a person saved in Settings -> Third-party agents, checked as at real dispatch, runs and is authenticated WITHOUT running real work (no tokens spent). With no saved program, or one that fails the checks, nothing is started and the response is ok false, reason missing-binary, message the text a run would be refused with; a program on $PATH or a stored cli_path is never used. Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
          */
         post: operations["testAgentRunner"];
         delete?: never;
@@ -603,7 +603,7 @@ export interface paths {
         put?: never;
         /**
          * Preview the real command Omnipus would run for these executor settings
-         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent's edit form alike — mirrors POST /system/cli-validate's stateless, body-driven shape. No subprocess is spawned. The program is the path a person saved in Settings -> Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH.
+         * @description Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent's edit form alike — mirrors POST /system/cli-validate's stateless, body-driven shape. No subprocess is spawned. The program is the path a person saved in Settings -> Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person's saved standard parameters, as a real run's does.
          */
         post: operations["postAgentsExecutorPreview"];
         delete?: never;
@@ -623,7 +623,7 @@ export interface paths {
         put?: never;
         /**
          * Actually run a trivial test prompt through an external-CLI worker
-         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call. The program is the path a person saved in Settings -> Third-party agents, checked as at real dispatch: with none saved, or one that fails the checks, nothing is spawned and the body is ok false with the text a run would be refused with, never falling back to a program on $PATH. Body-driven and agent-agnostic; works from the create wizard and an existing agent's edit form alike.
+         * @description Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate's 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call. The run applies the person's saved standard parameters; the audit event then adds them, through the sensitive-data filter while tools.filter_sensitive_data is on, with the preset-use note. The program is the path a person saved in Settings -> Third-party agents, checked as at real dispatch: with none saved, or one that fails the checks, nothing is spawned and the body is ok false with the text a run would be refused with, never falling back to a program on $PATH. Body-driven and agent-agnostic; works from the create wizard and an existing agent's edit form alike.
          */
         post: operations["postAgentsExecutorSmokeTest"];
         delete?: never;
@@ -1131,7 +1131,7 @@ export interface paths {
         get: operations["getThirdPartyAgentSettings"];
         /**
          * Replace the Settings -> Third-party agents section
-         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
          */
         put: operations["updateThirdPartyAgentSettings"];
         post?: never;
@@ -4254,7 +4254,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
              * @example csrf_missing
              */
             code?: string;
@@ -9637,7 +9637,7 @@ export interface components {
              */
             binary: string;
             /**
-             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+             * @description The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters, which are not filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
              * @example [
              *       "-p",
              *       "--output-format",
@@ -12896,7 +12896,7 @@ export interface components {
         };
         /**
          * RunnerTestResponse
-         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the program saved in Settings -> Third-party agents for the agent's CLI (claude-code, codex, opencode) passes the checks a real run applies, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
          */
         RunnerTestResponse: {
             /**
@@ -12905,7 +12905,7 @@ export interface components {
              */
             ok: boolean;
             /**
-             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
              * @example
              * @enum {string}
              */
@@ -15350,7 +15350,7 @@ export interface components {
          */
         CliPreset: {
             /**
-             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
              * @example /opt/homebrew/bin/claude
              */
             path: string;
@@ -21930,6 +21930,7 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     listChannels: {

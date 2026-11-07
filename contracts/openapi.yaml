@@ -3955,7 +3955,7 @@ paths:
     post:
       operationId: testAgentRunner
       summary: Test an external-CLI runner connection for an agent
-      description: 'Connection/health check for the agent''s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent''s executor is native/remote-a2a (no runner to test).
+      description: 'Connection/health check for the agent''s configured external-CLI runner (Spec-4 FR-4.2). Validates the program a person saved in Settings -> Third-party agents, checked as at real dispatch, runs and is authenticated WITHOUT running real work (no tokens spent). With no saved program, or one that fails the checks, nothing is started and the response is ok false, reason missing-binary, message the text a run would be refused with; a program on $PATH or a stored cli_path is never used. Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent''s executor is native/remote-a2a (no runner to test).
 
         '
       tags:
@@ -4026,7 +4026,8 @@ paths:
         is the path a person saved in Settings -> Third-party agents: with
         none saved, or one that fails the program checks, the route refuses
         with 400 and the text a run would be refused with, never falling back
-        to a program on $PATH.
+        to a program on $PATH. The argv ends with the person's saved standard
+        parameters, as a real run's does.
       tags:
       - agents
       security:
@@ -4065,7 +4066,10 @@ paths:
         POST /system/cli-validate uses but independently tuned since this
         endpoint spends real tokens and holds a real subprocess (5/min and 1
         concurrent run per caller, vs. cli-validate's 20/min and 2), and
-        emits one audit event {cli, resolved binary, ok} per call. The
+        emits one audit event {cli, resolved binary, ok} per call. The run
+        applies the person's saved standard parameters; the audit event then
+        adds them, through the sensitive-data filter while
+        tools.filter_sensitive_data is on, with the preset-use note. The
         program is the path a person saved in Settings -> Third-party agents,
         checked as at real dispatch: with none saved, or one that fails the
         checks, nothing is spawned and the body is ok false with the text a
@@ -5188,7 +5192,9 @@ paths:
         An unknown CLI key or field gets the request-schema 400. No revision
         and no 409: the last save wins. Signed-in person only
         (RequirePersonSession): no session 401, an agent or tool token 403;
-        no password step.
+        no password step. A 500 with code saved_not_refreshed means the write
+        reached disk and the change is audited, but the running settings could
+        not be refreshed; saving again applies it.
       tags:
         - Settings
       security:
@@ -5216,6 +5222,8 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '403':
           $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /channels:
     get:
       operationId: listChannels

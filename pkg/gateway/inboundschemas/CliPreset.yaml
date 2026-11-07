@@ -14,9 +14,9 @@ properties:
       Program path exactly as the person typed it ("" = no program saved for
       this CLI). Stored as entered, never the resolved target. A non-empty
       value must pass thirdpartycli.ValidateProgramPath on save (absolute; every
-      symlink's folder and the final file and its folder not world-writable and
-      not inside an agent-writable location; the final file a regular,
-      executable file), otherwise the save is refused 400 with code
+      symlink's folder and the final file not inside an agent-writable location,
+      workspace mounts included; the final file a regular, executable file),
+      otherwise the save is refused 400 with code
       cli_path_invalid. Every run checks it again and execs the resolved file.
     example: "/opt/homebrew/bin/claude"
   preset_args:
