@@ -471,18 +471,24 @@ async function loginToGateway(page: Page, gw: GatewayProcess): Promise<void> {
 }
 
 /**
- * Wait for the workspace chrome to be laid out before driving it. On a
- * JUST-ONBOARDED isolated gateway the first workspace render trails the login
- * redirect by tens of seconds (first-boot entity bootstrap and catalog
- * refresh happen between "SPA served" and "banner rendered"), so freshChat's
- * built-in 15 s actionability window can expire before the hamburger exists —
- * the click then races the render instead of testing anything. Waiting for the
- * actual chrome is a readiness signal, not a widened timeout.
+ * Wait for the workspace chrome to be laid out before driving it. The
+ * readiness element is the workspace top bar (data-testid="workspace-top-bar",
+ * src/components/workspaces/WorkspaceTabContainer.tsx) — it renders whenever a
+ * workspace has resolved, in BOTH sidebar states.
+ *
+ * The earlier probe waited for the "Show sidebar" hamburger, which is NOT a
+ * readiness signal: SidebarShowButton renders null whenever the sidebar is
+ * open or pinned (`const visible = (isPinned && canPin) || isOpen; if
+ * (visible) return null`), and the sidebar store persists isOpen to
+ * localStorage ('omnipus-sidebar', src/store/sidebar.ts) — shared across every
+ * tab of the same browser context. After tab A's freshChat opens the sidebar,
+ * tab B rehydrates it OPEN and the hamburger never exists there, so the old
+ * probe timed out on the second tab DETERMINISTICALLY, whatever the machine
+ * load (CHECK F3: the no-retry attempt failed on the second tab at load mean
+ * 11.69 — state, not CPU).
  */
 async function awaitWorkspaceChrome(page: Page): Promise<void> {
-  await page
-    .getByRole('button', { name: 'Show sidebar', exact: true })
-    .waitFor({ state: 'visible', timeout: 45_000 })
+  await page.getByTestId('workspace-top-bar').waitFor({ state: 'visible', timeout: 45_000 })
 }
 
 /**
@@ -501,6 +507,25 @@ const SETTLED_REPLY_SELECTOR =
 const settledReplies = (page: Page) => page.locator(SETTLED_REPLY_SELECTOR)
 const settledReplyWithText = (page: Page, text: string) =>
   page.locator(SETTLED_REPLY_SELECTOR).filter({ hasText: text })
+
+/**
+ * The reply's TEXT BODY — the content container inside a settled assistant
+ * row (ChatScreen.tsx::VirtualAssistantMessageRow's `div.leading-relaxed`):
+ * InlineMedia + MessagePrimitive.Parts (AssistantTextPart → MarkdownText)
+ * render the reply text here. The agent label ("Mia"), the action bar
+ * (Copy/Retry) and the "(interrupted)" status suffix live OUTSIDE this
+ * element, so its text is exactly the reply text for a plain scripted
+ * answer (InlineThinkingIndicator returns null for settled rows:
+ * `if (!showsFeedMark(phase)) return null`).
+ *
+ * Assertions on this locator use toHaveText — EXACT (whitespace-normalized)
+ * per-element equality — because filter({hasText})/toContainText are
+ * substring checks: a replay that appends, drops or merges text around the
+ * scripted constant still contains it, and only an exact body comparison
+ * rejects that (CHECK F2).
+ */
+const settledReplyBodies = (page: Page) =>
+  settledReplies(page).locator('div.leading-relaxed')
 
 /** The assistant row the product renders for a cancelled/interrupted turn. */
 const interruptedReplyRow = (page: Page) =>
@@ -524,9 +549,12 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       // rewrote the artifact into "turn_canceled" and the no-flaky gate fired
       // on the passing retry). The contract under test — "both sessions are
       // serviced concurrently" — is now asserted on deterministic signals:
-      //   1. the mock's own record: tab A's streaming request ANSWERED while
-      //      tab B's is HELD OPEN (the concurrency proof — A settled while B
-      //      was still in flight, with no session starvation in between);
+      //   1. the mock's own record, in a B-FIRST order: tab B is sent first
+      //      and the test does not send tab A until the mock has RECEIVED and
+      //      held B's request; the concurrency proof is that A's streaming
+      //      request is ANSWERED while that SAME B request is STILL OPEN —
+      //      a gateway that services one session at a time cannot pass,
+      //      because A is only sent once B is verifiably in flight (CHECK F1);
       //   2. tab A's settled reply visible in that exact window;
       //   3. Stop on tab B cancels B (its provider request CLOSES at the mock;
       //      the UI shows the "(interrupted)" state) without touching A;
@@ -578,32 +606,57 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         await expect(settledReplies(page)).toHaveCount(0, { timeout: 10_000 })
         await expect(settledReplies(page2)).toHaveCount(0, { timeout: 10_000 })
 
-        // Send on both tabs. The marker inside each message is what the MOCK
-        // branches on (answer A, hold B) — no call counter, which could never
-        // tell the two tabs' streaming calls apart on a shared agent.
-        const input1 = chatInput(page)
+        // Send on tab B FIRST, and do not send tab A until the mock has
+        // RECEIVED and held B's request. This is what turns the later
+        // assertions into a real overlap proof (CHECK F1): a gateway that
+        // services one session at a time cannot pass, because A is only sent
+        // once B is verifiably in flight, and A's completion is only accepted
+        // while that SAME B request is still open. The marker inside each
+        // message is what the MOCK branches on (hold B, answer A) — no call
+        // counter, which could never tell the two tabs' streaming calls apart
+        // on a shared agent.
         const input2 = chatInput(page2)
-        await input1.fill(`${BUG3A_MARKER_TAB_A} — Bug-3 mock concurrent test, tab A`)
         await input2.fill(`${BUG3A_MARKER_TAB_B} — Bug-3 mock concurrent test, tab B`)
-        await input1.press('Enter')
         await input2.press('Enter')
 
-        // 1. Deterministic concurrency proof at the mock: A's request answered,
-        //    B's request STILL OPEN. (The mock answered A with a final
-        //    "stop"-finished answer carrying no tool calls, so A's turn ends on
-        //    its first model call; B's body is never written, so B's turn is
-        //    still in flight.)
+        // 0. B's request must arrive at the mock BEFORE A is sent. From here
+        //    on, "B in flight" is an observed fact, not an assumption.
+        let tabBRequestSeq = -1
+        await expect
+          .poll(
+            () => {
+              const req = mock
+                .requests()
+                .find((r) => r.marker === BUG3A_MARKER_TAB_B && r.heldOpen && r.open)
+              if (req) tabBRequestSeq = req.seq
+              return req !== undefined
+            },
+            { timeout: 30_000, intervals: [250, 500, 1_000] },
+          )
+          .toBe(true)
+
+        // Now send tab A. (The mock answers A with a final "stop"-finished
+        // answer carrying no tool calls, so A's turn ends on its first model
+        // call.)
+        const input1 = chatInput(page)
+        await input1.fill(`${BUG3A_MARKER_TAB_A} — Bug-3 mock concurrent test, tab A`)
+        await input1.press('Enter')
+
+        // 1. Deterministic overlap proof at the mock: A's request ANSWERED
+        //    while the SAME B request observed above is STILL OPEN. The
+        //    seq-scoped record rules out close/reopen churn: it is one
+        //    continuous held request spanning A's whole turn.
         await expect
           .poll(
             () => {
               const reqs = mock.requests()
+              const aAnswered = reqs.some(
+                (r) => r.marker === BUG3A_MARKER_TAB_A && r.answered && !r.open,
+              )
+              const b = reqs.find((r) => r.seq === tabBRequestSeq)
               return {
-                tabAAnswered: reqs.some(
-                  (r) => r.marker === BUG3A_MARKER_TAB_A && r.answered && !r.open,
-                ),
-                tabBStillOpen: reqs.some(
-                  (r) => r.marker === BUG3A_MARKER_TAB_B && r.heldOpen && r.open && !r.answered,
-                ),
+                tabAAnswered: aAnswered,
+                tabBStillOpen: !!b && b.heldOpen && b.open && !b.answered && !b.clientClosed,
               }
             },
             { timeout: 30_000, intervals: [250, 500, 1_000] },
@@ -612,16 +665,33 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
 
         // 2. Tab A's settled reply is visible NOW — while tab B's request is
         //    still open at the mock — and it is A's ONLY settled reply, with
-        //    the exact scripted text.
+        //    its body EXACTLY the scripted text (toHaveText, not a substring
+        //    check — CHECK F2). The B-open re-read immediately after the DOM
+        //    assertion pins the overlap to the same moment: A's reply was
+        //    settled while B had not even closed its held request.
         await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
           timeout: 15_000,
         })
+        await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
         await expect(settledReplies(page)).toHaveCount(1)
+        expect(
+          mock.requests().find((r) => r.seq === tabBRequestSeq)?.open,
+          'the held tab-B request observed before tab A was sent must STILL be open at the moment tab A’s reply is settled in the DOM',
+        ).toBe(true)
 
         // 3. Tab B has NO reply yet: no settled row (a running placeholder
         //    wouldn't pass this locator, and neither would an interrupted one),
         //    and its turn is still streaming (the Stop button is up).
         await expect(settledReplies(page2)).toHaveCount(0)
+        // Stop is clicked in the tab the user is viewing: bring tab B to the
+        // foreground first. A BACKGROUND tab throttles its renderer, and the
+        // click can otherwise sit in Chromium's input-dispatch queue past any
+        // reasonable budget — observed with every actionability check already
+        // green ("visible, enabled and stable" → "performing click action" →
+        // stall; the queued click eventually landed and cancelled the turn,
+        // receipt bug3a-run2). Foregrounding the tab is what a human does; a
+        // realism fix, not a timeout increase.
+        await page2.bringToFront()
         await expect(page2.getByTestId('stop-btn')).toBeVisible({ timeout: 15_000 })
 
         // 4. Stop on tab B — the user action under test.
@@ -755,9 +825,11 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await input.fill(`${BUG5A_MARKER} — Bug-5 mock replay order test, turn one`)
         await input.press('Enter')
 
-        // The settled reply (complete status, exact scripted text) must be the
-        // session's only assistant reply before navigating away.
+        // The settled reply (complete status, EXACT scripted body — toHaveText,
+        // not a substring check, CHECK F2) must be the session's only assistant
+        // reply before navigating away.
         await expect(settledReplyWithText(page, BUG5A_ANSWER)).toBeVisible({ timeout: 30_000 })
+        await expect(settledReplyBodies(page)).toHaveText([BUG5A_ANSWER])
         await expect(settledReplies(page)).toHaveCount(1)
 
         // Capture the URL of the current session to return to it.
@@ -777,8 +849,12 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 
         // The replayed message must carry the SAME scripted content — asserted
         // against the mock's script constant (the spec-derived expected value),
-        // not against whatever the DOM happened to show before navigation.
+        // not against whatever the DOM happened to show before navigation. The
+        // body comparison is EXACT (toHaveText): a replay that appends, drops
+        // or merges text around the constant still contains it, and only this
+        // equality rejects that (CHECK F2).
         await expect(settledReplyWithText(page, BUG5A_ANSWER)).toBeVisible({ timeout: 15_000 })
+        await expect(settledReplyBodies(page)).toHaveText([BUG5A_ANSWER], { timeout: 15_000 })
       } finally {
         if (gw) await gw.stop()
         await mock.close()
@@ -830,11 +906,14 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await input.press('Enter')
         await expect(settledReplyWithText(page, BUG5B_ANSWER_TWO)).toBeVisible({ timeout: 30_000 })
 
-        // Exactly two settled replies, in causal order: turn 1's reply first,
-        // turn 2's second — each with its exact scripted content.
+        // Exactly two settled replies, in causal order, with EXACT bodies:
+        // toHaveText over the ordered body list asserts each element's exact
+        // (whitespace-normalized) text AND the order in one check — turn 1's
+        // reply first with ONE's constant, turn 2's second with TWO's. A
+        // substring check (toContainText) would admit appended/merged text
+        // around the constants (CHECK F2); this equality does not.
         await expect(settledReplies(page)).toHaveCount(2)
-        await expect(settledReplies(page).nth(0)).toContainText(BUG5B_ANSWER_ONE)
-        await expect(settledReplies(page).nth(1)).toContainText(BUG5B_ANSWER_TWO)
+        await expect(settledReplyBodies(page)).toHaveText([BUG5B_ANSWER_ONE, BUG5B_ANSWER_TWO])
 
         // Navigate away and back. (WU-11 FR-108: surviving away-surface.)
         const sessionURL = page.url()
@@ -844,11 +923,16 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await page.waitForLoadState('networkidle')
 
         // Wait for 2 messages to restore, then require the SAME chronological
-        // order with the SAME exact scripted content (order preserved = turn
-        // 1's reply is still first, turn 2's still second).
+        // order with the SAME EXACT bodies (order preserved = turn 1's reply
+        // is still first with ONE's constant, turn 2's still second with TWO's
+        // — exact per-element equality over the ordered list, so replay-time
+        // text corruption fails here even though every marker substring is
+        // still present; CHECK F2).
         await expect(settledReplies(page)).toHaveCount(2, { timeout: 45_000 })
-        await expect(settledReplies(page).nth(0)).toContainText(BUG5B_ANSWER_ONE)
-        await expect(settledReplies(page).nth(1)).toContainText(BUG5B_ANSWER_TWO)
+        await expect(settledReplyBodies(page)).toHaveText(
+          [BUG5B_ANSWER_ONE, BUG5B_ANSWER_TWO],
+          { timeout: 15_000 },
+        )
       } finally {
         if (gw) await gw.stop()
         await mock.close()
