@@ -86,6 +86,15 @@
 #   al. an exception reason that is the single character !         -> must pass,
 #      listed with reason ! (Go, TS)
 #   am/an. --root or --budget as the last argument, no value        -> exit 2
+#   Round-2 rows (CHECK 2):
+#   ao. TS: a marker above an outer function, an unmarked helper starting on
+#      the same line                                             -> helper FAILs,
+#      only the outer is listed (exceptions: 1)
+#   ap. TSX: the same above a component                          -> helper FAILs,
+#      no EXCEPTION at all (exceptions: 0)
+#   aq. exactly 240 code lines (Go, TS)                           -> must pass
+#   ar. marked functions of exactly 120 code lines (Go, TS)       -> no WARN
+#   as. empty or whitespace-only reason in TS, .mjs and Go        -> must FAIL
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
@@ -542,6 +551,69 @@ fresh_tree
 if expect "(al) TS exception whose reason is !" 0; then
   grep -q '^EXCEPTION .*bangTs 260 !$' "$TMP/out" || { echo "selfcheck FAIL: (al) missing TS EXCEPTION line with reason !" >&2; FAIL=1; }
 fi
+
+# (ao) TS: a marker above an outer function belongs to the outer function only.
+# A helper that starts on the same line is a different function and gets nothing.
+fresh_tree
+{ printf '// budget:exception outer only\nfunction outerTs() { function helperTs() {\n'; body_ts 258; printf '}\n}\n'; } > "$TMP/tree/tests/fixture_ao.ts"
+if expect "(ao) TS marker above an outer function, unmarked helper on the same line" 1; then
+  grep -q 'helperTs 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ao) the nested helper was not failed" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*outerTs ' "$TMP/out" || { echo "selfcheck FAIL: (ao) the marked outer function was not listed" >&2; FAIL=1; }
+  grep -q 'EXCEPTION .*helperTs' "$TMP/out" && { echo "selfcheck FAIL: (ao) the helper inherited the marker" >&2; FAIL=1; }
+  grep -q 'exceptions: 1$' "$TMP/out" || { echo "selfcheck FAIL: (ao) expected exactly one exception" >&2; FAIL=1; }
+fi
+
+# (ap) TSX: a marker above a component does nothing at all, so it cannot reach a
+# helper that starts on the same line either.
+fresh_tree
+{ printf '// budget:exception ignored on the component\nfunction ComponentAp() { function helperTsx() {\n'; body_ts 258; printf '}\n  return (<div>ok</div>);\n}\n'; } > "$TMP/tree/src/components/FixtureAp.tsx"
+if expect "(ap) TSX marker above a component, unmarked helper on the same line" 1; then
+  grep -q 'helperTsx 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ap) the nested helper was not failed" >&2; FAIL=1; }
+  grep -q '^EXCEPTION' "$TMP/out" && { echo "selfcheck FAIL: (ap) a component marker produced an exception" >&2; FAIL=1; }
+  grep -q 'exceptions: 0$' "$TMP/out" || { echo "selfcheck FAIL: (ap) expected zero exceptions" >&2; FAIL=1; }
+fi
+
+# (aq) the fail boundary is exclusive: exactly 240 code lines is legal.
+fresh_tree
+gen_go_func "$TMP/tree/pkg/fixture_aq.go" "ExactlyLimitGo" 240
+gen_mjs_func "$TMP/tree/tests/fixture_aq.ts" "exactlyLimitTs" 240
+if expect "(aq) exactly 240 code lines (Go and TS) does not fail" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (aq) a 240-line function failed" >&2; FAIL=1; }
+  grep -q 'ExactlyLimitGo 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (aq) Go WARN did not cite 240" >&2; FAIL=1; }
+  grep -q 'exactlyLimitTs 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (aq) TS WARN did not cite 240" >&2; FAIL=1; }
+fi
+
+# (ar) the warn boundary is exclusive: a marked function of exactly 120 code
+# lines is listed as an exception and draws no WARN (an unmarked one is filtered
+# out by the scanners, so only a marked one can show an inclusive warn).
+fresh_tree
+gen_go_padded "$TMP/tree/pkg/fixture_ar.go" "MarkedAtWarnGo" 120 0 0 "//budget:exception exactly at the warn line"
+gen_ts_padded "$TMP/tree/tests/fixture_ar.ts" "markedAtWarnTs" 120 0 "// budget:exception exactly at the warn line"
+if expect "(ar) marked functions of exactly 120 code lines draw no WARN" 0; then
+  grep -q '^WARN' "$TMP/out" && { echo "selfcheck FAIL: (ar) a 120-line function drew a WARN" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*MarkedAtWarnGo 120 ' "$TMP/out" || { echo "selfcheck FAIL: (ar) Go exception not listed" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*markedAtWarnTs 120 ' "$TMP/out" || { echo "selfcheck FAIL: (ar) TS exception not listed" >&2; FAIL=1; }
+fi
+
+# (as) an empty or whitespace-only reason fails in every language: short TS,
+# short .mjs, and a Go reason made only of spaces.
+fresh_tree
+gen_ts_padded "$TMP/tree/tests/fixture_as.ts" "emptyReasonTs" 2 0 "// budget:exception"
+if expect "(as) empty exception reason in TS fails" 1; then
+  grep -q 'emptyReasonTs 2 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (as) missing TS empty-reason FAIL line" >&2; FAIL=1; }
+fi
+fresh_tree
+gen_mjs_func "$TMP/tree/scripts/fixture_as.mjs" "emptyReasonMjs" 3
+sed -i '1i //budget:exception' "$TMP/tree/scripts/fixture_as.mjs"
+if expect "(as) empty exception reason in .mjs fails" 1; then
+  grep -q 'emptyReasonMjs 3 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (as) missing .mjs empty-reason FAIL line" >&2; FAIL=1; }
+fi
+fresh_tree
+gen_go_padded "$TMP/tree/pkg/fixture_as.go" "SpaceReason" 2 0 0 "//budget:exception    "
+if expect "(as) whitespace-only exception reason in Go fails" 1; then
+  grep -q 'SpaceReason 2 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (as) missing whitespace-reason FAIL line" >&2; FAIL=1; }
+fi
+
 
 # (am/an) an option given with no value is a gate that could not run: exit 2.
 for opt in --root --budget; do

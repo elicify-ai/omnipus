@@ -358,28 +358,49 @@ const BUDGET_DIRECTIVE = /^\/\/\s*budget:exception(?:\s(.*))?$/;
 // same statement) must be the first token on its own line, so a marker can never
 // reach a function through a string tail or another statement. A blank or
 // non-comment line ends the block.
-function exceptionAbove(ts, info, fn, sf, startLine) {
+function exceptionAbove(ts, info, claimed, fn, sf, startLine) {
   for (let l = startLine - 2; l >= 0; l--) {
     const c = info.lineComments.get(l);
     if (!c || !c.only) break;
     const m = BUDGET_DIRECTIVE.exec(c.text);
     if (!m) continue;
     if (!firstTokenBelongsTo(ts, info, fn, sf, startLine - 1)) return NONE;
+    // One marker, one function: the first (outermost) function that attaches on
+    // this line takes it; a function nested on the same line gets nothing.
+    if (claimed.has(startLine)) return NONE;
+    claimed.add(startLine);
     const reason = (m[1] || '').trim();
     return reason === '' ? { kind: 1, reason: '' } : { kind: 2, reason };
   }
   return NONE;
 }
 
-// firstTokenBelongsTo: the first token on line0 starts the function or one of its
-// ancestors (e.g. `describe('x', () => {` starts the call that holds the arrow).
+// firstTokenBelongsTo: the first token on line0 starts the function itself or the
+// statement/expression that directly holds it (e.g. `describe('x', () => {` starts
+// the call that holds the arrow). The walk stops at an enclosing function, block,
+// class or the file, so a marker above an outer function never reaches a function
+// nested inside it.
 function firstTokenBelongsTo(ts, info, fn, sf, line0) {
   const first = info.firstOnLine.get(line0);
   if (first === undefined || first < 0) return false;
-  for (let n = fn; n && n.kind !== ts.SyntaxKind.SourceFile; n = n.parent) {
+  for (let n = fn; n; n = n.parent) {
     if (n.getStart(sf) === first) return true;
+    const p = n.parent;
+    if (!p || isChainBoundary(ts, p)) break;
   }
   return false;
+}
+
+function isChainBoundary(ts, p) {
+  return (
+    isFunctionLikeNode(ts, p) ||
+    ts.isBlock(p) ||
+    ts.isSourceFile(p) ||
+    ts.isModuleBlock(p) ||
+    ts.isClassLike(p) ||
+    ts.isCaseClause(p) ||
+    ts.isDefaultClause(p)
+  );
 }
 
 function formatException(exc) {
@@ -396,6 +417,7 @@ function scanFile(ts, file, limit) {
   const src = fs.readFileSync(file.abs, 'utf8');
   const sf = ts.createSourceFile(file.abs, src, ts.ScriptTarget.Latest, true);
   const info = analyzeSource(ts, sf, src);
+  const claimed = new Set();
   const rows = [];
   let total = 0;
   const visit = (n) => {
@@ -404,7 +426,7 @@ function scanFile(ts, file, limit) {
       const start = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
       const end = sf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
       const lines = countCodeLines(info.codeLines, start, end);
-      const exc = exceptionAbove(ts, info, n, sf, start);
+      const exc = exceptionAbove(ts, info, claimed, n, sf, start);
       if (lines > limit || exc.kind !== 0) {
         const { name, target } = resolveName(ts, sf, n);
         const kind = classifyKind(ts, sf, isTsx, n, target);
