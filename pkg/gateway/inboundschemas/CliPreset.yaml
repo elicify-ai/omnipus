@@ -17,7 +17,10 @@ properties:
       symlink's folder and the final file not inside an agent-writable location,
       workspace mounts included; the final file a regular, executable file),
       otherwise the save is refused 400 with code
-      cli_path_invalid. Every run checks it again and execs the resolved file.
+      cli_path_invalid. When a workspace's mount record cannot be read in
+      full the location cannot be checked and the path is refused with check
+      location_unverifiable. Every run checks it again and execs the resolved
+      file.
     example: "/opt/homebrew/bin/claude"
   preset_args:
     type: string

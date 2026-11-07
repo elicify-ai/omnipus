@@ -4254,7 +4254,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; details.at the path element that failed; location_unverifiable means a workspace's mount record could not be read in full, so the location cannot be checked, and details.at is the entered path) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
              * @example csrf_missing
              */
             code?: string;
@@ -15350,7 +15350,7 @@ export interface components {
          */
         CliPreset: {
             /**
-             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When a workspace's mount record cannot be read in full the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
              * @example /opt/homebrew/bin/claude
              */
             path: string;

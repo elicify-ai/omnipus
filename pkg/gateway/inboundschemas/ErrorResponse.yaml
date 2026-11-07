@@ -15,8 +15,11 @@ properties:
       /settings/third-party-agents uses "cli_path_invalid" (field
       clis.<cli>.path; details.cli, details.check one of not_absolute,
       not_found, not_regular_file, not_executable, agent_writable_location,
-      windows_extension, windows_short_name, windows_stream; details.at the
-      path element that failed) and
+      location_unverifiable, windows_extension, windows_short_name,
+      windows_stream; details.at the path element that failed;
+      location_unverifiable means a workspace's mount record could not be read
+      in full, so the location cannot be checked, and details.at is the
+      entered path) and
       "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli,
       details.check one of too_long, contains_nul, contains_line_break), and
       "saved_not_refreshed" on a 500 whose write reached disk but whose
