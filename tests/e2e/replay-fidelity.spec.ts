@@ -29,7 +29,7 @@ import { expectA11yClean } from './fixtures/a11y'
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
-import { attachWhileTurnActive } from './fixtures/turn-liveness'
+import { observeAttachTurn } from './fixtures/turn-liveness'
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -686,8 +686,12 @@ test(
   // STILL running ("Mia is working on it"; failure screenshots show both pages
   // byte-identical, the video's last text/usage delta at ~150s of a 189s
   // recording) when the flat 180s reply2 wait expired at 181s (`362 × locator
-  // resolved to 0 elements` at :766, retry passing in 29.6s). Both times no
-  // event was lost; the window was shorter than the provider. Verdicts:
+  // resolved to 0 elements` at :766, retry passing in 29.6s). In both
+  // incidents the observed pages were identical and incomplete when the
+  // window expired and a retry passed; that no event was lost and that the
+  // provider alone was slow are HYPOTHESES (the request-specific gateway
+  // evidence was not captured; a shared product stall would look the same).
+  // Earlier verdicts:
   // /workspace/logs/t6b/fix-ci-fe/flake-verdict.md and
   // /workspace/logs/team-a-restart-20261107/ciflake2-report.md
   async ({ page, browser }) => {
@@ -727,6 +731,7 @@ test(
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
     const readiness2 = observeAddressedAttachReadiness(page2)
+    const attachTurn2 = observeAttachTurn(page2)
     const rootReady = readiness2.arm()
     try {
       try {
@@ -789,14 +794,15 @@ test(
       await page.waitForTimeout(800)
       const targetReady = readiness2.arm(sessionId)
       try {
-        // Active-at-attach proof (CHECK 3 F1): the Stop marker must be visible
-        // immediately before AND after the real attach. If the turn ended in the
-        // 800ms gap or during the attach, this FAILS (naming which) instead of
-        // letting an ordinary completed-history replay satisfy the delivery
-        // assertions below (fixtures/turn-liveness.ts).
-        const [, targetProof] = await attachWhileTurnActive(turnStopButton, () =>
-          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
-        )
+        // Active-at-attach proof from the SERVER (CHECK 3 F1, CHECK 4 F1/F2):
+        // the attach response's own session_state must carry active_turn (a
+        // foreground turn in flight when the gateway bound page2 to the
+        // session). The first viewer's Stop button cannot prove this: it is a
+        // client render and can lag the backend (fixtures/turn-liveness.ts).
+        // No post-sample, so a turn that ends right after the attach passes.
+        const attachMark = attachTurn2.mark()
+        const [, targetProof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
+        attachTurn2.require(attachMark, sessionId)
         expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
         expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
         await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
@@ -808,7 +814,7 @@ test(
         await expect(userMsgs2).toHaveCount(1, { timeout: 10_000 })
 
         // ── Step 4: wait for the turn's TRUE terminal state, then judge delivery ──
-        // The provider owns this clock. Both CI incidents in the header ended
+        // Provider (or product) latency owns this clock. Both CI incidents in the header ended
         // with the turn STILL active when a flat reply window expired, which
         // makes a delivery assertion fail looking exactly like the event-loss
         // this test exists to catch. The old gate here watched
@@ -847,9 +853,9 @@ test(
         // page2 attached AFTER the turn started, so the only way it could see the
         // assistant message is if live forwarding picked up where replay left off
         // — that's what FR-I-009 demands and what we're verifying. That the
-        // attach really overlapped the live turn is proved by the Stop-marker
-        // bracket around the attach above (attachWhileTurnActive), NOT by
-        // elapsed time: a wall-clock floor cannot order an attach against a
+        // attach really overlapped the live turn is proved by the server's
+        // active_turn on the attach's own session_state (requireActiveTurnAtAttach
+        // above), NOT by the first viewer's Stop button or elapsed time: a wall-clock floor cannot order an attach against a
         // turn's end. The 1.5s floor below is only a coarse sanity check that
         // the 800ms attach delay plus page2 setup actually elapsed; the previous
         // 3s floor failed when GLM-5v-turbo streamed the 600-word reply in <3s.
@@ -868,6 +874,7 @@ test(
         expect(await reply2.getAttribute('data-message-id'), 'both contexts render the SAME assistant entry').toBe(replyId)
       } finally { targetReady.cancel() }
     } finally {
+      attachTurn2.dispose()
       readiness2.dispose()
       await context2.close()
     }
