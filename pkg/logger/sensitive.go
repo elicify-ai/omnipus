@@ -3,6 +3,7 @@ package logger
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync/atomic"
 )
@@ -61,6 +62,28 @@ func scrubFields(r *strings.Replacer, fields map[string]any) map[string]any {
 	return out
 }
 
+// scrubString replaces registered credentials in one string field. A field
+// that is a whole Go double-quoted string (strconv.Quote / %q, the spelling
+// pkg/gateway's safeLogValue gives request-derived values so a record stays
+// control-free) is unquoted, masked and quoted again: quoting escapes quotes,
+// backslashes, controls and non-ASCII, so the exact-plaintext replacer would
+// otherwise miss a credential containing any of them (#1666). Matching here,
+// at the one scrub choke point, covers every quoting call site without each
+// caller having to mask first, and works with the plaintext-only replacer
+// pkg/config publishes. A quoted field with no credential is left byte-for-byte
+// as it was (no unquote/re-quote normalisation); the final Replace keeps the
+// plain-text match as a second net.
+func scrubString(r *strings.Replacer, s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		if unquoted, err := strconv.Unquote(s); err == nil {
+			if masked := r.Replace(unquoted); masked != unquoted {
+				return r.Replace(strconv.Quote(masked))
+			}
+		}
+	}
+	return r.Replace(s)
+}
+
 // scrubFieldValue replaces registered credentials inside one field value while
 // keeping the shape appendFields writes for it: strings and errors are written
 // as strings, numbers and booleans pass through, the containers log call sites
@@ -72,9 +95,9 @@ func scrubFieldValue(r *strings.Replacer, v any) any {
 	case nil:
 		return nil
 	case string:
-		return r.Replace(val)
+		return scrubString(r, val)
 	case error:
-		return r.Replace(val.Error())
+		return scrubString(r, val.Error())
 	case bool, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 		return val
 	case []byte:
@@ -85,7 +108,7 @@ func scrubFieldValue(r *strings.Replacer, v any) any {
 	case []string:
 		out := make([]string, len(val))
 		for i, s := range val {
-			out[i] = r.Replace(s)
+			out[i] = scrubString(r, s)
 		}
 		return out
 	case []any:
@@ -99,7 +122,7 @@ func scrubFieldValue(r *strings.Replacer, v any) any {
 	case map[string]string:
 		out := make(map[string]string, len(val))
 		for k, s := range val {
-			out[r.Replace(k)] = r.Replace(s)
+			out[r.Replace(k)] = scrubString(r, s)
 		}
 		return out
 	}

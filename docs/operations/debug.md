@@ -30,6 +30,10 @@ Diagnostics may contain conversation and tool content, especially in debug mode.
 
 Restart the gateway after changing the value. If the selected file cannot be opened, startup fails with `error enabling file logging`; it does not silently switch back to the default file. Check the destination's permissions and available disk space. This setting moves diagnostic records only; the separate panic log and security audit log keep their own destinations.
 
+### Reading quoted values
+
+Some diagnostic fields hold values that came from a request, such as session IDs, media IDs and references, file names, and error text. These are written in quoted form with escapes, for example `"report\nfinal.pdf"`. This stops a line break or other control character in such a value from looking like a separate log record. The surrounding quotes and escape sequences such as `\n`, `\t`, `\"`, `\\` or `\u2028` are not part of the real value. Read them the way a Go or JSON string is read: `\n` stands for one line break, `\"` for one double quote. To match a log entry with a file or ID on disk, decode the escapes first. In the JSON log file the quoted value is itself stored inside a JSON string, so the raw line shows each quote and backslash escaped once more (`"\"report\\nfinal.pdf\""`); a JSON reader such as `jq` removes that outer layer.
+
 ## Disabling Log Truncation (Full Logs)
 
 By default, Omnipus truncates very long strings (such as the *System Prompt* or large JSON output results) in the debug logs to keep the console readable.
