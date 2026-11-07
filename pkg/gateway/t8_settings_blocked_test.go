@@ -153,6 +153,16 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 	})
 }
 
+// Resolve only the containing fixture root, never the deliberately dangling or
+// looping final link. A macOS TMPDIR alias must not add an unrelated link to D6.
+func t8CanonicalFixtureRoot(t *testing.T, dir string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755), "fixture: materialize the containing directory")
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err, "fixture: resolve the containing directory once")
+	return resolved
+}
+
 func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 	for _, tc := range []struct{ id, kind, check string }{
 		{"D6.1", "executable", ""}, {"D6.2 / 9.3", "relative", "not_absolute"}, {"D6.3 / 9.5", "directory", "not_regular_file"},
@@ -165,7 +175,7 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			f := t8SettingsAPI(t)
-			dir := t.TempDir()
+			dir := t8CanonicalFixtureRoot(t, t.TempDir())
 			entered := t8Program(t, dir, "program", 0o755)
 			at := entered
 			switch tc.kind {
@@ -184,11 +194,11 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 			case "group-write":
 				require.NoError(t, os.Chmod(dir, 0o775))
 			case "home":
-				entered = t8Program(t, f.api.homePath, "program", 0o755)
+				entered = t8Program(t, t8CanonicalFixtureRoot(t, f.api.homePath), "program", 0o755)
 				at = entered
 			case "workspace":
 				ws := seedLibraryWorkspace(t, f.api, "T8 writable workspace")
-				entered = t8Program(t, workDir(f.api, ws), "program", 0o755)
+				entered = t8Program(t, t8CanonicalFixtureRoot(t, workDir(f.api, ws)), "program", 0o755)
 				at = entered
 			case "symlink", "relative-target", "link-world-write", "workspace-middle", "dangling", "loop":
 				target := entered
@@ -205,8 +215,7 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 				}
 				if tc.kind == "workspace-middle" {
 					ws := seedLibraryWorkspace(t, f.api, "T8 middle link")
-					workspaceDir := workDir(f.api, ws)
-					require.NoError(t, os.MkdirAll(workspaceDir, 0o755), "fixture: materialize the workspace that owns the middle link")
+					workspaceDir := t8CanonicalFixtureRoot(t, workDir(f.api, ws))
 					middle := filepath.Join(workspaceDir, "middle")
 					require.NoError(t, os.Symlink(target, middle))
 					target = middle
