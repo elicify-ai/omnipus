@@ -375,32 +375,17 @@ function exceptionAbove(ts, info, claimed, fn, sf, startLine) {
   return NONE;
 }
 
-// firstTokenBelongsTo: the first token on line0 starts the function itself or the
-// statement/expression that directly holds it (e.g. `describe('x', () => {` starts
-// the call that holds the arrow). The walk stops at an enclosing function, block,
-// class or the file, so a marker above an outer function never reaches a function
-// nested inside it.
+// firstTokenBelongsTo: the first token on line0 starts the function itself or an
+// enclosing node (e.g. `describe('x', () => {` starts the call that holds the
+// arrow). Which of several functions on that line gets the marker is decided by
+// the claim in exceptionAbove: the outermost one, so a nested helper never does.
 function firstTokenBelongsTo(ts, info, fn, sf, line0) {
   const first = info.firstOnLine.get(line0);
   if (first === undefined || first < 0) return false;
-  for (let n = fn; n; n = n.parent) {
+  for (let n = fn; n && n.kind !== ts.SyntaxKind.SourceFile; n = n.parent) {
     if (n.getStart(sf) === first) return true;
-    const p = n.parent;
-    if (!p || isChainBoundary(ts, p)) break;
   }
   return false;
-}
-
-function isChainBoundary(ts, p) {
-  return (
-    isFunctionLikeNode(ts, p) ||
-    ts.isBlock(p) ||
-    ts.isSourceFile(p) ||
-    ts.isModuleBlock(p) ||
-    ts.isClassLike(p) ||
-    ts.isCaseClause(p) ||
-    ts.isDefaultClause(p)
-  );
 }
 
 function formatException(exc) {
