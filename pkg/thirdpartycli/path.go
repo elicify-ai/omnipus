@@ -5,10 +5,10 @@
 package thirdpartycli
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -24,11 +24,23 @@ const maxLinkHops = 40
 //
 // Agent-writable locations are $OMNIPUS_HOME (every workspace root lives
 // under it) plus agentWritable, which callers build with AgentWritableRoots.
-// A leading "~" in an entry is expanded. A list AgentWritableRoots could not
-// complete refuses every path as CheckAgentWritableLocation. File ownership
-// and permission bits are not checked (founder Q2b, Q13): protecting the
-// program is its owner's job.
+// A leading "~" in an entry is expanded. File ownership and permission bits
+// are not checked (founder Q2b, Q13): protecting the program is its owner's
+// job. Callers holding AgentWritableRoots' error use CheckProgramPath.
 func ValidateProgramPath(cli, enteredPath string, agentWritable ...string) (resolvedPath string, err error) {
+	return checkProgramPath(cli, enteredPath, agentWritable, nil)
+}
+
+// CheckProgramPath is ValidateProgramPath over a list read with
+// AgentWritableRoots together with its error. A non-nil rootsErr means the
+// list is incomplete, so after the name checks the path is refused as
+// CheckLocationUnverifiable and the cause is logged: an unchecked location is
+// never accepted, and it is not reported as an agent-writable one.
+func CheckProgramPath(cli, enteredPath string, agentWritable []string, rootsErr error) (resolvedPath string, err error) {
+	return checkProgramPath(cli, enteredPath, agentWritable, rootsErr)
+}
+
+func checkProgramPath(cli, enteredPath string, agentWritable []string, rootsErr error) (resolvedPath string, err error) {
 	fail := func(check, at string) (string, error) {
 		return "", &CheckError{CLI: cli, Check: check, At: at}
 	}
@@ -38,8 +50,10 @@ func ValidateProgramPath(cli, enteredPath string, agentWritable ...string) (reso
 	if check := windowsNameCheck(enteredPath); check != "" {
 		return fail(check, enteredPath)
 	}
-	if slices.Contains(agentWritable, rootsIncomplete) {
-		return fail(CheckAgentWritableLocation, enteredPath)
+	if rootsErr != nil {
+		slog.Error("third-party program check: the location cannot be checked, so the program is refused",
+			"cli", cli, "path", enteredPath, "error", rootsErr)
+		return fail(CheckLocationUnverifiable, enteredPath)
 	}
 	roots := writableRoots(agentWritable)
 	final, hops, cerr := resolveChain(cli, enteredPath, roots)

@@ -49,7 +49,8 @@ func (al *AgentLoop) runProgramFor(cli string) (runProgram, string) {
 		return runProgram{}, thirdpartycli.NoPathText(cli)
 	}
 	row := cfg.Sandbox.ThirdPartyCLI(cli)
-	resolved, refusal := thirdpartycli.RunProgram(cli, row.Path, thirdpartycli.AgentWritableRoots(omnipusHome(), cfg)...)
+	writable, rootsErr := thirdpartycli.AgentWritableRoots(omnipusHome(), cfg)
+	resolved, refusal := thirdpartycli.RunProgram(cli, row.Path, writable, rootsErr)
 	if refusal != "" {
 		return runProgram{}, refusal
 	}

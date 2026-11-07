@@ -38,6 +38,7 @@ const (
 	CheckNotRegularFile        = "not_regular_file"
 	CheckNotExecutable         = "not_executable"
 	CheckAgentWritableLocation = "agent_writable_location"
+	CheckLocationUnverifiable  = "location_unverifiable"
 	CheckWindowsExtension      = "windows_extension"
 	CheckWindowsShortName      = "windows_short_name"
 	CheckWindowsStream         = "windows_stream"
@@ -54,10 +55,16 @@ var pathReasons = map[string]string{
 	CheckNotRegularFile:        "it is not a regular file",
 	CheckNotExecutable:         "it is not executable for the Omnipus user",
 	CheckAgentWritableLocation: "it is inside a folder agents can write to",
+	CheckLocationUnverifiable:  locationUnverifiableReason,
 	CheckWindowsExtension:      "it must end in .exe, .com, .cmd or .bat",
 	CheckWindowsShortName:      "short (8.3) names are not accepted; use the full name",
 	CheckWindowsStream:         "alternate data streams are not accepted",
 }
+
+// locationUnverifiableReason names the real cause of a location_unverifiable
+// refusal: the list of mounted folders was unreadable, not the program.
+const locationUnverifiableReason = "Omnipus could not read the list of mounted folders, " +
+	"so it cannot check this location. Details are in the server log"
 
 // presetReasons is the `<reason>` of the cli_preset_invalid sentence.
 var presetReasons = map[string]string{
@@ -144,6 +151,13 @@ func NoPathText(cli string) string {
 // CheckFailedText is the run refusal when the saved path fails its checks
 // (r17 §3.11 CheckFailed).
 func CheckFailedText(cli, check, at string) string {
+	if check == CheckLocationUnverifiable {
+		// Moving or fixing the program would not help, so this refusal names
+		// the real cause instead of "does not pass its checks".
+		return "This agent cannot run: the program set for " + DisplayName(cli) +
+			" in Settings → Third-party agents cannot be checked (" + check + " at " + at + "). " +
+			pathReasons[check] + "."
+	}
 	return "This agent cannot run: the program set for " + DisplayName(cli) +
 		" in Settings → Third-party agents does not pass its checks (" + check + " at " + at +
 		"). A person can fix it there."

@@ -68,8 +68,9 @@ func (a *restAPI) HandleThirdPartyAgentSettings(w http.ResponseWriter, r *http.R
 }
 
 // thirdPartyAgentWritable lists the agent-writable locations the path check
-// refuses beyond $OMNIPUS_HOME; see thirdpartycli.AgentWritableRoots.
-func thirdPartyAgentWritable(homePath string, cfg *config.Config) []string {
+// refuses beyond $OMNIPUS_HOME, with the error that makes the list
+// incomplete; see thirdpartycli.AgentWritableRoots.
+func thirdPartyAgentWritable(homePath string, cfg *config.Config) ([]string, error) {
 	return thirdpartycli.AgentWritableRoots(homePath, cfg)
 }
 
@@ -105,9 +106,9 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 	if cfg == nil {
 		cfg = a.agentLoop.GetConfig()
 	}
-	writable := thirdPartyAgentWritable(a.homePath, cfg)
+	writable, rootsErr := thirdPartyAgentWritable(a.homePath, cfg)
 	for _, cli := range thirdpartycli.CLIs {
-		if checkErr := validateThirdPartyRow(cli, rows[cli], writable); checkErr != nil {
+		if checkErr := validateThirdPartyRow(cli, rows[cli], writable, rootsErr); checkErr != nil {
 			writeThirdPartyRefusal(w, checkErr)
 			return
 		}
@@ -191,9 +192,9 @@ func thirdPartyRowsFromBody(body gen.ThirdPartyAgentSettings) map[string]config.
 }
 
 // validateThirdPartyRow checks path before preset_args; "" is a valid path.
-func validateThirdPartyRow(cli string, row config.ThirdPartyCLIConfig, writable []string) *thirdpartycli.CheckError {
+func validateThirdPartyRow(cli string, row config.ThirdPartyCLIConfig, writable []string, rootsErr error) *thirdpartycli.CheckError {
 	if row.Path != "" {
-		if _, err := thirdpartycli.ValidateProgramPath(cli, row.Path, writable...); err != nil {
+		if _, err := thirdpartycli.CheckProgramPath(cli, row.Path, writable, rootsErr); err != nil {
 			return asCheckError(cli, err)
 		}
 	}

@@ -75,7 +75,8 @@ func decodeExecutorRequestRefusingFreePath(w http.ResponseWriter, r *http.Reques
 func (a *restAPI) executorProgram(cli string) (row config.ThirdPartyCLIConfig, resolved, refusal string) {
 	cfg := a.agentLoop.GetConfig()
 	row = cfg.Sandbox.ThirdPartyCLI(cli)
-	resolved, refusal = thirdpartycli.RunProgram(cli, row.Path, thirdPartyAgentWritable(a.homePath, cfg)...)
+	writable, rootsErr := thirdPartyAgentWritable(a.homePath, cfg)
+	resolved, refusal = thirdpartycli.RunProgram(cli, row.Path, writable, rootsErr)
 	return row, resolved, refusal
 }
 

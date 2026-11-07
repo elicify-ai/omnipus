@@ -203,31 +203,27 @@ func MaskEnv(env map[string]string) map[string]string {
 	return out
 }
 
-// rootsIncomplete, as an entry of an agent-writable list, says the list could
-// not be completed, so ValidateProgramPath refuses every path. A missing root
-// would otherwise silently turn "refuse" into "allow". NUL cannot occur in a
-// real path, so no real entry can equal it.
-const rootsIncomplete = "\x00agent-writable-roots-incomplete"
-
 // AgentWritableRoots lists the agent-writable locations a program path must
 // stay outside beyond $OMNIPUS_HOME: the gateway's home folder (every
 // workspace root lives under it), the sandbox's read+write grants
 // (sandbox.allowed_paths) and the host folder of every workspace mount (T11
 // §5). It is read on every call, so a mount added after a program was saved
 // counts at the next check. The Settings save, every run, the read model and
-// the agent tools all use this one list. When the mounts cannot be listed
-// completely the failure is logged and the list carries rootsIncomplete.
-func AgentWritableRoots(home string, cfg *config.Config) []string {
+// the agent tools all use this one list. A non-nil error means the mounts
+// could not be listed completely: the list is then incomplete, and a check
+// over it must refuse (CheckProgramPath), since a missing root would
+// otherwise silently turn "refuse" into "allow". A missing mount record is
+// an empty list, not an error.
+func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 	out := []string{home}
 	if cfg != nil {
 		out = append(out, cfg.Sandbox.AllowedPaths...)
 	}
 	mounts, err := workspaceMountRoots(home)
 	if err != nil {
-		slog.Error("third-party program check: every program path is refused until this is fixed", "error", err)
-		return append(out, rootsIncomplete)
+		return out, err
 	}
-	return append(out, mounts...)
+	return append(out, mounts...), nil
 }
 
 // workspaceMountRoots returns the host folder of every mount of every
@@ -293,22 +289,22 @@ func PresetAuditFilter(cfg *config.Config) func(string) string {
 // ProgramWarning returns the exact text a run of an external worker on cli
 // would be refused with right now, given the program path a person saved in
 // Settings, or "" when a run would start (r17 §3.8, §3.11). The path is
-// checked with the same ValidateProgramPath the Settings save and the spawn
-// use.
-func ProgramWarning(cli, settingsPath string, agentWritable ...string) string {
-	_, refusal := RunProgram(cli, settingsPath, agentWritable...)
+// checked with the same CheckProgramPath the Settings save and the spawn use;
+// agentWritable and rootsErr are AgentWritableRoots' results.
+func ProgramWarning(cli, settingsPath string, agentWritable []string, rootsErr error) string {
+	_, refusal := RunProgram(cli, settingsPath, agentWritable, rootsErr)
 	return refusal
 }
 
 // RunProgram is the spawn-time program decision (r17 §3.6): with no saved
-// path the refusal is NoPath; otherwise ValidateProgramPath runs again and a
+// path the refusal is NoPath; otherwise CheckProgramPath runs again and a
 // failure is CheckFailed. On success resolvedPath is the checked file, the
 // one the driver must exec. There is no fallback to any other program.
-func RunProgram(cli, settingsPath string, agentWritable ...string) (resolvedPath, refusal string) {
+func RunProgram(cli, settingsPath string, agentWritable []string, rootsErr error) (resolvedPath, refusal string) {
 	if strings.TrimSpace(settingsPath) == "" {
 		return "", NoPathText(cli)
 	}
-	resolved, err := ValidateProgramPath(cli, settingsPath, agentWritable...)
+	resolved, err := CheckProgramPath(cli, settingsPath, agentWritable, rootsErr)
 	if err != nil {
 		var ce *CheckError
 		if errors.As(err, &ce) {
