@@ -18,6 +18,14 @@ func (a *restAPI) refuseNewProgramAccess(candidate *config.Config) error {
 	if a.agentLoop != nil {
 		published = a.agentLoop.GetConfig()
 	}
+	return a.refuseProgramAccessAgainst(published, candidate)
+}
+
+// refuseProgramAccessAgainst is refuseNewProgramAccess measured against a
+// configuration the caller already holds. A caller inside
+// AgentLoop.MutateConfig must use it: GetConfig would wait forever on the lock
+// that call holds.
+func (a *restAPI) refuseProgramAccessAgainst(published, candidate *config.Config) error {
 	if err := preview.RefuseNewProgramAccess(a.homePath, published, candidate); err != nil {
 		return &requestRefusalError{msg: err.Error()}
 	}

@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"sync"
 	"time"
 
@@ -28,6 +28,15 @@ const (
 )
 
 const ownerFile = "owner.json"
+
+// socketDirPattern is the only name recovery removes for a record's socket_dir:
+// exactly what call.makeSocketDir creates. The record sits in the scratch
+// folder, which the converter can rewrite, so a prefix check is not enough: a
+// path may start like a socket folder and climb out through "..". This name
+// has no such step and stays one level below /private/tmp, where the worst a
+// forged record can name is another preview's socket folder. A link there is
+// safe too: RemoveAll removes the link, never its target.
+var socketDirPattern = regexp.MustCompile(`^/private/tmp/o-[0-9a-f]{8}$`)
 
 // procIdentity is what recovery must match before it kills anything.
 type procIdentity struct {
@@ -58,9 +67,10 @@ type call struct {
 	dir string
 	// realDir is dir with its links resolved, recorded before the first start.
 	realDir string
-	// root is the handle on dir, opened before the first start. After any
-	// LibreOffice start every gateway operation in the folder goes through it
-	// (spec §3.1 D3.7); it stays open until finish.
+	// root is the handle on dir, opened before the first start; it stays open
+	// until finish. After any LibreOffice start the output read, the retry
+	// cleanup, the profile reseed and the end-of-call removal go through it
+	// (spec §3.1 D3.7). The owner record does not: publish writes it by path.
 	root       *os.Root
 	socketDir  string
 	mu         sync.Mutex
@@ -283,14 +293,28 @@ func recoverOne(dir string, selfPID int, selfStart string, rep *RecoveryReport) 
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s kept: unknown state %q", name, rec.State))
 		return
 	}
-	if rec.SocketDir != "" && strings.HasPrefix(rec.SocketDir, "/private/tmp/o-") {
-		_ = os.RemoveAll(rec.SocketDir)
-	}
+	removeRecordedSocketDir(rec.SocketDir, name, rep)
 	if err := os.RemoveAll(dir); err != nil {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s could not be removed: %v", name, err))
 		return
 	}
 	rep.Removed++
+}
+
+// removeRecordedSocketDir removes a dead call's socket folder. A recorded path
+// of any other shape is left alone and reported, without repeating it: the
+// converter may have written it.
+func removeRecordedSocketDir(socketDir, name string, rep *RecoveryReport) {
+	if socketDir == "" {
+		return
+	}
+	if !socketDirPattern.MatchString(socketDir) {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s: its recorded socket folder was not removed: that is not a path Omnipus creates", name))
+		return
+	}
+	if err := os.RemoveAll(socketDir); err != nil {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("preview folder %s: socket folder could not be removed: %v", name, err))
+	}
 }
 
 func gatewayAlive(pid int, start string) bool {
