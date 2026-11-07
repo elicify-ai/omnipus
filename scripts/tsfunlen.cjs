@@ -19,6 +19,24 @@
 // FunctionExpression, ArrowFunction, ConstructorDeclaration, GetAccessor,
 // SetAccessor.
 //
+// Line count is code lines only (founder decision 2026-11-07, option C).
+// The span is still from the signature to the closing brace, but a line
+// counts only when a non-comment token covers a non-whitespace character
+// on it. Blank lines and comment-only lines do not. See
+// docs/internal/architecture/draft-module-map.md, "Function length is code
+// lines only".
+//
+// A function may carry a directive in the // comment block immediately
+// above it (no blank line between that block and the function):
+//
+//   // budget:exception <one-line reason>
+//   //budget:exception <one-line reason>
+//
+// Both spellings are accepted in TS, TSX, JS, MJS and CJS. An empty reason
+// is reported so the gate can fail it. React components ignore the
+// directive (the gate does; this scanner still reports it). The directive
+// sits outside the span, so it is not itself a counted line.
+//
 // Anonymous callbacks count (docs/internal/architecture/draft-module-map.md,
 // "How we enforce it"): the body passed to useEffect/create/produce/
 // withBucket and the like is a function and is reported as
@@ -36,10 +54,12 @@
 // in size-budget-grandfather-2026-09-15.md (name-starts-uppercase alone),
 // so a handful of entries there are expected to move between the two kinds.
 //
-// Output mirrors scripts/funlen: `lines<TAB>file:line<TAB>name<TAB>kind`,
-// split into "## Production" and "## Tests" sections, longest first. Lines
-// starting with "#" are commentary; the gate only trusts lines that start
-// with a digit followed by a tab.
+// Output mirrors scripts/funlen:
+// `lines<TAB>file:line<TAB>name<TAB>kind<TAB>exception`,
+// split into "## Production" and "## Tests" sections, longest first. The
+// exception column is `0` (none), `1` (directive present, reason empty), or
+// `2` plus the reason. Lines starting with "#" are commentary; the gate only
+// trusts lines that start with a digit followed by a tab.
 //
 // Usage: node scripts/tsfunlen.cjs [--root .] [--limit 120] [--ts-module <path>]
 //
@@ -229,12 +249,94 @@ function classifyKind(ts, sf, isTsx, fn, target) {
   return hasJsxReturn(ts, fn) ? 'component' : 'function';
 }
 
-// scanFile parses one TS/TSX file and returns every counted function-like
-// node whose line span exceeds `limit`, plus the total count seen.
+// codeLineSet records 0-based physical lines that contain a non-comment token
+// character other than whitespace. Comment and whitespace trivia do not mark
+// a line. A multi-line token marks only the lines where its own text is not
+// whitespace, so a blank line inside a string stays blank.
+function codeLineSet(ts, sf, text) {
+  const scanner = ts.createScanner(sf.languageVersion, /*skipTrivia*/ false, sf.languageVariant, text);
+  const lines = new Set();
+  while (true) {
+    const tok = scanner.scan();
+    if (tok === ts.SyntaxKind.EndOfFileToken) break;
+    if (isIgnoredTrivia(ts, tok)) continue;
+    markTokenLines(sf, text, lines, scanner.getTokenPos(), scanner.getTextPos());
+  }
+  return lines;
+}
+
+function isIgnoredTrivia(ts, tok) {
+  return (
+    tok === ts.SyntaxKind.SingleLineCommentTrivia ||
+    tok === ts.SyntaxKind.MultiLineCommentTrivia ||
+    tok === ts.SyntaxKind.NewLineTrivia ||
+    tok === ts.SyntaxKind.WhitespaceTrivia ||
+    tok === ts.SyntaxKind.ShebangTrivia
+  );
+}
+
+function markTokenLines(sf, text, lines, start, end) {
+  if (!(end > start)) return;
+  let i = start;
+  while (i < end) {
+    let lineEnd = text.indexOf('\n', i);
+    if (lineEnd < 0 || lineEnd > end) lineEnd = end;
+    if (hasNonSpace(text, i, lineEnd)) lines.add(sf.getLineAndCharacterOfPosition(i).line);
+    if (lineEnd >= end) break;
+    i = lineEnd + 1;
+  }
+}
+
+function hasNonSpace(text, start, end) {
+  for (let i = start; i < end; i++) {
+    const c = text.charCodeAt(i);
+    if (c !== 32 && c !== 9 && c !== 13 && c !== 11 && c !== 12) return true;
+  }
+  return false;
+}
+
+// countCodeLines counts 1-based inclusive [startLine, endLine] against a
+// 0-based set from codeLineSet.
+function countCodeLines(codeLines, startLine, endLine) {
+  let n = 0;
+  for (let l = startLine; l <= endLine; l++) {
+    if (codeLines.has(l - 1)) n++;
+  }
+  return n;
+}
+
+const BUDGET_DIRECTIVE = /^\/\/\s*budget:exception(?:\s(.*))?$/;
+
+// exceptionAbove returns '' (no directive), '!' (empty reason), or the reason.
+// The directive must be in the // comment block that ends on the line
+// immediately above startLine (1-based). A blank or non-comment line ends it.
+function exceptionAbove(text, startLine) {
+  const lines = text.split('\n');
+  for (let i = startLine - 2; i >= 0 && i < lines.length; i--) {
+    const trim = lines[i].replace(/\r$/, '').trim();
+    if (trim === '' || !trim.startsWith('//')) break;
+    const m = BUDGET_DIRECTIVE.exec(trim);
+    if (!m) continue;
+    const reason = (m[1] || '').trim();
+    return reason === '' ? '!' : reason;
+  }
+  return '';
+}
+
+function formatException(exc) {
+  if (!exc) return '0';
+  if (exc === '!') return '1';
+  return '2' + String(exc).replace(/[\t\r\n]/g, ' ');
+}
+
+// scanFile parses one TS/TSX/JS file and returns every counted function-like
+// node whose code-line count exceeds `limit` (or that carries an exception
+// directive), plus the total count seen.
 function scanFile(ts, file, limit) {
   const isTsx = file.abs.endsWith('.tsx');
   const src = fs.readFileSync(file.abs, 'utf8');
   const sf = ts.createSourceFile(file.abs, src, ts.ScriptTarget.Latest, true);
+  const codeLines = codeLineSet(ts, sf, src);
   const rows = [];
   let total = 0;
   const visit = (n) => {
@@ -242,11 +344,12 @@ function scanFile(ts, file, limit) {
       total++;
       const start = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
       const end = sf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
-      const lines = end - start + 1;
-      if (lines > limit) {
+      const lines = countCodeLines(codeLines, start, end);
+      const exc = exceptionAbove(src, start);
+      if (lines > limit || exc !== '') {
         const { name, target } = resolveName(ts, sf, n);
         const kind = classifyKind(ts, sf, isTsx, n, target);
-        rows.push({ file: file.rel, name, kind, start, lines });
+        rows.push({ file: file.rel, name, kind, start, lines, exc });
       }
     }
     ts.forEachChild(n, visit);
@@ -272,17 +375,19 @@ function scanRepo(ts, root, limit) {
 
 function printSection(title, rows) {
   console.log(`## ${title}`);
-  console.log('lines\tfile:line\tname\tkind');
-  for (const r of rows) console.log(`${r.lines}\t${r.file}:${r.start}\t${r.name}\t${r.kind}`);
+  console.log('lines\tfile:line\tname\tkind\texception');
+  for (const r of rows) {
+    console.log(`${r.lines}\t${r.file}:${r.start}\t${r.name}\t${r.kind}\t${formatException(r.exc)}`);
+  }
 }
 
 function printReport(rows, totalProd, totalTest, limit) {
   rows.sort((a, b) => b.lines - a.lines);
   const prod = rows.filter((r) => !r.test);
   const test = rows.filter((r) => r.test);
-  console.log(`# TS/TSX functions longer than ${limit} lines under src/ (span incl. signature and closing brace)`);
+  console.log(`# TS/TSX/JS functions over ${limit} code lines (blank and comment-only lines excluded)`);
   console.log(`# scanned: ${totalProd} production funcs, ${totalTest} test funcs`);
-  console.log(`# over limit: ${prod.length} production, ${test.length} test\n`);
+  console.log(`# reported: ${prod.length} production, ${test.length} test (over the limit, or carrying an exception directive)\n`);
   printSection('Production', prod);
   console.log('');
   printSection('Tests', test);

@@ -32,74 +32,85 @@
 # scripts/check-greenfield-providers.sh re-keyed its path-keyed list for the
 # 2026-09-15 config.go split. See docs/internal/architecture/
 # size-budget-grandfather-2026-09-15.md.
-# file	qualified name	lines
-pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	323
-pkg/agent/loop_wire.go	registerSharedToolsWire3.registerBrowserTools	263
-pkg/agent/subturn.go	spawnSubTurn	603
-pkg/agent/task_trigger_rrule_test.go	TestTriggerScheduler_RruleRearmAllPaths	386
-pkg/agent/verifier_antipatterns_adr052_qa_test.go	TestVerifierAntiPatterns	293
-pkg/audit/logger_test.go	TestAuditLogger_WriteAndRotate	270
-pkg/audit/rotation_test.go	TestRotationBySizeAndDaily	309
-pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	377
-pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	290
-pkg/gateway/replay.go	streamReplay	283
-pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	283
-pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	268
-pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
-pkg/gateway/task_occurrences_overlay_test.go	TestOccurrenceOverlay	373
-pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	396
-pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	258
-pkg/records/enum_test.go	TestEnum_ClosedAndLexical	247
-pkg/records/formula_eval_test.go	TestFormula_AbsencePropagatesAndArithmeticIsExact	345
-pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	246
-pkg/tools/validate_test.go	TestValidateToolArgs	286
-src/components/agents/AgentProfile.test.tsx	(arg of describe)	402
-src/components/browser/BrowserLiveView.controlToggle.test.tsx	(arg of describe)	251
-src/components/browser/BrowserLiveView.tsx	(arg of useEffect)	365
-src/components/browser/BrowserLiveView.webrtcInputRouting.test.tsx	(arg of describe)	312
-src/components/chat/AskUserQuestionCard.test.tsx	(arg of describe)	247
-src/components/chat/ChatScreen.tool-order.test.tsx	(arg of describe)	282
-src/components/chat/ChatScreen.virtualization.test.tsx	(arg of describe)	344
-src/components/chat/GoalEchoCard.test.tsx	(arg of describe)	285
-src/components/chat/mermaid-renderer.test.tsx	(arg of describe)	458
-src/components/connectors/EmailMailboxPanel.test.tsx	(arg of describe)	304
-src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	360
-src/components/library/knowledge/KnowledgeNoteView.test.tsx	(arg of describe)	413
-src/components/library/LibraryExplorer.test.tsx	(arg of describe)	257
-src/components/library/LibraryPanel.test.tsx	(arg of describe)	256
-src/components/library/preview/BasePreview.test.tsx	(arg of describe)	415
-src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	245
-src/components/library/preview/LibraryPdfPreview.tsx	(anonymous)	411
-src/components/library/preview/LibraryPdfPreview.tsx	(arg of useEffect)	594
-src/components/library/preview/useLibraryFileEditor.ts	useLibraryFileEditor	355
-src/components/providers/provider-picker-model.test.ts	(arg of describe)	376
-src/components/providers/SignInDialog.test.tsx	(arg of describe)	274
-src/components/screens/UsageScreen.test.tsx	(arg of describe)	285
-src/components/settings/MemorySection.test.tsx	(arg of describe)	316
-src/components/settings/PerformanceSection.goal.test.tsx	(arg of describe)	321
-src/components/settings/PerformanceSection.test.tsx	(arg of describe)	286
-src/components/settings/SandboxSection.test.tsx	(arg of describe)	311
-src/components/ui/model-selector.test.tsx	(arg of describe)	247
-src/components/workspaces/WorkspaceTeamTab.test.tsx	(arg of describe)	453
-src/hooks/useAutoSave.test.tsx	(arg of describe)	1300
-src/hooks/useAutoSave.ts	useAutoSave	488
-src/hooks/useSlashMenu.test.ts	(arg of describe)	441
-src/hooks/useSlashMenu.ts	useSlashMenu	925
-src/lib/api.test.ts	(arg of describe)	456
-src/routes/_app/-library.test.tsx	(arg of describe)	257
-src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	274
-src/store/chat.test.ts	(arg of describe)	392
-src/store/chat.tool-call-offset.test.ts	(arg of describe)	857
-src/store/chat/slices/frames.ts	createFrameSlice	1770
-src/store/chat/slices/frames.ts	handleFrame	1766
-src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	875
-src/store/chat/slices/outbound-lifecycle.ts	sendMessage	428
-src/store/chat/slices/replay-and-status-frames.ts	(arg of produce)	139
-src/store/chat/slices/replay-and-status-frames.ts	(arg of withBucket)	141
-src/store/chat/slices/replay-and-status-frames.ts	handleReplayAndStatusFrame	580
-src/store/chat/store.ts	(arg of create)	901
-src/store/session.ts	(arg of create)	397
-src/test/contract.test.ts	(arg of describe)	276
-tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	264
-tests/security/command_injection_test.go	TestExecCommandInjection_WorkspaceRestriction	396
-tests/security/ssrf_matrix_test.go	TestSSRFMatrix	289
+# Re-seeded 2026-11-07 to code lines (founder option C). Blank lines and
+# comment-only lines do not count. A number is that file+name's code-line
+# count, and it is never higher than the previous number. Where one listed
+# number is all that covers other same-directory functions of the same name
+# (directory fallback), the number is the largest of those code-line counts
+# still at or under the old number, so a function the old pin already
+# allowed does not turn red. No row was added.
+# Removed, because no function of that name remains in the listed directory:
+#   pkg/agent/subturn.go  spawnSubTurn  was 603
+# Held above the listed function's own code lines to keep the directory shadow, still under the old number:
+#   src/components/agents/AgentProfile.test.tsx  (arg of describe)  own 238  old 402  now 270
+#   src/components/chat/mermaid-renderer.test.tsx  (arg of describe)  own 294  old 458  now 383
+# file	qualified name	code lines
+pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	269
+pkg/agent/loop_wire.go	registerSharedToolsWire3.registerBrowserTools	105
+pkg/agent/task_trigger_rrule_test.go	TestTriggerScheduler_RruleRearmAllPaths	258
+pkg/agent/verifier_antipatterns_adr052_qa_test.go	TestVerifierAntiPatterns	218
+pkg/audit/logger_test.go	TestAuditLogger_WriteAndRotate	189
+pkg/audit/rotation_test.go	TestRotationBySizeAndDaily	207
+pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	365
+pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	220
+pkg/gateway/replay.go	streamReplay	71
+pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	70
+pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	228
+pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	304
+pkg/gateway/task_occurrences_overlay_test.go	TestOccurrenceOverlay	322
+pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	329
+pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	125
+pkg/records/enum_test.go	TestEnum_ClosedAndLexical	189
+pkg/records/formula_eval_test.go	TestFormula_AbsencePropagatesAndArithmeticIsExact	261
+pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	233
+pkg/tools/validate_test.go	TestValidateToolArgs	284
+src/components/agents/AgentProfile.test.tsx	(arg of describe)	270
+src/components/browser/BrowserLiveView.controlToggle.test.tsx	(arg of describe)	177
+src/components/browser/BrowserLiveView.tsx	(arg of useEffect)	272
+src/components/browser/BrowserLiveView.webrtcInputRouting.test.tsx	(arg of describe)	278
+src/components/chat/AskUserQuestionCard.test.tsx	(arg of describe)	151
+src/components/chat/ChatScreen.tool-order.test.tsx	(arg of describe)	177
+src/components/chat/ChatScreen.virtualization.test.tsx	(arg of describe)	290
+src/components/chat/GoalEchoCard.test.tsx	(arg of describe)	217
+src/components/chat/mermaid-renderer.test.tsx	(arg of describe)	383
+src/components/connectors/EmailMailboxPanel.test.tsx	(arg of describe)	233
+src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	325
+src/components/library/knowledge/KnowledgeNoteView.test.tsx	(arg of describe)	305
+src/components/library/LibraryExplorer.test.tsx	(arg of describe)	136
+src/components/library/LibraryPanel.test.tsx	(arg of describe)	34
+src/components/library/preview/BasePreview.test.tsx	(arg of describe)	332
+src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	228
+src/components/library/preview/LibraryPdfPreview.tsx	(anonymous)	90
+src/components/library/preview/LibraryPdfPreview.tsx	(arg of useEffect)	113
+src/components/library/preview/useLibraryFileEditor.ts	useLibraryFileEditor	204
+src/components/providers/provider-picker-model.test.ts	(arg of describe)	325
+src/components/providers/SignInDialog.test.tsx	(arg of describe)	178
+src/components/screens/UsageScreen.test.tsx	(arg of describe)	216
+src/components/settings/MemorySection.test.tsx	(arg of describe)	212
+src/components/settings/PerformanceSection.goal.test.tsx	(arg of describe)	221
+src/components/settings/PerformanceSection.test.tsx	(arg of describe)	169
+src/components/settings/SandboxSection.test.tsx	(arg of describe)	134
+src/components/ui/model-selector.test.tsx	(arg of describe)	202
+src/components/workspaces/WorkspaceTeamTab.test.tsx	(arg of describe)	128
+src/hooks/useAutoSave.test.tsx	(arg of describe)	802
+src/hooks/useAutoSave.ts	useAutoSave	200
+src/hooks/useSlashMenu.test.ts	(arg of describe)	233
+src/hooks/useSlashMenu.ts	useSlashMenu	720
+src/lib/api.test.ts	(arg of describe)	230
+src/routes/_app/-library.test.tsx	(arg of describe)	68
+src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	135
+src/store/chat.test.ts	(arg of describe)	293
+src/store/chat.tool-call-offset.test.ts	(arg of describe)	659
+src/store/chat/slices/frames.ts	createFrameSlice	560
+src/store/chat/slices/frames.ts	handleFrame	556
+src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	644
+src/store/chat/slices/outbound-lifecycle.ts	sendMessage	339
+src/store/chat/slices/replay-and-status-frames.ts	(arg of produce)	37
+src/store/chat/slices/replay-and-status-frames.ts	(arg of withBucket)	43
+src/store/chat/slices/replay-and-status-frames.ts	handleReplayAndStatusFrame	477
+src/store/chat/store.ts	(arg of create)	375
+src/store/session.ts	(arg of create)	221
+src/test/contract.test.ts	(arg of describe)	205
+tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	164
+tests/security/command_injection_test.go	TestExecCommandInjection_WorkspaceRestriction	342
+tests/security/ssrf_matrix_test.go	TestSSRFMatrix	186

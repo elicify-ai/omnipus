@@ -37,6 +37,29 @@
 #      past a tests/-is-JS-only scanner)
 #   m. a 241-line unlisted .ts function under tests/                -> must
 #      FAIL, the same proof for the plain TypeScript extension
+#   n. a 200-code-line Go function padded with 100 comment-only lines
+#      (300 physical)                                               -> must
+#      pass: comments do not count, and the WARN cites 200
+#   o. 241 code lines padded with comment-only lines               -> must
+#      FAIL citing 241, not the physical length
+#   p. a listed Go function at its code-line pin, with blank and
+#      comment padding that puts the physical span over the pin    -> must
+#      pass (the pin is code lines)
+#   q. a Go function over 240 code lines with //budget:exception
+#      and a reason                                                -> must
+#      pass, and print EXCEPTION with that reason
+#   r. a short Go function with //budget:exception and no reason   -> must
+#      FAIL (empty reason), even though it is under 240
+#   s. a 200-code-line .ts function padded with 100 comment lines  -> must
+#      pass, proving the TS scanner skips comment-only lines
+#   t. a .ts function over 240 with `// budget:exception <reason>` -> must
+#      pass and be listed (the TS spelling of the directive)
+#   u. a React component of 200 code lines plus 100 comment lines,
+#      with a directive above it                                   -> exit 0,
+#      WARN > 120, no "> 240 component", no EXCEPTION (exceptions
+#      do not apply to components; code lines, not physical)
+#   v. the gate invoked with a root that does not exist            -> exit 2
+#      (the gate itself could not run)
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
@@ -218,6 +241,136 @@ fresh_tree
 gen_mjs_func "$TMP/tree/tests/fixture_m.ts" "overLimitTs" 241
 if expect "(m) 241-line unlisted tests/*.ts function" 1; then
   grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (m) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
+fi
+
+# gen_go_padded <out> <name> <code-lines> <comment-lines> <blank-lines> [directive]
+# code-lines includes the func line and the closing brace. Comment and blank
+# lines are inside the span. An optional directive is placed on the line
+# immediately above the func (outside the span).
+gen_go_padded() {
+  local out="$1" name="$2" code="$3" comments="$4" blanks="$5" directive="${6:-}"
+  local body=$((code - 2)) i=0
+  { echo "package fixture"; echo; } > "$out"
+  if [ -n "$directive" ]; then printf '%s\n' "$directive" >> "$out"; fi
+  printf 'func %s() {\n' "$name" >> "$out"
+  while [ "$i" -lt "$body" ]; do printf '\t_ = %d\n' "$i" >> "$out"; i=$((i + 1)); done
+  i=0
+  while [ "$i" -lt "$comments" ]; do printf '\t// pad %d\n' "$i" >> "$out"; i=$((i + 1)); done
+  i=0
+  while [ "$i" -lt "$blanks" ]; do printf '\n' >> "$out"; i=$((i + 1)); done
+  echo "}" >> "$out"
+}
+
+# gen_ts_padded <out> <name> <code-lines> <comment-lines> [directive]
+# code-lines includes the function line and the closing brace.
+gen_ts_padded() {
+  local out="$1" name="$2" code="$3" comments="$4" directive="${5:-}"
+  local body=$((code - 2)) i=0
+  : > "$out"
+  if [ -n "$directive" ]; then printf '%s\n' "$directive" >> "$out"; fi
+  printf 'function %s() {\n' "$name" >> "$out"
+  while [ "$i" -lt "$body" ]; do printf '  const v%d = %d;\n' "$i" "$i" >> "$out"; i=$((i + 1)); done
+  i=0
+  while [ "$i" -lt "$comments" ]; do printf '  // pad %d\n' "$i" >> "$out"; i=$((i + 1)); done
+  echo "}" >> "$out"
+}
+
+# (n) 200 code lines + 100 comment-only lines (300 physical) must not fail.
+fresh_tree
+gen_go_padded "$TMP/tree/pkg/fixture_n.go" "CommentPadded" 200 100 0
+if expect "(n) 200 code lines padded to 300 physical with comments" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (n) unexpected FAIL line" >&2; FAIL=1; }
+  grep -q 'CommentPadded 200 > 120' "$TMP/out" || { echo "selfcheck FAIL: (n) WARN did not cite 200 code lines" >&2; FAIL=1; }
+fi
+
+# (o) 241 code lines, with comment padding, must FAIL citing 241.
+fresh_tree
+gen_go_padded "$TMP/tree/pkg/fixture_o.go" "CodeOverLimit" 241 59 0
+if expect "(o) 241 code lines fails" 1; then
+  grep -q 'CodeOverLimit 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (o) missing FAIL citing 241 code lines" >&2; FAIL=1; }
+fi
+
+# (p) listed at 250 code lines; body is 250 code + 50 comments + 50 blanks
+# (350 physical). The physical span is over the pin; the code count is not.
+fresh_tree
+printf 'pkg/fixture_p.go\tPinnedCode\t250\n' >> "$TMP/budget.txt"
+gen_go_padded "$TMP/tree/pkg/fixture_p.go" "PinnedCode" 250 50 50
+if expect "(p) pinned function measured in code lines" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (p) unexpected FAIL line" >&2; FAIL=1; }
+  grep -q 'PinnedCode 250 > 120' "$TMP/out" || { echo "selfcheck FAIL: (p) WARN did not cite 250 code lines" >&2; FAIL=1; }
+fi
+
+# (q) exception with a reason: over 240 code lines, must pass and be listed.
+fresh_tree
+gen_go_padded "$TMP/tree/pkg/fixture_q.go" "ExceptedGo" 260 0 0 "//budget:exception kept for the replay dispatcher"
+if expect "(q) Go exception with a reason" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (q) unexpected FAIL line" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*ExceptedGo 260 kept for the replay dispatcher$' "$TMP/out" || { echo "selfcheck FAIL: (q) missing EXCEPTION line" >&2; FAIL=1; }
+  grep -q 'exceptions: 1$' "$TMP/out" || { echo "selfcheck FAIL: (q) summary did not count the exception" >&2; FAIL=1; }
+fi
+
+# (r) empty reason on a short function must FAIL even though it is under 240.
+fresh_tree
+gen_go_padded "$TMP/tree/pkg/fixture_r.go" "EmptyReason" 2 0 0 "//budget:exception"
+if expect "(r) empty exception reason fails" 1; then
+  grep -q 'EmptyReason 2 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (r) missing empty-reason FAIL line" >&2; FAIL=1; }
+fi
+
+# (s) TS comment padding: 200 code lines, 100 comment lines, must not fail.
+fresh_tree
+gen_ts_padded "$TMP/tree/tests/fixture_s.ts" "commentPaddedTs" 200 100
+if expect "(s) 200 code lines padded in tests/*.ts" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (s) unexpected FAIL line" >&2; FAIL=1; }
+  grep -q 'commentPaddedTs 200 > 120' "$TMP/out" || { echo "selfcheck FAIL: (s) WARN did not cite 200 code lines" >&2; FAIL=1; }
+fi
+
+# (t) TS spelling of the directive, over 240, must pass and be listed.
+fresh_tree
+gen_ts_padded "$TMP/tree/tests/fixture_t.ts" "exceptedTs" 250 0 "// budget:exception kept for the describe callback"
+if expect "(t) TS exception with a reason" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (t) unexpected FAIL line" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*exceptedTs 250 kept for the describe callback$' "$TMP/out" || { echo "selfcheck FAIL: (t) missing EXCEPTION line" >&2; FAIL=1; }
+fi
+
+# gen_tsx_padded <out> <name> <code-lines> <comment-lines> [directive]
+# code-lines includes the function line, the JSX return line and the brace.
+gen_tsx_padded() {
+  local out="$1" name="$2" code="$3" comments="$4" directive="${5:-}"
+  local filler=$((code - 3)) i=0
+  : > "$out"
+  if [ -n "$directive" ]; then printf '%s\n' "$directive" >> "$out"; fi
+  printf 'function %s() {\n' "$name" >> "$out"
+  while [ "$i" -lt "$filler" ]; do printf '  const v%d = %d;\n' "$i" "$i" >> "$out"; i=$((i + 1)); done
+  i=0
+  while [ "$i" -lt "$comments" ]; do printf '  // pad %d\n' "$i" >> "$out"; i=$((i + 1)); done
+  { echo "  return (<div>ok</div>);"; echo "}"; } >> "$out"
+}
+
+# (u) a component measured in code lines, with a directive, stays warn-only.
+# 200 code + 100 comments would be a physical-span component warning; it must
+# not be one, and the directive must not be listed as an exception.
+fresh_tree
+gen_tsx_padded "$TMP/tree/src/components/FixturePad.tsx" "FixturePad" 200 100 "// budget:exception should be ignored on a component"
+if expect "(u) component comment padding, directive ignored" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (u) unexpected FAIL line" >&2; FAIL=1; }
+  grep -q '^EXCEPTION' "$TMP/out" && { echo "selfcheck FAIL: (u) component was listed as an exception" >&2; FAIL=1; }
+  grep -q '> 240 component' "$TMP/out" && { echo "selfcheck FAIL: (u) component warned > 240 on comment padding" >&2; FAIL=1; }
+  grep -q 'FixturePad 200 > 120' "$TMP/out" || { echo "selfcheck FAIL: (u) missing WARN citing 200 code lines" >&2; FAIL=1; }
+fi
+
+# (v) a root that does not exist is exit 2: the gate could not run.
+if bash "$CHECK" --root "$TMP/no-such-root" --budget "$TMP/budget.txt" >"$TMP/out" 2>&1; then
+  echo "selfcheck FAIL: (v) missing root exited 0" >&2
+  FAIL=1
+else
+  got=$?
+  if [ "$got" -ne 2 ]; then
+    echo "selfcheck FAIL: (v) missing root wanted exit 2, got $got" >&2
+    sed 's/^/    | /' "$TMP/out" >&2
+    FAIL=1
+  else
+    echo "selfcheck ok:   (v) missing root (exit 2)"
+  fi
 fi
 
 if [ "$FAIL" -ne 0 ]; then

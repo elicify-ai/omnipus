@@ -6,12 +6,23 @@
 # the two scanners (scripts/funlen for Go, scripts/tsfunlen.cjs for TS/TSX),
 # applies the rule, and reports against the grandfather list.
 #
-# Rule (same numbers for production and test code):
-#   * a function warns over 120 lines, fails over 240
+# Rule (same numbers for production and test code). Length is code lines
+# only: blank lines and comment-only lines inside the span do not count
+# (founder decision 2026-11-07, option C).
+#   * a function warns over 120 code lines, fails over 240
 #   * a React component warns at both, never fails
 #   * a function already over 240 at seed time is grandfathered by name in
-#     scripts/budgets/functions.txt; it may only shrink — a new function
-#     must be under 240 from the start
+#     scripts/budgets/functions.txt; the listed number is a code-line count
+#     and it may only shrink — a new function must be under 240 from the start
+#   * a non-component function may opt out with a one-line directive in the
+#     // comment block immediately above it (no blank line between that block
+#     and the function). Both spellings work in Go and in TS/TSX/JS:
+#       //budget:exception <one-line reason>
+#       // budget:exception <one-line reason>
+#     The reason is the rest of the line, trimmed. An empty reason fails the
+#     gate. A reason does not fail the size rule. The directive does nothing
+#     on a React component (already warn-only): it is not listed and an empty
+#     reason on a component is not a failure.
 #
 # Matching is by `file<TAB>qualified name`, never by line number, so a
 # grandfathered function that moves within its file keeps its entry.
@@ -21,10 +32,13 @@
 #   WARN <file:line> <name> <lines> > 240 component
 #   FAIL <file:line> <name> <lines> > 240 (not grandfathered)
 #   FAIL <file:line> <name> <lines> > listed <n>
+#   FAIL <file:line> <name> <lines> empty exception reason
+#   EXCEPTION <file:line> <name> <code lines> <reason>
 #   A listed entry matches by exact file+name, or by package directory+name
 #   so a function moved to a sibling file in the same package (a file split)
 #   keeps its grandfathered number. A move to another directory does not.
-#   grandfathered: <n> functions; components over 240: <m>   (always last)
+#   grandfathered: <n> functions; components over 240: <m>; exceptions: <k>
+#   (always last). <k> is the number of EXCEPTION lines, not empty-reason fails.
 #
 # Exit: 0 clean or warn-only, 1 any FAIL, 2 the gate itself could not run
 # (missing scanner, scanner crashed, bad arguments) — a false green here
@@ -103,6 +117,7 @@ awk -v budget="$BUDGET" '
     close(budget);
     fail_count = 0;
     comp_over = 0;
+    exc_count = 0;
   }
   {
     if ($0 !~ /^[0-9]+\t/) next;
@@ -112,6 +127,9 @@ awk -v budget="$BUDGET" '
     filecolon = f[2];
     name = f[3];
     kind = f[4];
+    exc = (n >= 5 && f[5] != "") ? f[5] : "0";
+    flag = substr(exc, 1, 1);
+    reason = (flag == "2") ? substr(exc, 2) : "";
 
     pos = match(filecolon, /:[0-9]+$/);
     file = (pos > 0) ? substr(filecolon, 1, pos - 1) : filecolon;
@@ -120,11 +138,24 @@ awk -v budget="$BUDGET" '
       printf "WARN %s %s %d > 120\n", filecolon, name, lines;
     }
 
+    # Components stay warn-only. A budget directive on one is ignored,
+    # including an empty reason: the exception path does not apply.
     if (kind == "component") {
       if (lines > 240) {
         printf "WARN %s %s %d > 240 component\n", filecolon, name, lines;
         comp_over++;
       }
+      next;
+    }
+
+    if (flag == "1" || (flag == "2" && reason ~ /^[[:space:]]*$/)) {
+      printf "FAIL %s %s %d empty exception reason\n", filecolon, name, lines;
+      fail_count++;
+      next;
+    }
+    if (flag == "2") {
+      printf "EXCEPTION %s %s %d %s\n", filecolon, name, lines, reason;
+      exc_count++;
       next;
     }
 
@@ -145,7 +176,7 @@ awk -v budget="$BUDGET" '
     }
   }
   END {
-    printf "grandfathered: %d functions; components over 240: %d\n", budget_count, comp_over;
+    printf "grandfathered: %d functions; components over 240: %d; exceptions: %d\n", budget_count, comp_over, exc_count;
     exit (fail_count > 0) ? 1 : 0;
   }
 ' "$TMP/go.out" "$TMP/ts.out"
