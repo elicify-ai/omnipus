@@ -95,6 +95,8 @@
 #   aq. exactly 240 code lines (Go, TS)                           -> must pass
 #   ar. marked functions of exactly 120 code lines (Go, TS)       -> no WARN
 #   as. empty or whitespace-only reason in TS, .mjs and Go        -> must FAIL
+#   aw. TS: two callbacks start on the marked line                 -> only the
+#      first is listed; the 260-line second one FAILs
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
@@ -614,6 +616,15 @@ if expect "(as) whitespace-only exception reason in Go fails" 1; then
   grep -q 'SpaceReason 2 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (as) missing whitespace-reason FAIL line" >&2; FAIL=1; }
 fi
 
+
+# (aw) TS: two callbacks start on the line the marker sits above. The marker
+# belongs to the first only; the second, 260-line one must still fail.
+fresh_tree
+{ printf '// budget:exception first callback only\nconst pair = wrap(() => 1, () => {\n'; body_ts 258; printf '});\n'; } > "$TMP/tree/tests/fixture_aw.ts"
+if expect "(aw) TS marker above a line that starts two callbacks" 1; then
+  grep -q 'wrap) 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (aw) the second callback was not failed" >&2; FAIL=1; }
+  grep -q 'exceptions: 1$' "$TMP/out" || { echo "selfcheck FAIL: (aw) expected exactly one exception" >&2; FAIL=1; }
+fi
 
 # (am/an) an option given with no value is a gate that could not run: exit 2.
 for opt in --root --budget; do
