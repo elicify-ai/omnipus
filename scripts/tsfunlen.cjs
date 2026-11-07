@@ -330,12 +330,12 @@ function markTokenLines(sf, text, lines, firstOnLine, start, end) {
   }
 }
 
+// hasNonSpace: any character in [start, end) that is not whitespace. \s is
+// Unicode whitespace (no-break space, em space, line separators, BOM), so a blank
+// line inside a template literal made of such characters stays blank.
+const NON_SPACE = /\S/;
 function hasNonSpace(text, start, end) {
-  for (let i = start; i < end; i++) {
-    const c = text.charCodeAt(i);
-    if (c !== 32 && c !== 9 && c !== 13 && c !== 11 && c !== 12) return true;
-  }
-  return false;
+  return NON_SPACE.test(text.slice(start, end));
 }
 
 // countCodeLines counts 1-based inclusive [startLine, endLine] against a

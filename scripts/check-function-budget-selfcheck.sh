@@ -97,6 +97,12 @@
 #   as. empty or whitespace-only reason in TS, .mjs and Go        -> must FAIL
 #   aw. TS: two callbacks start on the marked line                 -> only the
 #      first is listed; the 260-line second one FAILs
+#   Round-3 rows (CHECK 3):
+#   at. exactly 240 code lines with a blank line inside a Go raw string / TS
+#      template made of ASCII spaces, no-break spaces, em spaces or ideographic
+#      spaces                                                    -> must pass, citing 240
+#   au. 241 code lines around such a blank line                   -> must FAIL citing 241
+#   av. exact counts (4) of tiny marked functions with such a blank line
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
@@ -624,6 +630,50 @@ fresh_tree
 if expect "(aw) TS marker above a line that starts two callbacks" 1; then
   grep -q 'wrap) 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (aw) the second callback was not failed" >&2; FAIL=1; }
   grep -q 'exceptions: 1$' "$TMP/out" || { echo "selfcheck FAIL: (aw) expected exactly one exception" >&2; FAIL=1; }
+fi
+
+# Unicode blank lines (CHECK 3). A line made only of whitespace inside a Go raw
+# string or TS template is blank, whatever kind of whitespace it is: ASCII
+# spaces, no-break space (U+00A0), em space (U+2003) or ideographic space
+# (U+3000). Exactly 240 code lines must stay legal; the byte strings are written
+# as octal escapes so the case does not depend on the locale.
+uni_go() { # uni_go <file> <name> <whitespace bytes> <statement lines>
+  { printf 'package fixture\n\nfunc %s() {\n\t_ = `\n%b\n`\n' "$2" "$3"; body_go "$4"; echo '}'; } > "$1"
+}
+uni_ts() {
+  { printf 'function %s() {\n  const t = `\n%b\n`;\n' "$2" "$3"; body_ts "$4"; echo '}'; } > "$1"
+}
+for variant in "ascii:    " "nbsp:\302\240\302\240" "emspace:\342\200\203" "ideographic:\343\200\200"; do
+  vname="${variant%%:*}"; vbytes="${variant#*:}"
+  fresh_tree
+  uni_go "$TMP/tree/pkg/fixture_uni.go" "BlankGo" "$vbytes" 236
+  uni_ts "$TMP/tree/tests/fixture_uni.ts" "blankTs" "$vbytes" 236
+  if expect "(at) exactly 240 code lines with a $vname blank line in a literal (Go and TS)" 0; then
+    grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (at/$vname) a legal 240-line function failed" >&2; FAIL=1; }
+    grep -q 'BlankGo 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (at/$vname) Go count was not 240" >&2; FAIL=1; }
+    grep -q 'blankTs 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (at/$vname) TS count was not 240" >&2; FAIL=1; }
+  fi
+done
+
+# (au) the same blank line with one more real statement is 241 and must fail,
+# citing 241: the whitespace line is neither counted nor allowed to hide a line.
+fresh_tree
+uni_go "$TMP/tree/pkg/fixture_au.go" "BlankPlusGo" "\302\240" 237
+uni_ts "$TMP/tree/tests/fixture_au.ts" "blankPlusTs" "\342\200\203" 237
+if expect "(au) 241 code lines around a Unicode blank line fails" 1; then
+  grep -q 'BlankPlusGo 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (au) Go FAIL did not cite 241" >&2; FAIL=1; }
+  grep -q 'blankPlusTs 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (au) TS FAIL did not cite 241" >&2; FAIL=1; }
+fi
+
+# (av) small witnesses with exact counts: signature, two literal edges, closing
+# brace = 4 lines whatever the blank line holds.
+fresh_tree
+# a marked function is always reported, so its count is visible without a WARN
+printf 'package fixture\n\n//budget:exception count probe\nfunc TinyProbeGo() {\n\t_ = `\n\302\240\n`\n}\n' > "$TMP/tree/pkg/fixture_av_probe.go"
+printf '// budget:exception count probe\nfunction tinyProbeTs() {\n  const t = `\n\342\200\203\n`;\n}\n' > "$TMP/tree/tests/fixture_av_probe.ts"
+if expect "(av) exact code-line counts around a Unicode blank line" 0; then
+  grep -q '^EXCEPTION .*TinyProbeGo 4 ' "$TMP/out" || { echo "selfcheck FAIL: (av) Go probe was not 4 code lines" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*tinyProbeTs 4 ' "$TMP/out" || { echo "selfcheck FAIL: (av) TS probe was not 4 code lines" >&2; FAIL=1; }
 fi
 
 # (am/an) an option given with no value is a gate that could not run: exit 2.

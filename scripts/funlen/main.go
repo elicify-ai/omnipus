@@ -46,6 +46,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // budgetDirective matches a one-line exception marker. The reason, if any, is group 1.
@@ -325,14 +327,19 @@ func markToken(src []byte, file *token.File, starts []int, info *sourceInfo, pos
 	}
 }
 
+// hasNonSpace reports whether b holds any character that is not whitespace.
+// Whitespace is Unicode whitespace (no-break space, em space and the like), so a
+// blank line inside a raw string made of such characters stays blank.
 func hasNonSpace(b []byte) bool {
-	for _, c := range b {
-		switch c {
-		case ' ', '\t', '\r', '\v', '\f':
-			continue
-		default:
+	for len(b) > 0 {
+		r, size := utf8.DecodeRune(b)
+		if r == utf8.RuneError && size <= 1 {
 			return true
 		}
+		if !unicode.IsSpace(r) {
+			return true
+		}
+		b = b[size:]
 	}
 	return false
 }
