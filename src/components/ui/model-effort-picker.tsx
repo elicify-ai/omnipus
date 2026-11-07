@@ -132,16 +132,58 @@ interface EffortRadioListProps {
   onCommit: (value: string) => void
   disabled?: boolean
   ariaLabel: string
+  /** The blocked step's suggested level, marked "nearest" (S-10). */
+  nearest?: string
 }
 
 const NO_SELECTION = '\u0000none'
 
-/** The radio list: arrows move the selection; click, Enter or Space commits. */
-function EffortRadioList({ items, checked, onCommit, disabled, ariaLabel }: EffortRadioListProps) {
+/** Not set and Provider default are full-width rows; everything else is a level button. */
+function isTopRow(value: string): boolean {
+  return value === NOT_SET || value === PROVIDER_DEFAULT
+}
+
+/**
+ * The radio list (FD-16 P-Q1 A, "Design-System Components"): one radio group,
+ * Not set and Provider default as full-width rows on top, then the model's own
+ * levels (or Off / On) as a row of named buttons under a "Level" / "Reasoning"
+ * label. Arrows move the selection across both rows; click, Enter or Space
+ * commits. The items stay direct children of the group so its roving tab stop
+ * sees them; a wrapping flex row puts the full-width rows and the label on
+ * their own lines and shares one line among the level buttons.
+ */
+function EffortRadioList({ items, checked, onCommit, disabled, ariaLabel, nearest }: EffortRadioListProps) {
   const [selected, setSelected] = useState<string>(checked ?? NO_SELECTION)
+  const nearestId = useId()
   useEffect(() => {
     setSelected(checked ?? NO_SELECTION)
   }, [checked])
+  const levels = items.filter((item) => !isTopRow(item.value))
+  const onlySwitch = levels.length > 0 && levels.every((item) => item.value === 'off' || item.value === 'on')
+  const renderItem = (item: EffortItem) => {
+    const top = isTopRow(item.value)
+    const isNearest = !top && item.value === nearest
+    return (
+      <RadioGroupItem
+        key={item.value === NOT_SET ? 'not-set' : item.value}
+        value={item.value}
+        onClick={(event) => {
+          event.preventDefault()
+          setSelected(item.value)
+          onCommit(item.value)
+        }}
+        aria-describedby={isNearest ? nearestId : undefined}
+        className={top ? 'basis-full whitespace-normal p-[var(--space-2)]' : 'w-auto min-w-0 flex-1 basis-0 flex-col whitespace-normal justify-center gap-0 px-[var(--space-1)] py-[var(--space-2)] text-center'}
+      >
+        {item.label}
+        {isNearest && (
+          <span aria-hidden="true" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            nearest
+          </span>
+        )}
+      </RadioGroupItem>
+    )
+  }
   return (
     <RadioGroup
       aria-label={ariaLabel}
@@ -149,22 +191,20 @@ function EffortRadioList({ items, checked, onCommit, disabled, ariaLabel }: Effo
       value={selected}
       onValueChange={setSelected}
       disabled={disabled}
-      className="gap-[var(--space-1)]"
+      className="flex-row flex-wrap gap-[var(--space-1)]"
     >
-      {items.map((item) => (
-        <RadioGroupItem
-          key={item.value === NOT_SET ? 'not-set' : item.value}
-          value={item.value}
-          onClick={(event) => {
-            event.preventDefault()
-            setSelected(item.value)
-            onCommit(item.value)
-          }}
-          className="p-[var(--space-2)]"
-        >
-          {item.label}
-        </RadioGroupItem>
-      ))}
+      {items.filter((item) => isTopRow(item.value)).map(renderItem)}
+      {levels.length > 0 && (
+        <span aria-hidden="true" className="basis-full pt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          {onlySwitch ? 'Reasoning' : 'Level'}
+        </span>
+      )}
+      {levels.map(renderItem)}
+      {nearest !== undefined && (
+        <span id={nearestId} className="sr-only">
+          Nearest level
+        </span>
+      )}
     </RadioGroup>
   )
 }
@@ -547,7 +587,7 @@ function BlockedStep({ pending, catalogRow, onCommit, onCancel }: BlockedStepPro
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
         {`${pending.model} can't turn reasoning off. Pick a level to finish switching.`}
       </p>
-      <EffortRadioList items={items} checked={undefined} onCommit={onCommit} ariaLabel={`Effort for ${pending.model}`} />
+      <EffortRadioList items={items} checked={undefined} onCommit={onCommit} ariaLabel={`Effort for ${pending.model}`} nearest={pending.nearest} />
     </div>
   )
 }
