@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -143,13 +144,28 @@ func TestT10_LoopRunLimitStopSaveFailureIsNotAnnounced(t *testing.T) {
 			assert.Equal(t, loopModeSelfPaced, m.LoopMode, "the saved loop is unchanged")
 			assert.Equal(t, 1, m.LoopRunCount, "the completed run is counted")
 			assert.Empty(t, t10LoopStates(sub.C), "no stopped (or other) frame for an unsaved stop")
+			// CHECK5 F2: the fired one-shot is not deleted by the handler (the
+			// engine deletes it after the handler returns), and a self-paced
+			// loop gets exactly one retry step, which is the selected step
+			// once the engine has deleted the fired one-shot.
 			jobs := t10SessionLoopJobs(f.ls, f.sid)
-			require.Len(t, jobs, 1, "the live job is not deleted on a failed stop save")
-			assert.Equal(t, job.ID, jobs[0].ID)
+			require.Len(t, jobs, 2, "the live job is not deleted on a failed stop save, and one retry step is armed")
+			var retry cron.CronJob
+			kept := false
+			for _, j := range jobs {
+				if j.ID == job.ID {
+					kept = true
+				} else {
+					retry = j
+				}
+			}
+			assert.True(t, kept, "the live job is not deleted on a failed stop save")
+			require.True(t, f.ls.RemoveJob(job.ID)) // the engine deletes a fired one-shot
+			require.True(t, f.ls.isSelectedStep(f.sid, retry.ID), "the retry step is the selected step")
 
 			// The next fire runs no turn past the limit; with a working store
 			// it saves the stop and announces it once.
-			_, err = f.ls.RunScheduled(context.Background(), &jobs[0])
+			_, err = f.ls.RunScheduled(context.Background(), &retry)
 			require.NoError(t, err)
 			assert.Equal(t, int32(1), f.p.calls.Load(), "no turn runs past the saved run limit")
 			assert.Empty(t, f.meta(t).LoopMode)

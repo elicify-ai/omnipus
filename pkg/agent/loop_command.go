@@ -115,7 +115,7 @@ func (al *AgentLoop) applyLoopCommandPrompt(
 	// (T10 FR-05).
 	// A replacement starts only when every previous job is gone: a leftover
 	// later step would outrank the replacement's first step (FR-05).
-	prior, serr := al.stopSessionLoop(sessionID, store, ls, "replaced by new /loop")
+	prior, serr := al.stopSessionLoop(sessionID, store, ls, "replaced by new /loop", nil)
 	var left *loopJobsLeftError
 	switch {
 	case errors.As(serr, &left):
@@ -278,7 +278,7 @@ func (al *AgentLoop) loopStatusReply(sessionID string, store *session.UnifiedSto
 // stopLoopCommand implements user-invoked `/loop stop` (FR-073): removes the
 // cron job and clears loop state, returning the user-facing reply.
 func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedStore, ls *LoopScheduler) string {
-	prior, err := al.stopSessionLoop(sessionID, store, ls, "stopped by user")
+	prior, err := al.stopSessionLoop(sessionID, store, ls, "stopped by user", nil)
 	var left *loopJobsLeftError
 	if err != nil && !errors.As(err, &left) {
 		logger.WarnCF("agent", "loop: could not stop the loop",
@@ -296,6 +296,10 @@ func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedSto
 	}
 	return "Loop stopped."
 }
+
+// errLoopStopRevoked is stopSessionLoop's outcome when the caller's ownership
+// check failed under the lock: nothing changed.
+var errLoopStopRevoked = errors.New("loop stop: the caller no longer owns the loop")
 
 // loopJobsLeftError is stopSessionLoop's outcome when the stop itself is
 // saved (and published) but some of the session's loop jobs could not be
@@ -332,9 +336,19 @@ type loopStopPrior struct {
 // stopped loop: the stop stands (a leftover job removes itself when it
 // fires, RunScheduled step 1), but a caller about to start a new loop must
 // not, because a leftover later step would outrank its first step.
-func (al *AgentLoop) stopSessionLoop(sessionID string, store *session.UnifiedStore, ls *LoopScheduler, note string) (loopStopPrior, error) {
+//
+// owns, when not nil, is the caller's ownership check, evaluated on the
+// saved state under the same lock before anything changes: when it reports
+// false the caller's view is stale (its loop was stopped or replaced), so
+// nothing changes and errLoopStopRevoked is returned (FR-05, S-B.8).
+func (al *AgentLoop) stopSessionLoop(
+	sessionID string, store *session.UnifiedStore, ls *LoopScheduler, note string, owns func(*session.UnifiedMeta) bool,
+) (loopStopPrior, error) {
 	var prior loopStopPrior
 	err := store.UpdateMetaLocked(sessionID, func(meta *session.UnifiedMeta, set func(session.MetaPatch) error) error {
+		if owns != nil && !owns(meta) {
+			return errLoopStopRevoked
+		}
 		if meta != nil && meta.LoopMode != "" {
 			prior = loopStopPrior{mode: meta.LoopMode, maxRuns: meta.LoopMaxRuns, run: meta.LoopRunCount}
 			if err := set(loopStoppedPatch()); err != nil {

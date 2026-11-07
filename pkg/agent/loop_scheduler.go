@@ -74,6 +74,10 @@ type LoopScheduler struct {
 	// postTurnHook is a test seam run after ProcessScheduled returns and
 	// before any post-turn mutation (SetPostTurnTestHook). nil in production.
 	postTurnHook atomic.Pointer[func()]
+	// runLimitStopHook is a test seam run when a fire finds its loop at the
+	// run limit, before the stop is attempted (SetRunLimitStopTestHook). nil
+	// in production.
+	runLimitStopHook atomic.Pointer[func()]
 }
 
 // NewLoopScheduler registers a scheduler as the `loop`-kind handler of the
@@ -109,6 +113,17 @@ func (s *LoopScheduler) SetPostTurnTestHook(fn func()) {
 		return
 	}
 	s.postTurnHook.Store(&fn)
+}
+
+// SetRunLimitStopTestHook installs fn to run when a fire finds its loop at the
+// run limit, after the fire-time checks and before the stop (tests only; nil
+// clears).
+func (s *LoopScheduler) SetRunLimitStopTestHook(fn func()) {
+	if fn == nil {
+		s.runLimitStopHook.Store(nil)
+		return
+	}
+	s.runLimitStopHook.Store(&fn)
 }
 
 // RunDueJobs drives dispatch deterministically for tests.
@@ -229,7 +244,10 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 		// The run limit was reached but its stop was not saved (settleTurn
 		// failed to save it). No turn runs past the limit; the stop is
 		// retried here (spec section 8).
-		return "", s.stopAtRunLimit(store, sessionID, job)
+		if hook := s.runLimitStopHook.Load(); hook != nil {
+			(*hook)()
+		}
+		return "", s.stopAtRunLimit(store, sessionID, job, meta)
 	}
 	if oerr := s.checkOwner(job.AgentID); oerr != nil {
 		logger.WarnCF("agent", "loop: run refused",
@@ -253,13 +271,26 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 }
 
 // stopAtRunLimit retries the stop of a loop whose saved run count already
-// reached its limit, without running a turn.
-func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID string, job *cron.CronJob) error {
-	_, err := s.al.stopSessionLoop(sessionID, store, s, "run limit reached")
+// reached its limit, without running a turn. The stop applies only while,
+// under the session lock, the loop is still active, still at its saved limit
+// and this job is still its selected step: a callback revoked in between (the
+// loop was stopped or replaced) changes nothing (FR-05, S-B.8). meta is the
+// state the fire read; a failed save of a self-paced loop arms a retry step.
+func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID string, job *cron.CronJob, meta *session.UnifiedMeta) error {
+	owns := func(m *session.UnifiedMeta) bool {
+		return m != nil && m.LoopMode != "" && m.LoopRunCount >= effectiveLoopMaxRuns(m) && s.isSelectedStep(sessionID, job.ID)
+	}
+	_, err := s.al.stopSessionLoop(sessionID, store, s, "run limit reached", owns)
+	if errors.Is(err, errLoopStopRevoked) {
+		logger.InfoCF("agent", "loop: a run-limit stop was revoked before it applied; nothing changed",
+			map[string]any{"session_id": sessionID, "job_id": job.ID})
+		return nil
+	}
 	var left *loopJobsLeftError
 	if err != nil && !errors.As(err, &left) {
 		logger.ErrorCF("agent", "loop: at its run limit and the stopped state still cannot be saved; no turn runs",
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
+		s.armRunLimitStopRetry(sessionID, job, meta)
 		return fmt.Errorf("loop_scheduler: stop the loop at its run limit: %w", err)
 	}
 	if left != nil {
@@ -267,6 +298,27 @@ func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID st
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
 	}
 	return nil
+}
+
+// armRunLimitStopRetry gives a self-paced loop whose run-limit stop could
+// not be saved a step to retry the stop on: the engine deletes the one-shot
+// that just fired, and without a step nothing would fire again in this
+// process. The delay is the one boot recovery uses (the loop's saved next
+// delay, else the first-step delay); the retry runs no turn. An interval
+// loop keeps its own repeating job and needs none. A failure is logged; the
+// next gateway start stops a loop at its run limit.
+func (s *LoopScheduler) armRunLimitStopRetry(sessionID string, job *cron.CronJob, meta *session.UnifiedMeta) {
+	if meta == nil || meta.LoopMode != loopModeSelfPaced {
+		return
+	}
+	delay := meta.LoopNextDelayMS
+	if delay <= 0 {
+		delay = firstSelfPacedRunDelayMS
+	}
+	if _, err := s.AddOneShot(job.AgentID, sessionID, delay); err != nil {
+		logger.ErrorCF("agent", "loop: could not arm the retry of an unsaved run-limit stop; the next gateway start stops the loop",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
+	}
 }
 
 // checkOwner applies the G5 owner rules of the schedule runner (FR-10 (a) and
@@ -326,7 +378,9 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		if out.run >= out.maxRuns {
 			if perr := set(loopStoppedPatch()); perr != nil {
 				// Nothing else changes and nothing is published: the next
-				// fire runs no turn and retries the stop (RunScheduled).
+				// fire runs no turn and retries the stop (RunScheduled). A
+				// self-paced loop gets a step for that fire.
+				s.armRunLimitStopRetry(sessionID, job, meta)
 				return &loopCapStopError{err: perr}
 			}
 			s.al.finishLoopStop(sessionID, out.mode, out.maxRuns, out.run)
@@ -473,7 +527,7 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 		// the expiry, and a settling turn cannot add one after it.
 		// stopSessionLoop also publishes the stopped frame and the "loop"
 		// admission release once the stop is saved.
-		_, serr := s.al.stopSessionLoop(sessionID, store, s, fmt.Sprintf("idle-expired after %d day(s)", maxDays))
+		_, serr := s.al.stopSessionLoop(sessionID, store, s, fmt.Sprintf("idle-expired after %d day(s)", maxDays), nil)
 		var left *loopJobsLeftError
 		if errors.As(serr, &left) {
 			// The stop is saved; a leftover job removes itself when it fires.
