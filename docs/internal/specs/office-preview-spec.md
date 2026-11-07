@@ -4,12 +4,12 @@ Status: Draft
 
 | Field | Value |
 |---|---|
-| Created / revised | 2026-10-30 (architect, plan-spec) / fix round 1 (grill 1: BLOCK 1C/10M/4m) / RQ update (native pdfium program, gpt-6-luna row) / **final correction after grill 2 (BLOCK 1C/12M/2m/2obs) — no third grill** / **2026-10-31 architect amendment after the O3 Linux measurement (§3.1): Linux memory limit = data limit, launcher order unchanged, LibreOffice exit-81 retry, shared pdfium library (D1 A)** / **2026-11-05 architect amendment: S2 = A (§3.2 rewritten: write access to a program folder is refused where it is created), SR1 (§3.1 D3.7 anchored scratch operations; §3.3 deferred findings), O8 (T-91 manual Linux limits job)** |
+| Created / revised | 2026-10-30 (architect, plan-spec) / fix round 1 (grill 1: BLOCK 1C/10M/4m) / RQ update (native pdfium program, gpt-6-luna row) / **final correction after grill 2 (BLOCK 1C/12M/2m/2obs) — no third grill** / **2026-10-31 architect amendment after the O3 Linux measurement (§3.1): Linux memory limit = data limit, launcher order unchanged, LibreOffice exit-81 retry, shared pdfium library (D1 A)** / **2026-11-05 architect amendment: S2 = A (§3.2 rewritten: write access to a program folder is refused where it is created), SR1 (§3.1 D3.7 anchored scratch operations; §3.3 deferred findings), O8 (T-91 manual Linux limits job)** / **2026-11-07 architect amendment: founder Q18, Q19, Q22, Q23, Q24 (§3.4)** |
 | Size | Feature (tools, agent media path, providers, sandbox, packaging, chat UI, skills) → RED/GREEN/CHECK, 5-reviewer gate, hands-on UAT (touches `pkg/agent`) |
 | Baseline | `origin/release/v0.1.1` at `4cad412bf` (read-only); grill 2 used `b7d4483c9`. backend-lead re-checks every cited symbol on the planning commit |
 | Supersedes | T11 spec (`landing/t11:docs/internal/specs/t11-documents-and-3p-agents-spec-full.md`) §2.4: the on-hold `convert_document` design (#1489) is retired, not built |
 | Issues | #1489 (re-scoped here); #1506 (Omnipus signing: gates the trimmed macOS LibreOffice and the renderer's signing) |
-| Previous versions | `.bak-round1` (before fix round 1), `.bak-rq` (before RQ update), `.bak-round2` (before this final correction); commit `a0ad39455` (before the 2026-11-05 amendment) |
+| Previous versions | `.bak-round1` (before fix round 1), `.bak-rq` (before RQ update), `.bak-round2` (before this final correction); commit `a0ad39455` (before the 2026-11-05 amendment); commit `1c2ca4870` (before the 2026-11-07 amendment) |
 | Governing ADR | **Built-in agent configuration, skills, and visual file reading** (ADR-090) — dated amendment W0 |
 
 ## 0. Bottom line
@@ -46,6 +46,11 @@ Agents keep creating Office files and PDFs with the skills' Python libraries; wh
 | **S2** | Founder, asked 2026-11-01, confirmed 2026-11-05 | **A**: agents can never be granted write access into the preview program folders (PDF renderer and LibreOffice); no live-writer tracking or lock design. Side effects, founder **A** (2026-11-05): (1) a mount or approval that **contains** a program folder (for example a mount of `/`) is refused with a message naming the program folder — this **supersedes the 2026-08-12 "warn and allow" mount ruling for that case**; (2) write access Omnipus cannot reduce to a folder is refused. Decided in §3.2. |
 | **SR1** | Founder, asked 2026-11-01, confirmed 2026-11-05 | Fix SEC-R1-01 (High) now: exit-81 cleanup and profile reseed stay anchored to the scratch folder across every path component (§3.1 D3.7, T-90). SEC-R1-02…06 become tracked issues #1608…#1612, not this round (§3.3). |
 | **O8** | Founder, asked 2026-11-01, confirmed 2026-11-05 | **A**: the Linux memory limits (T-76, T-80) are measured once by a manual GitHub Actions job on `ubuntu-latest` on the exact candidate version (T-91). |
+| **Q18** | Founder, 2026-11-07 | **A**: fix both crash-recovery findings. After a crash, cleanup acts only on what Omnipus itself recorded, out of the converter's reach; the converter is treated as compromised (§3.4 D1–D4). |
+| **Q19** | Founder, 2026-11-07 | **A**: fix `call.publish` so FR-050 holds (§3.4 D5). |
+| **Q22** | Founder, 2026-11-07 | **A**: accept the limit on Windows and in the disclosed "without sandbox" fallback, and state it in the spec (§3.4 D7). |
+| **Q23** | Founder, 2026-11-07 | **A**: add the second-start guard and T-100 this round (§3.4 D6). |
+| **Q24** | Founder, 2026-11-07 | **A**: fix the settings routes that lose the refusal text, in one commit, this round (§3.4 D9). Asked as "19 routes"; the exact scope is 19 code sites serving 20 routes, one of which is not mechanical. |
 
 ## 2. Round responses
 
@@ -133,6 +138,7 @@ Anything else — wrong version, unknown type, oversize, duplicate/out-of-range 
 3. Record child identity atomically: state `running`, launcher PID + process start time + executable, process-group ID, intended target executable, socket folder.
 4. Send the go-byte. 5. On exit: state `done`, then remove folders. A second start within the same call (LibreOffice exit-81 retry, §3.1 D3) repeats steps 2–4 for the new launcher after the first one's exit and group kill.
 - **Startup:** for each folder whose owner gateway is dead (PID + start time): `preparing` → nothing can have started; remove. `running` → for each recorded process, kill only if PID, start time **and** executable (launcher, `omnipus-pdfium`, `soffice`/`soffice.bin` of the verified component) all match; then confirm termination (poll ≤ 5 s) before removing. Unconfirmed, unreadable record, or a live owner gateway (two gateways sharing a home) → keep, warn in log and `doctor`. Windows: the gateway's death already closed the job; only folders remain.
+- **Amended 2026-11-07 (§3.4, governs where it differs):** per call `$OMNIPUS_HOME/tmp/preview-calls/<id>/`, with `owner.json` at that level and scratch in `<id>/work/`. Step 3 no longer records a process-group ID: recovery derives the group from the verified launcher. The socket folder is recorded when it is created, not at step 3. The Windows sentence above is unverified: a live launcher that matches its record is stopped there too (§3.3).
 
 **AD-9 Rendered-page cache.** Key = (PDF content SHA-256, page, render settings, renderer build ID + protocol version). Looked up only after this request's authorization of the source; checked before starting the renderer.
 
@@ -200,6 +206,7 @@ D3 (defect 2) — **Team-lead's ruling stands and does not conflict with the des
 5. Validity is still judged only by the output (FR-011, "ignore exit codes"): exit 81 only decides whether a second start is attempted when no readable PDF exists; it never makes a result valid or invalid.
 6. Applies on every platform (the Windows loader also restarts on 81); harmless where the first start already converts.
 7. **Anchored scratch operations (2026-11-05, founder SR1, SEC-R1-01 High).** *Context:* `pkg/preview/programs.go::reseedOfficeProfile` checks only its last folder (`profile/user`) with `Lstat`, then `os.Remove` and `os.OpenFile` look up every folder above it again by name; the leftover-output removal in `::officeConversion.run` and `::readConvertedPDF` do the same for `out`. A first start that replaced `profile` or `out` with a link to an outside folder (no race needed) therefore makes the gateway — which is not confined, unlike the sandboxed converter (AD-7) — delete, recreate or read files outside scratch (security review round 1, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/office-preview-build-20261030/review-r1/security-report.md`). *Decision:* after any LibreOffice start, every file operation the gateway performs in the call's scratch folder — reading `out/document.pdf`, removing a leftover `out/document.pdf` before the retry, removing and recreating `profile/user/registrymodifications.xcu`, and removing the call's folders at the end (`pkg/preview/scratch.go::call.finish`, AD-8 step 5) — is resolved through a handle on the call's scratch folder that the gateway opened **before the first start**, never through a path whose folders are looked up again by name. A link at any level below that folder (`out`, `profile`, `profile/user`, or the file itself) that leads outside it makes the operation fail; the gateway never reads, removes, creates or writes anything outside the scratch folder; the end-of-call removal removes a link itself, never what it points to. A link that stays inside the scratch folder may be followed (it cannot reach outside). Outcomes: an output reached through an outside link counts as "no readable PDF"; a cleanup or reseed that meets one ends the call with `conversion failed: scratch unavailable` or `conversion failed: the LibreOffice profile settings could not be restored`, and no second start happens. Go's `os.Root` (Go 1.24 and later; `os/root.go`: "symbolic links may not reference a location outside the root") is one way to meet this; backend-lead chooses. One code path on every platform; tested on Linux and macOS (T-90), where the converter is confined and this boundary exists — on Windows the converter has no file confinement (Q5). *Consequences:* positive — the converter's write boundary holds across the exit-81 retry; negative — none beyond the implementation; a first start that leaves outside links now ends the call instead of retrying.
+   *Amended 2026-11-07 (§3.4 D5, D6):* the owner record now sits outside scratch, so publishing it is not an operation in this list. The final removal of the scratch folder goes through a handle on the call folder. A replaced scratch folder ends the call before any second start.
 
 **Consequences.**
 - Positive: `extract-text` works on Linux, so the AD-15 fallbacks (renderer absent or failed, Office validity without a renderer) work; Office conversion works on Linux; the launcher crash mechanism is gone without touching the go-byte order; one limit kind for every program and one code path.
@@ -269,6 +276,120 @@ Status: decided 2026-11-05 (founder S2 = A, asked 2026-11-01, confirmed 2026-11-
 |---|---|
 | SEC-R1-02 … SEC-R1-06 (security review round 1, all Medium) | **Known, deferred to tracked issues, not this round** (founder SR1, 2026-11-05): SEC-R1-02 #1608, SEC-R1-03 #1609, SEC-R1-04 #1610, SEC-R1-05 #1611, SEC-R1-06 #1612. Until they are fixed the code does not meet this spec at those points: Retry's protected-source check (§5.2), Retry's special-file read and admission hold (§5.2, AD-6), Retry's settle target with a reused call ID (§5.2), a dangling mount-record link read as "no access" (AD-4), and upload rendering that reads the PDF before admission (AD-6 "taken before reading or copying the source"). Report: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/office-preview-build-20261030/review-r1/security-report.md`. |
 | Write folders `ConfiguredWriteRoots` does not list | **Unknown, open — team-lead raises it.** `pkg/preview/writeroots.go::ConfiguredWriteRoots` lists agent homes, workspaces, mounts, `tools.allow_write_paths`, `sandbox.allowed_paths` and remembered grants, but not the writable folders of `environment_setup` (`pkg/tools/environment_setup_runner.go::setupAllowRoots`: the target's prefix, cache and tmp) or the document runtime cache (`pkg/tools/shell_env.go`, the `Writable: true` root for `doc.layout.Cache`). Whether a program folder can lie inside them is not established; if it can, neither the §3.2 refusal nor the per-call check sees it. |
+| Other config writers that lose the refusal text (2026-11-07) | **Open, not in this round — team-lead raises it.** The §3.4 D9 list is the 20 routes the founder approved. The same gap exists at: `PUT /settings/context`, `PUT /settings/memory`, `PUT /settings/third-party-agents`, `PUT /providers/default-model`, `PUT /integrations/providers/{id}`, `PUT /performance`, `DELETE /providers/{id}`, `POST /onboarding/complete`, `POST /providers/{id}/sign-in`, `POST /auth/login`, `POST /auth/logout` (declares no 400), `POST /auth/change-password`, `pkg/gateway/rest_workspaces.go::unbindChannelInstancesForWorkspace`, `::removeMailboxesForWorkspace`, Bedrock profile saves. `PUT /channels/{id}/outbound` is unchecked. Effect: while `config.json` holds a refused entry, those saves give a generic failure, and login answers `login failed` until the file is fixed. |
+| Windows launcher after gateway death (2026-11-07) | **Inferred, not run.** AD-2, AD-8 and `pkg/preview/launcher/launcher.go` say the gateway's death closes the job. In `pkg/preview/launcher/child_windows.go::Main` the job handle lives in the launcher, with nothing watching the gateway, so a hanging target may run on until recovery or its CPU limit ends it. T-99 covers the recovery stop. Issue proposed to team-lead, none filed. |
+| Recovery warnings do not reach `doctor` (2026-11-07) | **Verified, existing gap.** AD-8 and `pkg/preview/scratch.go::RecoveryReport` say each warning becomes a doctor line; `pkg/gateway/gateway_boot.go::startDocumentPreview` only logs them. Issue proposed to team-lead, none filed. |
+
+### 3.4 Dated amendment 2026-11-07 — trusted owner record, replaced scratch folder, refusal text on settings routes (architect, founder Q18, Q19, Q22, Q23, Q24)
+
+Status: decided 2026-11-07. Amends AD-8 and §3.1 D3.7. Adds FR-051…FR-054, B-64…B-68, T-92…T-103. The text of FR-013 and FR-050 does not change. Baseline: `landing/office-preview` at `1c2ca4870`.
+
+**Context.** The converter is treated as compromised (founder Q18 = A). `pkg/preview/scratch.go::call.publish` keeps `owner.json` inside scratch, the one folder the converter can write, and `::recoverOne` trusts that file after a crash. So after a crash a converter could steer which process group is stopped and which socket folder is removed. `::call.publish` also writes by name inside scratch after the first start, against FR-050. A confined converter on macOS can replace its scratch folder, including with a link (checked on macOS 26.5.2 under a hand-built profile, not the production render); it cannot touch a file one level above. Separately, 20 settings routes lose the §3.2 refusal text and answer with a generic failure, and a preview from an agent turn may lose write access to its own scratch folder on macOS (D8).
+
+**Decision.**
+
+**D1. Where the record lives (founder Q18 = A).**
+
+```
+$OMNIPUS_HOME/tmp/preview-calls/<id>/      call folder: gateway only, 0700
+    owner.json                             the trusted record
+    work/                                  scratch: all the converter can write
+```
+
+`call.dir` becomes `<id>/work`, so every existing use of it stays right. The root name is new on purpose: under the old layout a converter could write `tmp/preview/<id>/owner.json`, so keeping that root would make new code trust an old file. The old root is never read and never cleaned (greenfield, no migration). The record stays beside scratch, not in `system/`, so one call stays one tree and `Recover` needs one sweep. It carries no signature: a key that survives a crash sits on the same disk, within the same reach.
+
+**D2. Who writes the record, and when.** Only the gateway, through `pkg/preview/scratch.go::call.publish`. Everything the record says about a process is written before any document content can run.
+
+| Step | Order |
+|---|---|
+| `::newCall` | create `<id>` → publish `preparing` → create `work` → open both handles: `c.root` on `work`, new `c.callRoot` on `<id>` |
+| `::makeSocketDir` | create the socket folder → publish `socket_dir` at once (today this waits for `running`) |
+| launcher started | target not started; it waits for the go-byte |
+| `::call.running` | publish `running`: launcher PID, start time and executable, allowed executables |
+| go-byte | target starts; both go-byte sites already send it only after `running` returned without error (`pkg/preview/programs.go::protocolProgram.publishAndGo`, `::officeConversion.startOnce`) |
+| `::call.idle` | publish `preparing`, launcher cleared (between two starts) |
+| `::call.finish` | publish `done` → empty `work` through `c.root` → `callRoot.RemoveAll("work")` → remove the record → close `callRoot` → remove `<id>` (Windows will not delete an open folder) |
+
+**D3. What recovery reads.** Only `<id>/owner.json`. Nothing inside `work` is read as data. `::recoverOne` keeps its existing keep-and-warn branches. Removal order: recorded socket folder, then `work`, then `<id>`, record last, so a failed removal is retried at the next start.
+
+**D4. Which processes recovery stops.** The `pgid` field is deleted from `::ownerRecord`, `::call.running` and `::call.idle`. Recovery stops `killGroup(rec.Launcher.PID)` after the PID, start time and executable of the live process match the record (`::identityMatches`, unchanged). There is no second number a record could redirect. A process group's number is the PID of the process that created it, and POSIX.1-2017 XBD 4.14 says a PID "shall not be reused by the system until the process group lifetime ends". The launcher already relies on this (`Setpgid: true`; `pkg/preview/launcher/proc_unix.go::killTree`). A socket folder path comes from the trusted record, written straight after `os.Mkdir` created that folder; `::socketDirPattern` stays only as a guard against a damaged record, and its comment changes to say so. A socket folder's device and inode are not recorded: a collision needs 1 in 2^32 on top of a crash, and the worst result is one failed preview.
+
+**D5. Publish and FR-050 (founder Q19 = A).** `::call.publish` keeps `fileutil.WriteFileAtomic`, with the path `<id>/owner.json`. The converter cannot write `<id>`, so publishing is no longer a file operation inside scratch and leaves FR-050's scope. The final removal of `work` is a post-start operation and moves to `c.callRoot`. `cmd.Dir` for a later start only sets a confined child's working folder; the gateway reads and writes nothing there, so it is not a D3.7 operation (security-lead confirms this reading at the gate).
+
+**D6. Second start on a replaced scratch folder (founder Q23 = A).** A replaced folder is not closed by D1: a second start could run with sandbox rules built from a folder the first start chose. In the exit-81 branch of `pkg/preview/programs.go::officeConversion.run`, before the reseed, compare `callRoot.Lstat("work")` with `c.root.Stat(".")` using `os.SameFile`, and require a real folder. On a mismatch the call ends with the existing text `conversion failed: scratch unavailable` and no second start. No new failure text (MV-8 unchanged). This matches D3.7: a first start that leaves something unsafe ends the call. Limit: a process that escaped the group could swap the folder after the check; closing that means rendering the sandbox profile once per call, a `pkg/sandbox` change not made here.
+
+**D7. Where "out of the converter's reach" cannot hold (founder Q22 = A).** On Windows, and in the disclosed "without sandbox" fallback on Linux and macOS, the converter has no file boundary, so no file is out of its reach. There the record is not trusted against a compromised converter. This limit is accepted and stated here. One code path stays: it hands the converter nothing it does not already have, since it runs with the gateway account's authority and could stop those processes and delete those folders itself. Recovery keeps its stop on those runs (`killPID` on Windows, where `killGroup` is a no-op), because §3.3 suggests the Windows launcher may outlive the gateway. Windows file confinement stays out of scope (Q5).
+
+Other limits this change does not remove, all existing behaviour:
+
+| Limit | Effect |
+|---|---|
+| A descendant that left the group | Not stopped by recovery; it keeps its inherited sandbox |
+| Target runs a program outside the allowed list | Identity fails: not stopped, folder kept, warning (B-39) |
+| Group leader dead, other members alive | Not stopped; ownership can no longer be proved |
+| Gap between the identity check and the kill | Needs a PID to wrap inside that gap; accepted, as today |
+
+**D8. Repeat preview from an agent turn (FR-054).** `pkg/fspolicy/secretset_kernel.go::KernelDenyEnumeration` denies home entries that are not branches, so `<home>/tmp` joins the turn's deny list once it exists. `pkg/preview/confine_unix.go::confinement.policy` copies those denies into the converter's policy, and on macOS a deny written after an allow wins. So the first preview on a fresh home may work and later ones fail. End to end this is **Unknown**: each link was read or tested alone, and no test passes a read model with denies. T-102 settles it. If it confirms, the developer fixes it, and the fix may allow only `<id>/work`, never `tmp`, `tmp/preview-calls` or `<id>`; a wider allow would undo D1.
+
+**D9. Refusal text on settings routes (founder Q24 = A).** New helper in `pkg/gateway`, same shape as `rest_channels_outbound_guard.go::writeOutboundProtected`:
+
+`writeRequestRefusal(w http.ResponseWriter, err error) bool` answers a `*requestRefusalError` with 400 and its text, and reports whether it did.
+
+Each site calls it directly before its generic failure, after any `configRefreshError` branch. Logs, rollback and 500 bodies stay as they are. `rest_sandbox_config.go::writeSandboxSaveError` calls it too, so one mapping exists. `rest_agents.go::withToolPolicyCoverageGuard`, `rest_config.go::updateConfig` and `rest_integrations_remove_key.go::handleSearchKeyRemoval` already keep the refusal and do not change.
+
+Every route below saves through the shared config writer, which can return the refusal: an entry on disk that the published configuration lacks is refused on any save (`rest_config.go::writeRefusableConfigJSONLocked`, `preview_program_access.go::refuseNewProgramAccess`). So a declared 400 is needed on all 20. Sixteen declare it; four do not.
+
+| # | Route | Handler (`pkg/gateway`) | 400 declared at `1c2ca4870` | Developer action |
+|---|---|---|---|---|
+| 1 | `PUT /security/audit-log` | `rest_audit_log.go::HandleSandboxAuditLog` | yes | helper |
+| 2 | `PUT /channels/{id}/routing` | `rest_channels.go::restAPISetChannelRouting.handleBound` | yes | helper |
+| 3 | `POST /channels` | `rest_channels.go::createChannelInstance` | yes | helper |
+| 4 | `DELETE /channels/{id}` | `rest_channels.go::deleteChannelInstance` | yes | helper, inside the branch for errors that are not `configRefreshError` |
+| 5 | `PUT /channels/{id}/enable` | `rest_channels.go::applyChannelEnabled` (save in `pairing_enable_write.go::saveChannelEnabled`) | yes | helper (one site with route 6) |
+| 6 | `PUT /channels/{id}/disable` | `rest_channels.go::setChannelEnabled`, then `::applyChannelEnabled` | **no** | same site as route 5; **add 400** |
+| 7 | `PUT /channels/{id}/configure` | `rest_channels.go::configureChannel`, `rest_channels_configure_apply.go::writeConfigureFailure` | yes | **not mechanical**, see below |
+| 8 | `POST /config/gateway/rotate-token` | `rest_config.go::rotateGatewayToken` | **no** | helper; **add 400** |
+| 9 | `POST /gateway/god-mode` | `rest_god_mode.go::setGodMode` | yes | helper |
+| 10 | `PUT /agents/{id}/mailboxes/{workspaceId}` | `rest_mailbox.go::restAPISetAgentMailbox.persistConfig` | yes | helper |
+| 11 | `DELETE /agents/{id}/mailboxes/{workspaceId}` | `rest_mailbox.go::deleteAgentMailbox` | **no** | helper; **add 400** |
+| 12 | `POST /mcp-servers` | `rest_mcp.go::addMCPServer` | yes | helper |
+| 13 | `DELETE /mcp-servers/{id}` | `rest_mcp.go::deleteMCPServer` | **no** | helper; **add 400** |
+| 14 | `PATCH /mcp-servers/{id}` | `rest_mcp.go::patchMCPServer` | yes | helper |
+| 15 | `PUT /security/prompt-guard` | `rest_prompt_guard.go::putPromptGuard` | yes | helper |
+| 16 | `PUT /providers/{id}` | `rest_providers.go::providerPutPersist` | yes | helper |
+| 17 | `PUT /security/rate-limits` | `rest_rate_limits.go::putRateLimits` | yes | helper |
+| 18 | `PUT /security/retention` | `rest_retention.go::putRetention` | yes | helper |
+| 19 | `PUT /security/session-scope` | `rest_session_scope.go::putSessionScope` | yes | helper |
+| 20 | `PUT /security/skill-trust` | `rest_skill_trust.go::putSkillTrust` | yes | helper |
+
+**Route 7, `PUT /channels/{id}/configure`.** With no credential stored yet, a refusal answers 400 `ErrorResponse` with the exact §3.2 text. With a credential already stored, it keeps the coded 500 `credential_saved_not_saved`, because that credential really is stored and the person must know; its `error` text is the existing sentence, one space, then the §3.2 sentence. The screen shows `error`, not `detail` (`src/lib/api/channels.ts::withConfigureErrorText`). `::configureWriteFailureCode` keeps its classification. No contract change on this route.
+
+**Contract.** `backend-lead` adds `'400'` (the existing `400BadRequest` response) to routes 6, 8, 11 and 13 in `contracts/openapi.yaml` and regenerates with `scripts/gen-contracts.sh`, in the same commit (Hard Constraint 8). D1 to D8 change no contract: `owner.json` crosses no gateway/SPA boundary.
+
+**Comments that change with this code.** `pkg/preview/scratch.go::socketDirPattern` (today states a bound security review rejected), `::call` (`root` field), `::ownerRecord`, `::scratchRoot`, `::Recover` (old path); `pkg/preview/launcher/launcher.go` package comment: Linux "address-space (or data)" (§3.1 D1 chose data only), and Windows "or the gateway's death, closes the job" unless T-99 proves it true (§3.3).
+
+**Consequences.**
+
+*Positive.* Recovery acts only on what the gateway wrote, where confinement exists. One move closes the two crash-recovery findings and the publish gap. FR-050 keeps its text. A refused save names its reason on all 20 routes.
+
+*Negative.* Tests that assume the old path or `PGID` change (T-92 onward; each keeps its strength, and the identity assertion in `pkg/preview/retry_office_test.go` is replaced by T-94, never deleted). macOS CI is off (`.github/workflows/cross-platform.yml`), so macOS rows are proven only by local runs bound to the exact commit. A socket folder created just before a crash, before its publish, is left behind empty; nothing has run by then, and the window is accepted.
+
+*Neutral.* User documentation: none needed for D1 to D7, because no user-visible behaviour changes and `docs/documents.md`, `docs/security.md` and `docs/operations/sandbox-limitations.md` do not describe the scratch layout or recovery. D7's limit is already covered by those pages' Windows and unconfined exposure text (§17). D8 fixes a failure against what the pages already promise. D9 needs none either: `docs/documents.md` ("What previews need") already promises the exact text on a save; docs-verifier confirms both at the §17 audit.
+
+**Alternatives considered.**
+
+| Option | Why rejected |
+|---|---|
+| Keep the record in scratch and write it through `call.root` | Satisfies FR-050 and leaves both crash-recovery findings open: the converter can still rewrite it |
+| Sign the record | The key must survive a crash, so it has the same reach as the record; more code, no new boundary |
+| Move the record under `system/` | Stronger against agent shells, but splits one call across two trees and needs a second sweep. Fallback if security-lead disagrees |
+| Keep root `tmp/preview` | New code would trust a file an old converter could write |
+| Recovery only deletes folders on Windows and the fallback (Q22 B) | The Windows launcher may need that stop (§3.3) |
+| Windows file confinement (Q22 C) | A separate large feature; reopens Q5 |
+| Render the sandbox profile once per call (Q23 C) | Touches `pkg/sandbox`; the guard closes the path at far lower cost |
+| Rename `writeSandboxSaveError` and swap it into each site | Sites use different failure bodies and logs; a helper that only handles the refusal leaves them untouched |
+
+**Affected components.** `pkg/preview/scratch.go`, `pkg/preview/scratch_anchor.go`, `pkg/preview/programs.go`, `pkg/preview/launcher/launcher.go` (comments); for D8, `pkg/preview/confine_unix.go` or the code T-102 points to; the `pkg/gateway` handlers in the D9 table, `rest_channels_configure_apply.go`, `rest_sandbox_config.go`, `contracts/openapi.yaml` and the generated types. Tests: `pkg/preview/scratch_test.go`, `pkg/preview/retry_office_test.go`, `pkg/preview/scratch_recovery_socketdir_office_test.go`, `pkg/gateway/preview_publish_barrier_office_test.go`.
 
 ## 4. What the model and the person receive
 
@@ -487,6 +608,11 @@ Resolver candidates mirror `packageChromeRootCandidates` (`<exe>/../office`, `<e
 | B-61 | Configuration save or reload that adds or changes a `tools.allow_write_paths` / `sandbox.allowed_paths` entry overlapping a program folder, or one Omnipus cannot reduce / publish / save refused with the §3.2 text and nothing written; reload rejected, previous configuration in force; an unchanged entry already in force at start is not refused and keeps the component "unsafe location" with its `doctor` line (§3.2) | Error | US-5.4 |
 | B-62 | Preview running (before its go-byte, and while its program runs, incl. the exit-81 second start) / each B-59…B-61 publish is attempted / every publish refused; the preview finishes normally (§3.2) | Edge | US-5.1 |
 | B-63 | First LibreOffice start replaces `profile`, `out`, the settings file or `document.pdf` with a link leading outside scratch, then exits 81 / exit-81 handling and end-of-call cleanup / nothing outside scratch is read, removed, created or written; visible failure; no second start (§3.1 D3.7) | Error | US-5.1 |
+| B-64 | A record, process or socket-shaped folder planted in scratch during a call, then the gateway dies / next start / recovery reads only the gateway's own record: it stops only the recorded launcher and that launcher's group, removes only the recorded socket folder, and the planted items are ignored (§3.4 D3, D4) | Error | US-5.2 |
+| B-65 | A confined converter replaces its scratch folder with a link leading outside / later record updates and end-of-call cleanup / nothing outside is read, removed, created or written; the real record is updated (§3.4 D5) | Error | US-5.1 |
+| B-66 | First LibreOffice start replaces its scratch folder, then exits 81 / exit-81 handling / `conversion failed: scratch unavailable`, no second start (§3.4 D6) | Error | US-5.1 |
+| B-67 | Home where `tmp` exists, agent turn with its real read model / the agent previews an Office file twice / both previews produce pages; only `<id>/work` was opened up (§3.4 D8) | Edge | US-1.4 |
+| B-68 | `config.json` on disk holds an overlapping entry the published configuration lacks / a person saves an unrelated setting through a §3.4 D9 route / 400 with the exact §3.2 text and the file unchanged; channel configure with a credential already stored keeps its coded 500, carrying the same sentence | Error | US-5.4 |
 
 ## 13. TDD plan
 
@@ -582,6 +708,18 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | T-89 | Protected-folder list (§3.2 points 1–2): every packaged candidate of both kinds, present and absent; the registered root; a registration made by a second process between two checks is protected at the second check without restart; an unreadable registered manifest names no folder and the component is "damaged"; overlap through case/Unicode spellings (macOS), links, and an undecidable comparison → refused | Unit/Integration | B-59, B-60 |
 | T-90 | Anchored scratch operations (§3.1 D3.7, SEC-R1-01). A fake `soffice.bin` (as T-78) makes one replacement on its first start, then exits 81 with no PDF unless noted: (a) `profile` → link to outside folder E1 holding `user/registrymodifications.xcu` (sentinel S1); (b) `profile/user/registrymodifications.xcu` → link to an outside file (sentinel S2); (c) `out` → link to outside folder E2 holding a non-PDF `document.pdf` (sentinel S3); (d) `out/document.pdf` → link to an outside non-PDF file (sentinel S4); (e) as (c) but E2's `document.pdf` is a valid PDF and the exit is 0; (f) a link inside scratch to an outside folder holding sentinel S5, met by the end-of-call removal. Sentinels are test-created temporary files outside scratch, never real user files. Oracle (from D3.7, not the code): afterwards every sentinel exists with byte-identical content and each outside folder's listing is unchanged; (a)–(d) the result is the exact D3.7 failure text and the start counter is 1; (e) the call reports no readable PDF and none of E2's PDF bytes reach model media or thumbnails; (f) scratch is gone, S5 intact. Controls: the same replacements pointing **inside** scratch behave as without links (retry and conversion per D3). Instrument: (a) and (c) are first run on `a0ad39455`, where S1 is rewritten and S3 deleted (red) | Integration (Linux, macOS) | B-63, B-54 |
 | T-91 | Linux limits measurement (founder O8 = A): a manual GitHub Actions workflow (`workflow_dispatch`, input = the full candidate SHA, runner `ubuntu-latest`), added by backend-lead under `.github/workflows/` after the manual pattern of `.github/workflows/landlock-probe.yml`. Steps: check out exactly the SHA and fail unless `git rev-parse HEAD` equals it; Go from `go.mod` (`go-version-file`); SPA stub (root `CLAUDE.md`); record `uname -r`, `/sys/module/kernel/parameters/ignore_rlimit_data`, `go version`, `cc --version`, `prlimit --version`; run `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -v -run '^(TestRunLimitedLinuxDataStackAndAddressSpace\|TestRunLimitedLinuxAllocationAndStackBombs\|TestRunLimitedRejectsMemoryKind)$' ./pkg/preview/launcher/` (T-76) and `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestPreviewMemoryEnforcementDisclosure$' ./pkg/preview/` (T-80), each to its own log with the exit code captured directly; upload both logs. **PASS** = HEAD equals the input SHA; both runs exit 0; each of the four named tests has a `--- PASS` line; zero `--- FAIL`, `--- SKIP` and `BLOCKED` lines; and the host enforces the data limit (kernel 4.7 or later and `ignore_rlimit_data` not `Y`) — otherwise the run proves only the disclosure path and is reported "not a measurement", never PASS. Run once, by team-lead, on the exact candidate commit; a red or "not a measurement" result goes to the founder | CI (manual, Linux) | B-53, B-55, B-24 |
+| T-92 | **Record out of the converter's reach** (§3.4 D1, FR-051). Through the real launcher and real confinement hooks, a fake converter tries to change, remove, replace and link the record and to create a file beside it. The record stays byte-identical. Not a pass if: confinement is off (`hooks.unconfined` set fails the test, it never skips); the fake ended before trying (require a marker per attempt and a control write inside scratch that succeeded). macOS: local receipt on the exact commit (macOS CI is off) | Integration (Linux, macOS) | B-64 |
+| T-93 | **A forged record in scratch is ignored** (§3.4 D3, Q18). During a real call, scratch gets a forged `owner.json` naming a separate harmless process, its group and a socket-shaped folder. After a simulated crash the harmless process and the folder survive, and the real launcher is stopped: `Killed == 1`. Not a pass if: the kill path was never reached (assert the real launcher died in the same run); the harmless process shares the test's group; RED on `1c2ca4870` does not show the forged file being read | Integration | B-64 |
+| T-94 | **The group stopped is the verified process's group, and no other** (§3.4 D4). A live launcher-like process with a grandchild in its group, plus an unrelated harmless process in another group; a legacy `pgid` key in the record names the unrelated group. After recovery the launcher and grandchild are gone and the unrelated process lives. The test must fail if `killGroup` is removed, so the grandchild is required. Replaces the identity assertion in `pkg/preview/retry_office_test.go`. Unix only; Windows is T-99 | Integration (Linux, macOS) | B-64 |
+| T-95 | **Crash points, by really killing a helper gateway** (SIGKILL): after launcher start; after `running`, before the go-byte; during the target; between the two exit-81 starts. In the first two the target's marker never appears. In all cases the folder is removed or kept as §3.4 D3 and AD-8 say. Not a pass if: JSON fixtures or a fake start time stand in for a crash, because stdin never closes and the launcher-exit claim stays untested; Linux alone, because the parent-death signal hides what macOS relies on. macOS: local receipt on the exact commit | Integration (Linux, macOS) | B-23, B-38 |
+| T-96 | **Older runs.** (a) A live process with a matching executable but a different start time is not stopped; folder kept; warning. (b) A folder in the old `tmp/preview` layout whose record names a live harmless process: nothing stopped, nothing deleted. Not a pass if: (a) uses a dead PID, so there was never anything to stop; (b) passes because `Recover` returned early, so assert a sibling valid call was still processed in the same run | Integration | B-39, B-64 |
+| T-97 | **Socket folder** (§3.4 D2, D4). (a) A genuine call's folder is removed, including after a crash before `running`. (b) A folder with a valid name that the record does not name survives. (c) A recorded link: the link is gone, its target and contents remain. Fixes `scratch_recovery_socketdir_office_test.go::TestPreviewRecovery_TamperedSocketDirCannotEscapeItsPrefix`: it uses `randomID(8)`, which the pattern refuses before any removal; use `randomID(4)`, assert with `Lstat` that the link is gone, and prove the removal line was reached. macOS only (no other platform has a socket folder): local receipt on the exact commit | Integration (Mac) | B-64 |
+| T-98 | **A replaced scratch folder never redirects a gateway write** (§3.4 D5, FR-050). At a barrier the test replaces scratch with a link to folder E holding a sentinel `owner.json`; then `idle` and `finish` run. E is byte-identical with no `.tmp-*` file, and the real record is updated. Plus a macOS variant where a real confined child does the replacing (local receipt on the exact commit). Not a pass if: the replacement is a plain folder (harmless on old code too); the test asserts a returned error (`finish` discards it); only the sentinel is checked, not a listing of E | Integration (per OS) | B-65 |
+| T-99 | **Windows recovery** (§3.4 D7). Recovery stops a verified launcher and its job's target; folders removed; `killGroup` not relied on. Added to the Windows inventory (T-41), run in Windows CI. A Unix-tagged test does not count | Integration (Windows) | B-64 |
+| T-100 | **Second start refused on a replaced scratch folder** (§3.4 D6, Q23). The first start replaces the folder, then exits 81. Result `conversion failed: scratch unavailable` and **exactly one launch**. Not a pass if only the outside folder's survival is asserted: a cached sandbox profile keeps it safe with no guard at all, so count launches | Integration | B-66 |
+| T-101 | **A normal call leaves nothing** (§3.4 D2). After success, failure and Stop, `tmp/preview-calls` holds no `<id>`. If `work` cannot be removed, the record survives as `done` and the next start retries. Not a pass if only `work` is checked: a leaked record or `<id>` goes unnoticed | Integration | B-21, B-22 |
+| T-102 | **Repeat preview from an agent turn** (§3.4 D8, FR-054). A real Office preview, twice in a row, from an agent turn, on a home where `tmp` already exists, through the real confinement hooks with the turn's real read model (`sandbox.RegisterTurnPolicyBase`, `sandbox.KernelPolicyForTurn`) and real LibreOffice. Both previews produce pages. A second check inspects the resulting policy: it allows `<id>/work` and nothing wider. Not a pass if: `ReadModel` is nil (true of every existing test); there is only one preview; `tmp` is absent; no policy base is registered (the policy is then nil); confinement is off; real LibreOffice is missing (fail, never skip). macOS: local receipt on the exact commit. Linux: same test where the kernel sandbox enforces; result Unknown until run. Hands-on row U-M1 stays as the separate check on the candidate | Integration (Mac, Linux) | B-67 |
+| T-103 | **Refusal text on the §3.4 D9 routes** (FR-053). One table test with one row per route and an assertion that it has 20 rows. Each row needs a valid target, or the route's 404 answers before the save. Each row writes an overlapping `tools.allow_write_paths` or `sandbox.allowed_paths` entry **directly into `config.json`**, so the published configuration lacks it, then calls the route. Expected: 400, `error` byte-equal to the §3.2 text, `config.json` byte-identical. A second case per site: a write failure that is not a refusal keeps today's 500. Route 7 runs both D9 sub-cases. Not a pass if: the entry is added through a handler, so `updateConfig`'s own mapping answers; only the status is checked | Integration | B-68 |
 
 **Windows inventory (T-41):** `TestPreviewDocument_Windows*`, `TestRunLimited_WindowsJob*`, `TestPreviewRecovery_Windows*`, `TestOfficeRegister_Windows*`, `TestInspectors_Windows*` and the renderer's own smoke/limits/cancel tests built from the C sources; the receipt step lists every expected test name and fails on a missing, skipped or failed one.
 
@@ -642,6 +780,10 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-048 | MUST state the macOS best-effort memory boundary in UI text and docs, with no hard-cap claim. |
 | FR-049 | MUST refuse, where it is created, any new write access that overlaps a preview program folder — shell approvals, mounts and configuration saves/reloads — with the §3.2 texts (founder S2 = A). |
 | FR-050 | MUST resolve every post-start gateway file operation in a call's scratch folder through a handle opened before the first start, never reaching outside it (§3.1 D3.7, founder SR1). |
+| FR-051 | MUST keep the owner record outside the converter's write reach wherever the converter has a file boundary; recovery MUST act only on that record and MUST derive the process group from the verified launcher, never from a stored number (§3.4 D1–D4, founder Q18). Where no file boundary exists the limit in §3.4 D7 applies (founder Q22). |
+| FR-052 | MUST NOT start the converter again when its scratch folder was replaced; the call ends with the existing `conversion failed: scratch unavailable` text (§3.4 D6, founder Q23). |
+| FR-053 | MUST answer a configuration refusal on every route of §3.4 D9 with the exact §3.2 text, as a 400 except for the stated channel-configure case (founder Q24). |
+| FR-054 | MUST let a preview started from an agent turn use its own scratch folder on a home where `tmp` exists, every time; the fix MUST open only `<id>/work` (§3.4 D8). |
 
 | ID | Success criterion |
 |---|---|
@@ -712,7 +854,11 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | FR-047 | US-6 | B-51 | T-73 |
 | FR-048 | US-5 | B-24 | T-35, T-36 |
 | FR-049 | US-5 | B-59, B-60, B-61, B-62 | T-85, T-86, T-87, T-88, T-89 |
-| FR-050 | US-5 | B-63 | T-90 |
+| FR-050 | US-5 | B-63, B-65 | T-90, T-98 |
+| FR-051 | US-5 | B-64 | T-92, T-93, T-94, T-95, T-96, T-97, T-99, T-101 |
+| FR-052 | US-5 | B-66 | T-100 |
+| FR-053 | US-5 | B-68 | T-103 |
+| FR-054 | US-1 | B-67 | T-102 |
 
 ## 16. Hands-on UAT rows (Mac first; standard UAT model per Q6)
 
@@ -763,8 +909,9 @@ Installer rows need Apple silicon; the Intel dev Mac uses operator registration.
 | # | Owner | Work |
 |---|---|---|
 | W0 | architect; team-lead | Dated amendment of **Built-in agent configuration, skills, and visual file reading** (D5 components, D6 tool + thumbnails + native-PDF rule, native-component exception); root `CLAUDE.md` ADR-090 paragraph; T11 §2.4 pointer |
-| W1 | qa-lead (A) | RED for every active row of §13 (T-01…T-80, T-85…T-90; T-81…T-84 retired), fixtures, Windows inventory; T-91 is a manual measurement job, run by team-lead |
+| W1 | qa-lead (A) | RED for every active row of §13 (T-01…T-80, T-85…T-90, T-92…T-103; T-81…T-84 retired), fixtures, Windows inventory; T-91 is a manual measurement job, run by team-lead |
 | W2 | backend-lead | §5.2 contract first; S-1, S-2; renderer + CI builds; launcher; protocol; tool; converter, sandbox, budgets, recovery; §4 routing and serializers; thumbnails, display field, replay, Retry route; registration commands; policies; packaging; readiness and runtime changes; notices; docs drafts |
+| W2b | backend-lead | §3.4 D1–D8 in `pkg/preview`; §3.4 D9 as its own commit: helper, 20 routes, the four `'400'` contract entries and regeneration |
 | W3 | frontend-lead | §5.3–5.5 after the contract lands; viewer focus; docs draft |
 | W4 | prometheus-prompt-engineer | `elicify-office` per AD-14/§6; prompts; tool description |
 | W4b | backend-lead (script code) + prometheus (text) | inspector fixes that T-72 proves necessary |
@@ -800,5 +947,9 @@ Order: contract → RED ∥ S-1/S-2 → GREEN (W2 ∥ W3 ∥ W4 ∥ W4b) → CHE
 
 None open. FQ1 (r2) = B and FQ2 (r2) = A are applied. 2026-11-05: S2 = A (with both side effects, A), SR1 and O8 = A are applied (§3.1 D3.7, §3.2, §3.3, T-91). One open point for team-lead to raise: §3.3 "Write folders `ConfiguredWriteRoots` does not list" (Unknown). Two architect decisions the founder may veto: (1) Windows and dev Macs use an operator registration command instead of an environment variable (R2-MAJ-005); (2) a component that any agent can write is disabled for everyone until that access is removed (R2-MAJ-012).
 
+2026-11-07: Q18, Q19, Q22, Q23 and Q24 = A are applied (§3.4). One new open point for team-lead to raise: §3.3 "Other config writers that lose the refusal text".
+
 ## 22. Evidence used
 Code reads on `origin/release/v0.1.1` (`4cad412bf`): thumbnail storage (`normalization.go::storeInlineDataURL`, `media/store.go::SessionInlineScopePrefix`, `CleanExpired`, `rest_sessions.go`), delivery (`webchat_channel.go::SendMedia`, `replay.go::buildMediaFrame`, `MediaFrame.yaml`, `MediaPart.yaml`), chat UI (`ChatScreen.tsx::InlineMedia`, `ChatImage.tsx`, `MediaLightbox.tsx`, `image-lightbox.tsx`), PDF routing (`loop_media.go::resolveMediaRefsWithOffload`, `pdfCapableModel`, `encodePDFToDataURL`, `media_present.go`), runtime (`documentruntime/provision.go::ProvisionFirstParty`, `shell_env.go::documentEnvTurn`), packaging (`package_chrome.go`, `.goreleaser.yaml`, `Dockerfile.goreleaser`, `install.sh`), CI (`cross-platform.yml::windows-tools-tests`). Grill round 2 report (its provider-serializer, launcher, recovery, viewer and extractor citations at `b7d4483c9` are relied on as reviewer-verified, not re-read here), founder answers, skills review, spike, review B, T11 files read first-hand on 2026-10-30.
+
+2026-11-07 (§3.4): code reads on `landing/office-preview` at `1c2ca4870`: `pkg/preview/scratch.go`, `scratch_anchor.go`, `programs.go`, `confine_unix.go`, `launcher/*`; `pkg/sandbox/seatbelt_profile.go`, `seatbelt_cache.go`; `pkg/fspolicy/secretset_kernel.go`; `pkg/gateway/rest_config.go::writeRefusableConfigJSONLocked` and the D9 handlers. Declared responses read from `contracts/openapi.yaml`. The macOS boundary was checked on macOS 26.5.2 under a hand-built profile, not the production render and not a live gateway; that check is kept out of this repository. Linux and Windows behaviour was read, not run.
