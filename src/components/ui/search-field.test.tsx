@@ -18,8 +18,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { createRef } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Dialog, DialogContent, DialogTitle } from './dialog'
+import { Popover, PopoverContent } from './popover'
 import { SearchField, SearchToolbar } from './search-field'
 
 // Fresh props per test — no mock state leaks across tests (order independence).
@@ -180,6 +181,117 @@ describe('SearchField — Escape inside the real Radix Dialog (§2.1, CHECK find
       expect(screen.queryByRole('dialog', { name: 'Filter' })).not.toBeInTheDocument(),
     )
     expect(input).toHaveValue('webhook')
+  })
+})
+
+describe('SearchField — one Escape does one thing (D-K1, CHECK round 2)', () => {
+  // The d5a0fcfad fix claims Escape from a window capture listener whenever
+  // the target is this input and Escape would clear. That claim is
+  // page-global: preventDefault suppresses EVERY dismissable layer's
+  // dismissal, including layers the field is not inside (CHECK round 2
+  // probe: a clearing field outside an open dialog cleared AND the dialog
+  // stayed). Team-lead D-K1 (binding oracle): one Escape does one thing —
+  // the field claims Escape only when it is inside the topmost open
+  // dismissable layer, or when no layer is open; when an open layer does
+  // NOT contain the field, the Escape goes to that layer: it closes and
+  // the field keeps its value. Real kit Dialog and Popover, real Radix,
+  // no mocks.
+  function FieldBesideLayer({ kind, initial = 'webhook' }: { kind: 'dialog' | 'popover'; initial?: string }) {
+    const [open, setOpen] = React.useState(true)
+    const [value, setValue] = React.useState(initial)
+    return (
+      <>
+        <SearchField
+          value={value}
+          onValueChange={setValue}
+          placeholder="Search connectors…"
+          aria-label="Search connectors"
+          data-testid="field-outside"
+        />
+        {kind === 'dialog' ? (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogContent>
+              <DialogTitle>Elsewhere</DialogTitle>
+              <p>Unrelated dialog content</p>
+            </DialogContent>
+          </Dialog>
+        ) : (
+          <Popover open={open} onOpenChange={setOpen}>
+            <PopoverContent aria-label="Unrelated popover"><p>Unrelated popover content</p></PopoverContent>
+          </Popover>
+        )}
+      </>
+    )
+  }
+
+  function openFieldBesideLayer(kind: 'dialog' | 'popover') {
+    render(<FieldBesideLayer kind={kind} />)
+    const input = screen.getByRole('searchbox', { name: 'Search connectors' })
+    // Instrument: the layer is open BEFORE the key, so a pass can never
+    // come from "it never rendered". Radix Popover content is role="dialog"
+    // too (dist), so both layers are queried the same named way.
+    expect(screen.getByRole('dialog', { name: kind === 'dialog' ? 'Elsewhere' : 'Unrelated popover' })).toBeInTheDocument()
+    return input
+  }
+
+  it('Escape aimed at a clearing field OUTSIDE an open Dialog goes to the dialog: it closes and the field keeps its value', async () => {
+    const input = openFieldBesideLayer('dialog')
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' })
+    // THE ORACLE: the open layer gets the Escape.
+    await waitFor(
+      () => expect(screen.queryByRole('dialog', { name: 'Elsewhere' })).not.toBeInTheDocument(),
+      { timeout: 2000 },
+    )
+    // ...and the field did not claim it.
+    expect(input).toHaveValue('webhook')
+  })
+
+  it('Escape aimed at a clearing field OUTSIDE an open Popover goes to the popover: it closes and the field keeps its value', async () => {
+    const input = openFieldBesideLayer('popover')
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' })
+    await waitFor(
+      () => expect(screen.queryByRole('dialog', { name: 'Unrelated popover' })).not.toBeInTheDocument(),
+      { timeout: 2000 },
+    )
+    expect(input).toHaveValue('webhook')
+  })
+
+  it('with no layer open, the field still claims Escape and clears (the plain Q1 case)', () => {
+    function Solo() {
+      const [value, setValue] = React.useState('webhook')
+      return <SearchField value={value} onValueChange={setValue} placeholder="Search connectors…" aria-label="Search connectors" />
+    }
+    render(<Solo />)
+    const input = screen.getByRole('searchbox', { name: 'Search connectors' })
+    fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' })
+    expect(input).toHaveValue('')
+  })
+})
+
+describe('SearchField — the window Escape listener is removed on unmount (CHECK round 2 leak lock)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  // CHECK round 2's unmount-leak probe (spy on add/removeEventListener)
+  // stayed a scratch probe; this commits it: deleting the effect's cleanup
+  // return in search-field.tsx must fail THIS test. The listener is added
+  // on the input's ownerDocument.defaultView — in jsdom that is this
+  // window — with { capture: true }, and the cleanup must remove the SAME
+  // function object with the same capture flag.
+  it('unmount removes exactly the capture keydown listener that mounting added', () => {
+    const addSpy = vi.spyOn(window, 'addEventListener')
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    const { unmount } = render(<SearchField {...baseProps({ value: 'webhook' })} />)
+    // Instrument: mounting registered a capture-phase keydown listener.
+    const isCaptureKeydown = (type: unknown, opts: unknown) =>
+      type === 'keydown' && (opts === true || (typeof opts === 'object' && opts !== null && (opts as { capture?: boolean }).capture === true))
+    const added = (addSpy.mock.calls as unknown as Array<[unknown, unknown, unknown]>)
+      .filter(([type, , opts]) => isCaptureKeydown(type, opts))
+    expect(added.length).toBeGreaterThan(0)
+    unmount()
+    const removed = (removeSpy.mock.calls as unknown as Array<[unknown, unknown, unknown]>)
+      .filter(([type, , opts]) => isCaptureKeydown(type, opts))
+    // The same function objects, with the same capture flag.
+    for (const call of added) expect(removed).toContainEqual(call)
   })
 })
 
