@@ -312,13 +312,18 @@ func TestT_C5_S71_RecapDefaultOffPerRoute(t *testing.T) {
 // This separate witness must not be confused with the capability-driven
 // encoder tests above. A future catalog refresh that adds the data invalidates
 // this explicit Given; it does not change the positive wire oracles.
+// Catalog v2026.11.7.3 (S-46) added reasoning data to the earlier rows
+// (deepseek-v4.1-flash, minimax-m3, gpt-6.1-sol), so the Given now names
+// active, tool-capable OpenRouter rows that carry no "reasoning" object in
+// that release: deepseek/deepseek-chat, meta-llama/llama-3.3-70b-instruct
+// and mistralai/mistral-large-2512.
 func TestT_C5_S71_VendoredCatalogWithoutReasoningSendsNothing(t *testing.T) {
 	previous := providers.ProviderCatalog()
 	vendored, err := catalog.NewCatalog(catalog.EmbeddedSnapshot)
 	require.NoError(t, err)
 	providers.SetCatalog(vendored)
 	t.Cleanup(func() { providers.SetCatalog(previous) })
-	for _, model := range []string{"deepseek/deepseek-v4.1-flash", "minimax/minimax-m3", "openai/gpt-6.1-sol"} {
+	for _, model := range []string{"deepseek/deepseek-chat", "meta-llama/llama-3.3-70b-instruct", "mistralai/mistral-large-2512"} {
 		t.Run(model, func(t *testing.T) {
 			handle := vendored.Resolve("openrouter", model)
 			require.True(t, handle.Found(), "positive control: a real vendored model row exists")
