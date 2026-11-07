@@ -13,12 +13,12 @@
  * T23 needs a real browser and is covered by
  * tests/e2e/room-history-paging.spec.ts (CI only).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { act, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { RoomEntry } from '@/lib/api/generated/asyncapi-types'
 import type { RoomHistoryResponse } from '@/lib/api/generated/openapi-types'
-import { Network, entry, openRoom, snapshot, stopHarness, ROOM_ID } from '../../../tests/l1-room-ui/harness'
+import { Network, entry, loadRoomScreen, openRoom, resetRealStores, snapshot, stopHarness, ROOM_ID } from '../../../tests/l1-room-ui/harness'
 
 const fetchRoomHistory = vi.hoisted(() => vi.fn<(roomId: string, opts?: { beforeSeq?: number; limit?: number }) => Promise<RoomHistoryResponse>>())
 vi.mock('@/lib/api/rooms', async (importOriginal) => ({
@@ -43,6 +43,13 @@ const firstPage = () => olderPage([
 ], false)
 
 let connection: ReturnType<typeof import('../../../tests/l1-room-ui/harness').connectSocket>['connection']
+
+// #1572: module transformation uses the existing beforeAll hook budget — the
+// RoomScreen import must not run inside the first test's 30 s testTimeout.
+// Under pod load it exceeds the budget there, the aborted test's late mount
+// leaked into the following cases (the K45 cascade); same shape as
+// RoomTranscript.anchor.test.tsx.
+beforeAll(async () => { await loadRoomScreen() })
 
 function scrollLogToTop(): void {
   const log = screen.getByRole('region', { name: 'Conversation history' })
@@ -75,6 +82,9 @@ async function mountRoomWithHistoryHint() {
 beforeEach(() => {
   vi.clearAllMocks()
   fetchRoomHistory.mockReset()
+  // #1572: every case starts from the real stores' initial state, so a late
+  // mount or connection from an aborted case cannot poison the next one.
+  resetRealStores()
 })
 
 afterEach(async () => {

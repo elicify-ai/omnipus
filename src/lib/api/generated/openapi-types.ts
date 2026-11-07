@@ -14969,7 +14969,7 @@ export interface components {
          */
         ProviderUpdateRequest: {
             /**
-             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
              * @example openai-compatible
              * @enum {string}
              */
@@ -14981,7 +14981,7 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+             * @description Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
