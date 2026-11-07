@@ -179,7 +179,7 @@ The goal record's reason is that sentence prefixed with `owning task reached fai
 
 ## Limits and things to watch
 
-A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run. The one exception is meant to be a one-time scheduled run that a gateway shutdown or crash interrupted: the next gateway start runs it again, once (see [calendar](calendar.md); this is pending a production fix for some shutdown orders). A run you stopped yourself is never run again.
+A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run. The one exception is a one-time scheduled run that a gateway shutdown or crash interrupted: the next gateway start runs it again, once (see [calendar](calendar.md)). A run you stopped yourself is never run again.
 
 An agent's `set_todos` scratchpad is a separate checklist card, not another execution of the task it is working on. If the agent uses the task's title for its scratchpad, two cards can have the same title: the assigned task and its working checklist. Creating the checklist does not start another task run.
 

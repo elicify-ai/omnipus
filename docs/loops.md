@@ -57,11 +57,11 @@ An active loop from an older install, whose job lived in a separate file, contin
 
 ## Replacing or stopping a loop
 
-`/loop stop` and starting another loop in the same chat wait for a run that is just finishing. A step that run scheduled is removed too, and the stopped status is the last one the chat receives.
+`/loop stop` and starting another loop in the same chat wait for a run that is just finishing, and remove any step that run scheduled. After `/loop stop`, the stopped status is the last one the chat receives for that loop; the finishing run cannot show it as active again. A replacement shows the old loop as stopped, then the new loop as active.
 
 - If the stopped state cannot be saved, nothing changes: the reply says "Could not stop the loop … The loop is still running; try again", and the loop carries on as before.
 - A new loop starts only once every step of the old one is gone. If an old step cannot be removed, the reply starts with "Could not start the loop"; the old loop is stopped when its stopped state was saved, and you can try again.
-- When a loop reaches its run limit but its stopped state cannot be saved, no stopped status is shown and no further run starts. The stop is tried again at the next scheduled time or the next gateway start.
+- When a loop reaches its run limit but its stopped state cannot be saved, no stopped status is shown and no further run starts. The stop is tried again without running the agent: an interval loop at its next scheduled time, a self-paced loop after its last chosen delay (about a second if it never chose one). If no retry can be scheduled either, the next gateway start stops the loop.
 
 ## If recovery cannot be saved
 
