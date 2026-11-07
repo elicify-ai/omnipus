@@ -1,26 +1,47 @@
-// turn-liveness.ts — proves, from the SERVER, that a turn was in flight when a
-// second viewer attached.
+// turn-liveness.ts — a best-effort, server-reported check that a turn was in
+// flight when a second viewer attached.
 //
-// CHECK 3 F1 and CHECK 4 F1/F2 (ciflake-check3/4-report.md): replay-fidelity
-// (c) must prove active live production at the second viewer's attach
-// (sprint-i-historical-replay-fidelity-spec.md Scenario 9 / TDD row 25).
-// Sampling the FIRST viewer's composer Stop button before and after the attach
-// cannot: Stop is a client-side render of the first viewer's own store, so the
-// backend can finish after the first sample, the second viewer can attach to
-// completed history, and a lagging first viewer still shows Stop at the second
-// sample (CHECK 4's offline counterexample). Conversely the post-sample can
-// reject a legitimate attach when the turn ends right after it.
+// History: CHECK 3 F1 and CHECK 4 F1/F2 (ciflake-check3/4-report.md) showed
+// that sampling the FIRST viewer's composer Stop button before and after the
+// attach cannot prove the backend was live at the second viewer's attach (Stop
+// is a client render of the first viewer's own store and can lag the backend).
+// The signal used instead is the server's own answer to THIS attach: the
+// attach_session response starts with a session_state frame for the bound
+// session, and its `active_turn` is "present only when the attached session
+// has a foreground turn in flight at emit time" (SessionStateFrame /
+// SessionStateActiveTurn, ADR-082 D4), and the response ends with
+// catch_up_complete for that session.
 //
-// The signal used instead is the server's own answer to THIS attach. Per the
-// contract, the attach_session response starts with a session_state frame for
-// the bound session whose `active_turn` is "present only when the attached
-// session has a foreground turn in flight at emit time" (SessionStateFrame /
-// SessionStateActiveTurn, ADR-082 D4) and ends with catch_up_complete for that
-// session. The tracker below pairs the second viewer's own attach_session
-// request with the first session_state for the same session before that
-// attach's catch_up_complete, and requires `active_turn` on it. That is a
-// server observation at bind time, so it needs no post-sample, and a turn that
-// ends immediately after the attach still passes.
+// WHAT THIS DOES AND DOES NOT PROVE (CHECK 5 F1 — be honest about it):
+//   - It proves the server reported an in-flight foreground turn when it BUILT
+//     that session_state for the marked attach. It does NOT prove the turn was
+//     live at the instant the hub bound the connection: the gateway binds the
+//     hub first and constructs session_state afterwards (after preparing the
+//     history snapshot), so a turn that ends between bind and state
+//     construction is reported without active_turn. CHECK 5 reproduced that
+//     interval against the real gateway.
+//   - Consequence, accepted and documented: a fast turn that ended before the
+//     state was built is REJECTED here as "no turn observably active at the
+//     attach", even though the attach did bind while it was alive. That is a
+//     prerequisite failure (the experiment did not observe live production), not
+//     a delivery verdict. It is therefore a best-effort prerequisite, never a
+//     proof of "active at bind".
+//
+// Correlation rules (CHECK 5 F2/F3):
+//   - Bound to the CURRENT socket generation only. A new chat socket resets the
+//     tracker and detaches the old one; frames from an older or closed socket
+//     are ignored, so a stale reply can neither prove nor reject the current
+//     attach. (Request ordinals keep counting across generations so a mark
+//     taken before a reconnect stays meaningful.)
+//   - Requests are queued per session and answered FIFO (the gateway dispatches
+//     frames synchronously per connection). A response never overwrites or
+//     completes another request, so a pre-mark response cannot complete a later
+//     marked request.
+//   - The proof is the FIRST request sent after the mark for the session (the
+//     marked request), judged on its own first session_state.
+// Remaining limit: a live (non-attach) session_state for the same session that
+// arrives while a request is outstanding and before its own session_state would
+// be taken as that request's state; the contract puts the attach's state first.
 //
 // Observation only: it never sends frames or mocks transport.
 
@@ -43,55 +64,69 @@ export interface AttachObservation {
   sessionState?: ObservedFrame
 }
 
-/** Socket-independent core: feed it the frames of one connection in order. */
+interface OpenRequest {
+  ordinal: number
+  sessionState?: ObservedFrame
+}
+
+/** Socket-independent core: feed it the frames of ONE connection in order. */
 export class AttachTurnTracker {
   private ordinal = 0
-  private readonly pending = new Map<string, { ordinal: number; sessionState?: ObservedFrame }>()
-  private readonly done: AttachObservation[] = []
+  private pending = new Map<string, OpenRequest[]>()
+  private done: AttachObservation[] = []
 
-  /** Highest attach ordinal seen so far; use as the `after` mark before navigating. */
+  /** Highest attach ordinal sent so far; take it as the mark before navigating. */
   get mark(): number {
     return this.ordinal
   }
 
   sent(frame: ObservedFrame): void {
     if (frame.type !== 'attach_session' || !frame.session_id) return
-    this.pending.set(frame.session_id, { ordinal: ++this.ordinal })
+    const queue = this.pending.get(frame.session_id) ?? []
+    queue.push({ ordinal: ++this.ordinal })
+    this.pending.set(frame.session_id, queue)
   }
 
   received(frame: ObservedFrame): void {
     if (!frame.session_id) return
-    const open = this.pending.get(frame.session_id)
-    if (!open) return
+    const head = this.pending.get(frame.session_id)?.[0]
+    if (!head) return
     if (frame.type === 'session_state') {
-      open.sessionState ??= frame
+      head.sessionState ??= frame
     } else if (frame.type === 'catch_up_complete') {
-      this.pending.delete(frame.session_id)
-      this.done.push({ ordinal: open.ordinal, sessionId: frame.session_id, sessionState: open.sessionState })
+      this.pending.get(frame.session_id)?.shift()
+      this.done.push({ ordinal: head.ordinal, sessionId: frame.session_id, sessionState: head.sessionState })
     }
   }
 
-  /** The newest completed attach for `sessionId` requested after `mark`. */
+  /** Forget everything observed on the previous connection; ordinals keep counting. */
+  reset(): void {
+    this.pending = new Map()
+    this.done = []
+  }
+
+  /** The completed attach for the FIRST request for `sessionId` sent after `mark`. */
   completedAfter(mark: number, sessionId: string): AttachObservation | undefined {
-    return [...this.done].reverse().find((o) => o.ordinal > mark && o.sessionId === sessionId)
+    return this.done.find((o) => o.ordinal > mark && o.sessionId === sessionId)
   }
 }
 
 export const NO_COMPLETED_ATTACH =
-  'PREREQUISITE: no completed attach_session -> catch_up_complete was observed for the target session ' +
-  'after the mark, so the server state at the second viewer\'s attach is unknown.'
+  'PREREQUISITE: no completed attach_session -> catch_up_complete was observed on the current chat socket for the ' +
+  "target session after the mark, so the server state at the second viewer's attach is unknown."
 
 export const NO_SESSION_STATE_AT_ATTACH =
   'PREREQUISITE: the target attach completed without a session_state frame for the session, so the ' +
-  'server state at the second viewer\'s attach is unknown.'
+  "server state at the second viewer's attach is unknown."
 
 export const NO_ACTIVE_TURN_AT_ATTACH =
-  'PREREQUISITE: the server reported NO foreground turn in flight (session_state without active_turn) when ' +
-  'the second viewer attached, so the attach was a completed-history replay, not an attach during live production.'
+  'PREREQUISITE: the server reported NO foreground turn in flight when it built the attach session_state (no ' +
+  'active_turn), so the attach was not observed during live production. Best-effort: a turn that ended between ' +
+  'the hub bind and the state construction is also rejected here.'
 
 /**
- * Throws unless the newest completed attach for `sessionId` after `mark` was
- * answered with a session_state carrying `active_turn`. Returns that turn.
+ * Throws unless the marked attach for `sessionId` was answered with a
+ * session_state carrying `active_turn`. Returns that turn.
  */
 export function requireActiveTurnAtAttach(
   tracker: AttachTurnTracker,
@@ -105,30 +140,68 @@ export function requireActiveTurnAtAttach(
   return attach.sessionState.active_turn
 }
 
-/** Wires a tracker to a page's native chat sockets. Observation only. */
+/** The surface the spec needs from an observer (injectable). */
+export interface AttachTurnObserver {
+  mark(): number
+  require(mark: number, sessionId: string): NonNullable<ObservedFrame['active_turn']>
+}
+
+/**
+ * Marks, runs the attach, then requires the active-turn observation for the
+ * marked attach. Returns the attach's own result, so a caller that uses the
+ * result cannot drop the check without dropping the attach.
+ */
+export async function attachWhileObservingTurn<T>(
+  observer: AttachTurnObserver,
+  sessionId: string,
+  attach: () => Promise<T>,
+): Promise<T> {
+  const mark = observer.mark()
+  const result = await attach()
+  observer.require(mark, sessionId)
+  return result
+}
+
+/** Wires a tracker to a page's native chat sockets (current generation only). */
 export function observeAttachTurn(page: Page) {
   const tracker = new AttachTurnTracker()
-  const cleanup: Array<() => void> = []
   let failure: Error | undefined
-  const feed = (handler: (frame: ObservedFrame) => void) => ({ payload }: { payload: string | Buffer }) => {
-    try {
-      const parsed = WsFrame.safeParse(JSON.parse(payload.toString()))
-      if (!parsed.success) throw new Error(`Attach turn observer: invalid native frame: ${parsed.error.message}`)
-      handler(parsed.data as ObservedFrame)
-    } catch (error) {
-      failure ??= error instanceof Error ? error : new Error(String(error))
+  let current: { socket: WebSocket; detach: () => void } | undefined
+  const feed =
+    (handler: (frame: ObservedFrame) => void) =>
+    ({ payload }: { payload: string | Buffer }) => {
+      try {
+        const parsed = WsFrame.safeParse(JSON.parse(payload.toString()))
+        if (!parsed.success) throw new Error(`Attach turn observer: invalid native frame: ${parsed.error.message}`)
+        handler(parsed.data as ObservedFrame)
+      } catch (error) {
+        failure ??= error instanceof Error ? error : new Error(String(error))
+      }
     }
+  const drop = () => {
+    current?.detach()
+    current = undefined
+    tracker.reset()
   }
   const onSocket = (socket: WebSocket) => {
     if (new URL(socket.url()).pathname !== '/api/v1/chat/ws') return
+    drop() // a newer generation supersedes the older one; its frames are ignored from here on
     const sent = feed((f) => tracker.sent(f))
     const received = feed((f) => tracker.received(f))
+    const closed = () => {
+      if (current?.socket === socket) drop()
+    }
     socket.on('framesent', sent)
     socket.on('framereceived', received)
-    cleanup.push(() => {
-      socket.off('framesent', sent)
-      socket.off('framereceived', received)
-    })
+    socket.on('close', closed)
+    current = {
+      socket,
+      detach: () => {
+        socket.off('framesent', sent)
+        socket.off('framereceived', received)
+        socket.off('close', closed)
+      },
+    }
   }
   page.on('websocket', onSocket)
   return {
@@ -141,8 +214,7 @@ export function observeAttachTurn(page: Page) {
     },
     dispose() {
       page.off('websocket', onSocket)
-      for (const remove of cleanup) remove()
-      cleanup.length = 0
+      drop()
     },
   }
 }

@@ -29,7 +29,7 @@ import { expectA11yClean } from './fixtures/a11y'
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
 import { assistantReplyChallenge } from './fixtures/assistant-reply-acceptance'
-import { observeAttachTurn } from './fixtures/turn-liveness'
+import { attachWhileObservingTurn, observeAttachTurn } from './fixtures/turn-liveness'
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -794,15 +794,20 @@ test(
       await page.waitForTimeout(800)
       const targetReady = readiness2.arm(sessionId)
       try {
-        // Active-at-attach proof from the SERVER (CHECK 3 F1, CHECK 4 F1/F2):
-        // the attach response's own session_state must carry active_turn (a
-        // foreground turn in flight when the gateway bound page2 to the
-        // session). The first viewer's Stop button cannot prove this: it is a
-        // client render and can lag the backend (fixtures/turn-liveness.ts).
-        // No post-sample, so a turn that ends right after the attach passes.
-        const attachMark = attachTurn2.mark()
-        const [, targetProof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
-        attachTurn2.require(attachMark, sessionId)
+        // Best-effort active-turn prerequisite from the SERVER (CHECK 3 F1,
+        // CHECK 4 F1/F2, CHECK 5 F1-F3): the marked attach's own session_state,
+        // on the current chat socket, must carry active_turn (a foreground turn
+        // in flight when the gateway BUILT that state). The first viewer's Stop
+        // button cannot show this (a client render that can lag the backend).
+        // This is NOT a proof of "active at bind": the gateway binds first and
+        // builds the state afterwards, so a fast turn that ended in between is
+        // rejected as a prerequisite failure (accepted and documented in
+        // fixtures/turn-liveness.ts). There is no post-sample, so a turn that
+        // ends right after the attach passes. The helper returns the attach's own
+        // result, so this check cannot be dropped without dropping the attach.
+        const [, targetProof] = await attachWhileObservingTurn(attachTurn2, sessionId, () =>
+          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
+        )
         expect(targetProof.request.session_id, 'the warm second viewer actually requests the target session').toBe(sessionId)
         expect(targetProof.completion.session_id, 'the real target catch-up completes before replay assertions').toBe(sessionId)
         await expect(page2.locator(`[data-active-session-id="${sessionId}"]`)).toBeVisible({ timeout: 15_000 })
@@ -853,9 +858,10 @@ test(
         // page2 attached AFTER the turn started, so the only way it could see the
         // assistant message is if live forwarding picked up where replay left off
         // — that's what FR-I-009 demands and what we're verifying. That the
-        // attach really overlapped the live turn is proved by the server's
-        // active_turn on the attach's own session_state (requireActiveTurnAtAttach
-        // above), NOT by the first viewer's Stop button or elapsed time: a wall-clock floor cannot order an attach against a
+        // attach was observed during live production is a best-effort
+        // prerequisite taken from the server's active_turn on the attach's own
+        // session_state (attachWhileObservingTurn above), NOT from the first
+        // viewer's Stop button or elapsed time: a wall-clock floor cannot order an attach against a
         // turn's end. The 1.5s floor below is only a coarse sanity check that
         // the 800ms attach delay plus page2 setup actually elapsed; the previous
         // 3s floor failed when GLM-5v-turbo streamed the 600-word reply in <3s.
