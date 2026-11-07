@@ -90,6 +90,11 @@ import (
 // failed attempt: the task ends without its AttemptCount moving.
 var ErrTaskRunNotDispatched = errors.New("the task run was not dispatched")
 
+// notDispatchedUserMessage is what every user-visible sink shows for a run
+// refused before it started (ErrTaskRunNotDispatched, T10 FR-20). The cause
+// is kept only in the gateway log.
+const notDispatchedUserMessage = "The task could not be started. Check the agent and try again; details are in the server log."
+
 // runStep is one turn's outcome inside a task run.
 type runStep int
 
@@ -264,9 +269,14 @@ func (te *TaskExecutor) finishRunTurn(
 				"code": string(TranslateTurnError(turnErr).Code)})
 
 		if errors.Is(turnErr, ErrTaskRunNotDispatched) {
-			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
+			// T10 FR-20: the dispatch refusal's cause text can carry paths,
+			// environment values or unregistered tokens, so every sink a person
+			// or model reads (transcript, task result, and through it the goal
+			// record) gets one plain message; the cause stays in the operator
+			// log above.
+			te.appendRunErrorTranscript(t, taskSessionID, sessStore, notDispatchedUserMessage)
 			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched", nil)
-			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run)
+			te.endTaskWithoutAttempt(t, taskSessionID, notDispatchedUserMessage, run)
 			return runStepEnded, "", ""
 		}
 
