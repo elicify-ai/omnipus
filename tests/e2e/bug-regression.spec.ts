@@ -32,7 +32,8 @@ import { freshChat } from './fixtures/session-setup'
 import { assistantReplyChallenge, assertHansReplyPersisted } from './fixtures/assistant-reply-acceptance'
 import { assertHansSessionUnfiled, provisionHansWorkspaceTeam } from './fixtures/hans-workspace'
 import { GatewayProcess } from './fixtures/gateway-process'
-import http from 'node:http'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
+import { startHeldStreamProvider, type HeldStreamProvider } from './fixtures/held-stream-provider'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -207,9 +208,6 @@ test.describe('Bug-1: No skip button in onboarding welcome step', () => {
 //      signal ("B's request is still open at the mock") instead of a
 //      wall-clock budget.
 
-/** The model every mock-provider gateway onboards with (any string works — the mock speaks the protocol, not a catalog). */
-const MOCK_MODEL = 'mock-model-a'
-
 // Per-test markers. They ride INSIDE the user message text, so the mock can
 // tell the two tabs'/turns' requests apart by content alone.
 const BUG3A_MARKER_TAB_A = 'bug3a-mock-tab-a'
@@ -224,230 +222,9 @@ const BUG3A_ANSWER_TAB_A = 'MOCK-REPLY-BUG3A-TAB-A: tab A settled while tab B wa
 const BUG5A_ANSWER = 'MOCK-REPLY-BUG5A: single-turn scripted answer for the replay-order test.'
 const BUG5B_ANSWER_ONE = 'MOCK-REPLY-BUG5B-ONE: first turn scripted answer.'
 const BUG5B_ANSWER_TWO = 'MOCK-REPLY-BUG5B-TWO: second turn scripted answer.'
-const MOCK_FALLBACK_ANSWER = 'MOCK-REPLY: scripted answer (no marker matched).'
 
 /** Exact suffix the product renders for a cancelled/interrupted turn (src/lib/truncation.ts::INTERRUPTED_SUFFIX_TEXT). */
 const INTERRUPTED_SUFFIX_TEXT = '(interrupted)'
-
-type MockScriptEntry = { kind: 'answer'; text: string } | { kind: 'hold' }
-
-/** Marker (script key) → what the mock does with a streaming request carrying it. */
-type MockScript = Record<string, MockScriptEntry>
-
-/**
- * One streaming /chat/completions request the mock received, with the state
- * the tests poll on. `open` is true from request arrival until the mock
- * finished the response OR the client (the gateway's provider transport)
- * closed the connection — which is exactly the deterministic "still in
- * flight" / "was cancelled" signal.
- */
-interface MockRequestRecord {
-  seq: number
-  marker: string | null
-  /** True while the request is in flight at the mock (not answered, not closed by the client). */
-  open: boolean
-  /** True when the script HELD this request (headers sent, body never written). */
-  heldOpen: boolean
-  /** True when the mock completed the scripted answer. */
-  answered: boolean
-  /** True when the client closed the connection before the mock answered — the wire-level cancel signal. */
-  clientClosed: boolean
-}
-
-interface ScriptedMockProvider {
-  url: string
-  /** Snapshot of every streaming request seen so far (records are copied — mutations do not leak). */
-  requests: () => MockRequestRecord[]
-  /** End every held request server-side (teardown safety; the tests never rely on it). */
-  releaseAllHolds: () => void
-  close: () => Promise<void>
-}
-
-function sseChunk(delta: Record<string, unknown>, finish: string | null): string {
-  return (
-    'data: ' +
-    JSON.stringify({
-      id: 'chatcmpl-bug-mock',
-      object: 'chat.completion.chunk',
-      created: Math.floor(Date.now() / 1000),
-      model: MOCK_MODEL,
-      choices: [{ index: 0, delta, finish_reason: finish }],
-    }) +
-    '\n\n'
-  )
-}
-
-/** The text of a chat message's content — a plain string or an OpenAI-style content-parts array. */
-function userTextOf(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
-      .map((part) =>
-        part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string'
-          ? (part as { text: string }).text
-          : '',
-      )
-      .join('\n')
-  }
-  return ''
-}
-
-/**
- * Which script marker (if any) the request's USER messages carry. Scanned
- * from the last user message backwards so later turns win; tool results are
- * role "tool" and never match. This — not a call counter — is what tells the
- * two tabs' and two turns' requests apart.
- */
-function markerFromUserMessages(messages: unknown, markers: string[]): string | null {
-  if (!Array.isArray(messages)) return null
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const entry = messages[i] as { role?: unknown; content?: unknown } | null
-    if (!entry || entry.role !== 'user') continue
-    const text = userTextOf(entry.content)
-    const hit = markers.find((marker) => text.includes(marker))
-    if (hit) return hit
-  }
-  return null
-}
-
-function startScriptedMockProvider(script: MockScript): Promise<ScriptedMockProvider> {
-  return new Promise((resolve, reject) => {
-    const markers = Object.keys(script)
-    const records: MockRequestRecord[] = []
-    const heldResponses = new Map<number, http.ServerResponse>()
-    const heldRecords = new Set<MockRequestRecord>()
-    let seq = 0
-
-    const server = http.createServer((req, res) => {
-      const chunks: Buffer[] = []
-      req.on('data', (c: Buffer) => chunks.push(c))
-      req.on('end', () => {
-        const bodyRaw = Buffer.concat(chunks).toString('utf8')
-
-        if (req.method === 'GET' && req.url?.startsWith('/models')) {
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ object: 'list', data: [{ id: MOCK_MODEL, object: 'model' }] }))
-          return
-        }
-
-        if (req.method === 'POST' && req.url?.includes('/chat/completions')) {
-          let parsed: { stream?: unknown; messages?: unknown } = {}
-          try {
-            parsed = JSON.parse(bodyRaw) as typeof parsed
-          } catch {
-            parsed = {}
-          }
-
-          if (!parsed.stream) {
-            // Onboarding / provider-validation probe (never streaming): answer
-            // honestly so the install comes up healthy — never part of the script.
-            res.writeHead(200, { 'Content-Type': 'application/json' })
-            res.end(
-              JSON.stringify({
-                id: 'chatcmpl-bug-mock-probe',
-                object: 'chat.completion',
-                created: Math.floor(Date.now() / 1000),
-                model: MOCK_MODEL,
-                choices: [
-                  {
-                    index: 0,
-                    message: { role: 'assistant', content: 'probe ok' },
-                    finish_reason: 'stop',
-                  },
-                ],
-              }),
-            )
-            return
-          }
-
-          // Scripted streaming call — branch on the user message TEXT.
-          const marker = markerFromUserMessages(parsed.messages, markers)
-          const entry = marker !== null ? script[marker] : undefined
-          const record: MockRequestRecord = {
-            seq: (seq += 1),
-            marker,
-            open: true,
-            heldOpen: false,
-            answered: false,
-            clientClosed: false,
-          }
-          records.push(record)
-
-          res.on('close', () => {
-            // Fires on normal completion too; only an unanswered, still-held
-            // close is a client-driven cancellation (the gateway canceling the
-            // provider call when the turn is stopped).
-            if (!record.answered && heldResponses.has(record.seq)) {
-              record.clientClosed = true
-              record.open = false
-              heldResponses.delete(record.seq)
-              heldRecords.delete(record)
-            }
-          })
-
-          if (!entry || entry.kind === 'answer') {
-            const text = entry && entry.kind === 'answer' ? entry.text : MOCK_FALLBACK_ANSWER
-            res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-            res.end(
-              sseChunk({ role: 'assistant', content: '' }, null) +
-                sseChunk({ content: text }, null) +
-                sseChunk({}, 'stop') +
-                'data: [DONE]\n\n',
-            )
-            record.answered = true
-            record.open = false
-            return
-          }
-
-          // HOLD: SSE headers only, the body is never written — the request
-          // stays open at the mock until the gateway cancels it (turn Stop)
-          // or the test/teardown releases it. Deliberately no res.end() here.
-          record.heldOpen = true
-          heldRecords.add(record)
-          heldResponses.set(record.seq, res)
-          res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            Connection: 'keep-alive',
-          })
-          return
-        }
-
-        res.writeHead(404, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: { message: 'scripted mock provider: no such route' } }))
-      })
-    })
-
-    server.on('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address()
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('scripted mock provider: no ephemeral port'))
-        return
-      }
-      resolve({
-        url: `http://127.0.0.1:${addr.port}`,
-        requests: () => records.map((r) => ({ ...r })),
-        releaseAllHolds: () => {
-          for (const record of heldRecords) record.open = false
-          for (const res of heldResponses.values()) res.destroy()
-          heldResponses.clear()
-          heldRecords.clear()
-        },
-        close: () =>
-          new Promise<void>((resolveClose) => {
-            for (const res of heldResponses.values()) res.destroy()
-            heldResponses.clear()
-            heldRecords.clear()
-            // close() alone would wait for held sockets to finish on their
-            // own — they never would. Destroy them, then close the listener.
-            server.closeAllConnections()
-            server.close(() => resolveClose())
-          }),
-      })
-    })
-  })
-}
 
 /**
  * Authenticate the browser against an isolated GatewayProcess gateway by
@@ -596,6 +373,17 @@ const interruptedReplyRow = (page: Page) =>
     )
     .filter({ hasText: INTERRUPTED_SUFFIX_TEXT })
 
+/**
+ * The held-stream fixture's per-script record (evidence.promptRecords): the
+ * per-PROMPT state the Bug-3-a overlap/cancel oracles poll on. A missing entry
+ * throws loudly instead of silently reading undefined booleans.
+ */
+function recordFor(mock: HeldStreamProvider, prompt: string) {
+  const record = mock.evidence.promptRecords.find((entry) => entry.promptIncludes === prompt)
+  expect(record, `a promptRecords entry must exist for ${prompt}`).toBeDefined()
+  return record!
+}
+
 // ─── Bug-3: Concurrent sessions both respond ──────────────────────────────────
 
 test.describe('Bug-3: Concurrent sessions both respond', () => {
@@ -634,9 +422,18 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       //
       // Traces to: Bug-3 (concurrent sessions both respond); issue #1661.
 
-      const mock = await startScriptedMockProvider({
-        [BUG3A_MARKER_TAB_A]: { kind: 'answer', text: BUG3A_ANSWER_TAB_A },
-        [BUG3A_MARKER_TAB_B]: { kind: 'hold' },
+      const mock = await startHeldStreamProvider({
+        // The fixture's `scripts` branch branches the reply PER PROMPT (the
+        // shared fixture, extended in round 5 — not a fork): tab A answered
+        // with the exact scripted text, tab B held open. promptIncludes stays
+        // required by the option type; with scripts set, matching walks the
+        // scripts (last user message backwards), not promptIncludes.
+        promptIncludes: BUG3A_MARKER_TAB_B,
+        chunkIntervalMs: 20,
+        scripts: [
+          { promptIncludes: BUG3A_MARKER_TAB_A, behavior: 'answer', answerText: BUG3A_ANSWER_TAB_A },
+          { promptIncludes: BUG3A_MARKER_TAB_B, behavior: 'hold' },
+        ],
       })
       let gw: GatewayProcess | null = null
       // Hoisted so the finally can close every page this test opened BEFORE
@@ -653,7 +450,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url,
-          model: MOCK_MODEL,
+          model: E2E_FALLBACK.model,
           adminPassword: 'admin1234',
         })
 
@@ -693,18 +490,11 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
 
         // 0. B's request must arrive at the mock BEFORE A is sent. From here
         //    on, "B in flight" is an observed fact, not an assumption.
-        let tabBRequestSeq = -1
         await expect
-          .poll(
-            () => {
-              const req = mock
-                .requests()
-                .find((r) => r.marker === BUG3A_MARKER_TAB_B && r.heldOpen && r.open)
-              if (req) tabBRequestSeq = req.seq
-              return req !== undefined
-            },
-            { timeout: 30_000, intervals: [250, 500, 1_000] },
-          )
+          .poll(() => recordFor(mock, BUG3A_MARKER_TAB_B).held, {
+            timeout: 30_000,
+            intervals: [250, 500, 1_000],
+          })
           .toBe(true)
 
         // Now send tab A. (The mock answers A with a final "stop"-finished
@@ -716,19 +506,19 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
 
         // 1. Deterministic overlap proof at the mock: A's request ANSWERED
         //    while the SAME B request observed above is STILL OPEN. The
-        //    seq-scoped record rules out close/reopen churn: it is one
-        //    continuous held request spanning A's whole turn.
+        //    fixture's per-prompt record has no per-request ids, so continuity
+        //    is pinned by requests === 1: exactly ONE B request has ever
+        //    arrived and it is still the one held — close/reopen churn would
+        //    push requests ≥ 2 and fail this poll exactly as the old seq pin
+        //    did.
         await expect
           .poll(
             () => {
-              const reqs = mock.requests()
-              const aAnswered = reqs.some(
-                (r) => r.marker === BUG3A_MARKER_TAB_A && r.answered && !r.open,
-              )
-              const b = reqs.find((r) => r.seq === tabBRequestSeq)
+              const a = recordFor(mock, BUG3A_MARKER_TAB_A)
+              const b = recordFor(mock, BUG3A_MARKER_TAB_B)
               return {
-                tabAAnswered: aAnswered,
-                tabBStillOpen: !!b && b.heldOpen && b.open && !b.answered && !b.clientClosed,
+                tabAAnswered: a.answered >= 1,
+                tabBStillOpen: b.held && !b.clientClosed && b.requests === 1,
               }
             },
             { timeout: 30_000, intervals: [250, 500, 1_000] },
@@ -746,9 +536,10 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         })
         await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
         await expect(settledReplies(page)).toHaveCount(1)
+        const tabBHeld = recordFor(mock, BUG3A_MARKER_TAB_B)
         expect(
-          mock.requests().find((r) => r.seq === tabBRequestSeq)?.open,
-          'the held tab-B request observed before tab A was sent must STILL be open at the moment tab A’s reply is settled in the DOM',
+          tabBHeld.held && tabBHeld.requests === 1,
+          'the held tab-B request observed before tab A was sent must STILL be the one open request at the moment tab A’s reply is settled in the DOM',
         ).toBe(true)
 
         // 3. Tab B has NO reply yet: no settled row (a running placeholder
@@ -772,13 +563,19 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         // 5. Deterministic cancel proof at the wire: the gateway canceled B's
         //    provider call, so B's held request is no longer open at the mock
         //    (the client closed it — the same cancel that the gateway logs as
-        //    turn_canceled).
+        //    turn_canceled). clientClosed is incremented in the same close
+        //    event that clears held, and never by a fixture-side finish
+        //    (release() is not used here), so open:false together with
+        //    cancelledByClient pins WHICH side closed B — the gateway's cancel.
         await expect
           .poll(
-            () => mock.requests().some((r) => r.marker === BUG3A_MARKER_TAB_B && r.open),
+            () => {
+              const b = recordFor(mock, BUG3A_MARKER_TAB_B)
+              return { open: b.held, cancelledByClient: b.clientClosed >= 1 }
+            },
             { timeout: 15_000, intervals: [250, 500, 1_000] },
           )
-          .toBe(false)
+          .toEqual({ open: false, cancelledByClient: true })
 
         // 6. Tab B ends CANCELLED: an interrupted-status row carrying the
         //    product's "(interrupted)" suffix — and still no settled reply.
@@ -796,9 +593,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
         })
         await expect(settledReplies(page)).toHaveCount(1)
         expect(
-          mock
-            .requests()
-            .filter((r) => r.marker === BUG3A_MARKER_TAB_A && r.answered).length,
+          recordFor(mock, BUG3A_MARKER_TAB_A).answered,
           'tab A must have been answered exactly once at the mock',
         ).toBe(1)
       } catch (err) {
@@ -899,8 +694,16 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       // Traces to: Bug-5 (replay frame ordering preserved when leaving +
       // returning to chat); issue #1661.
 
-      const mock = await startScriptedMockProvider({
-        [BUG5A_MARKER]: { kind: 'answer', text: BUG5A_ANSWER },
+      const mock = await startHeldStreamProvider({
+        // The fixture's `scripts` branch (the shared #1668 fixture, extended in
+        // round 5 — not a fork): this prompt answered with the exact scripted
+        // text at the fixture's paced cadence. promptIncludes stays required
+        // by the option type; matching walks the scripts when scripts is set.
+        promptIncludes: BUG5A_MARKER,
+        chunkIntervalMs: 20,
+        scripts: [
+          { promptIncludes: BUG5A_MARKER, behavior: 'answer', answerText: BUG5A_ANSWER },
+        ],
       })
       let gw: GatewayProcess | null = null
       // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1).
@@ -909,7 +712,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url,
-          model: MOCK_MODEL,
+          model: E2E_FALLBACK.model,
           adminPassword: 'admin1234',
         })
         await loginToGateway(page, gw)
@@ -993,9 +796,19 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       //
       // Traces to: Bug-5 multi-turn replay ordering; issue #1661.
 
-      const mock = await startScriptedMockProvider({
-        [BUG5B_MARKER_ONE]: { kind: 'answer', text: BUG5B_ANSWER_ONE },
-        [BUG5B_MARKER_TWO]: { kind: 'answer', text: BUG5B_ANSWER_TWO },
+      const mock = await startHeldStreamProvider({
+        // The fixture's `scripts` branch (the shared #1668 fixture, extended in
+        // round 5 — not a fork): turn 1's prompt answered with ONE's exact
+        // text, turn 2's with TWO's. Matching scans the LAST user message
+        // backwards, so turn 2's request — whose sent history still contains
+        // turn 1's marker — matches its OWN script. promptIncludes stays
+        // required by the option type.
+        promptIncludes: BUG5B_MARKER_ONE,
+        chunkIntervalMs: 20,
+        scripts: [
+          { promptIncludes: BUG5B_MARKER_ONE, behavior: 'answer', answerText: BUG5B_ANSWER_ONE },
+          { promptIncludes: BUG5B_MARKER_TWO, behavior: 'answer', answerText: BUG5B_ANSWER_TWO },
+        ],
       })
       let gw: GatewayProcess | null = null
       // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1).
@@ -1004,7 +817,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url,
-          model: MOCK_MODEL,
+          model: E2E_FALLBACK.model,
           adminPassword: 'admin1234',
         })
         await loginToGateway(page, gw)
