@@ -509,10 +509,13 @@ func t10T8StaleDelivery(t *testing.T) {
 	jobs := f.jobs(t, tk.ID)
 	require.Len(t, jobs, 1)
 	old := jobs[0]
-	// Existing pre-SpawnReset seam: replacement fully completes before the old
-	// callback reaches the locked delivery/reset write. Content returns identical.
+	// Released T8 seam before the fire's coordination lock (r17 18.35): the
+	// replacement fully completes before the old callback takes the lock that
+	// guards the delivery/reset write. Content returns identical. (Rebound from
+	// the SpawnReset hook, which T8 moved inside that lock; calling
+	// OnTaskUpserted there self-deadlocks. Assertions unchanged.)
 	var once sync.Once
-	f.s.SetSpawnResetTestHook(func() {
+	f.s.SetPreMarkerLockTestHook(func(_, _ string) {
 		once.Do(func() {
 			manual := &task.Trigger{Type: task.TriggerManual}
 			fresh, e := f.al.taskStore.Update(tk.ID, task.Patch{Trigger: &manual})
