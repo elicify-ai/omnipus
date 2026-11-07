@@ -4,10 +4,11 @@ package gateway
 // separate canonical-byte projection fixture is NOT substituted for this test.
 // Provider JSON -> accounting -> saved snapshots -> attach/older/refresh are
 // the intended real boundaries, not hand-constructed accounting fixtures.
-// INFO-2: execution currently stops at firstStream: the multi-candidate
-// callProviderOnce callback invokes Chat, bypassing runProviderAttempt and its
-// ChatStream path. Turns 2/3, real tool execution, stored snapshots, older-page
-// contributor cuts, refresh and incremental replay below are still UNREACHED.
+// INFO-2 (resolved): the multi-candidate path streams and every section below
+// executes — turns 2/3, real tool execution, stored snapshots, older-page
+// contributor cuts, refresh and incremental replay. The second session first
+// waits out A's 60 s standard cooldown (see the wait before its turn), so its
+// billed primary contribution is deterministic rather than skip-dependent.
 import (
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -251,6 +253,10 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 	require.True(t, ok)
 	ag.Tools.RegisterReplacing(tools.NewReadFileTool(filepath.Dir(probe), false, 0))
 	done1 := f.turn(t, "PAGE-T1", "")
+	// A's turn-one failure marks the shared chain's tracker (single-candidate
+	// turns below run a throwaway tracker, so this stays the only mark). The
+	// mark happens strictly inside turn one, so t1done upper-bounds it.
+	t1done := time.Now()
 	mu.Lock()
 	firstStream := streams[0]
 	mu.Unlock()
@@ -289,7 +295,24 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 		case "ANSWER-T1":
 			assertProductionAnswer(t, answer, 120, map[string]any{"chosen": "medium", "sent": "low", "reason": "mapped", "provider": "openai", "model": "B"})
 		case "ANSWER-T2":
-			assertProductionAnswer(t, answer, 30, map[string]any{"chosen": "high", "sent": "high", "provider": "openai", "model": "B"})
+			// T2's final call is the one call whose provider REPORTED its
+			// reasoning — an explicit 0 (the fixture's completion_tokens_
+			// details on the ANSWER-T2 reply). Production persists per-call
+			// reasoning iff the provider reported it, an explicit 0 included
+			// (prompt_cache_accounting.go::accountProviderCall copies the
+			// reported value through a *int, presence-only), which is the
+			// same accounting rule S-88 pins (effort_red_multimodel_test.go::
+			// TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory:
+			// reported ⇒ present, unreported ⇒ absent). The strict
+			// assertProductionAnswer oracle forbids the per-call field on
+			// every row, so the zero-reported row takes S-88's own treatment
+			// instead: the turn sum (30 = the tool call's 30 plus the final
+			// call's reported 0), effort and real content — plus the positive
+			// pin that the reported 0 is persisted, not suppressed.
+			assert.Equal(t, float64(30), answer["turn_reasoning_tokens"])
+			assert.Equal(t, map[string]any{"chosen": "high", "sent": "high", "provider": "openai", "model": "B"}, answer["effort"])
+			assert.Equal(t, float64(0), answer["reasoning_tokens"], "an explicitly reported 0 is persisted per-call accounting, not suppressed")
+			assert.NotEqual(t, "This saved message could not be displayed.", answer["content"])
 		case "ANSWER-T3":
 			assert.NotContains(t, answer, "turn_reasoning_tokens")
 		}
@@ -345,7 +368,35 @@ func TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut(t *testing.T
 	// (websocket_chat.go's intake bind), so the harness conn — bound to the
 	// first session at setup — is rebound here, exactly as the setup bound it.
 	bindTestConnToSession(f.handler, "effort-production", meta.ID, f.wc)
-	f.turn(t, "PAGE-T1", "")
+	// A's turn-one failure started provider A's standard cooldown: 60 s at
+	// failure count one (cooldown.go::calculateStandardCooldown, 60_000 ms ×
+	// 5^min(n-1,3)), marked on the shared chain's tracker during turn one and
+	// consulted by the candidate loop (fallback.go::Execute) before this
+	// turn's first candidate. No injected clock or reset seam for that
+	// tracker is reachable from this package — CooldownTracker.nowFunc is
+	// unexported to pkg/providers' own tests, the loop's fallback chain is an
+	// unexported field with no accessor, and the only rebuild path is the
+	// full config hot-reload (a heavyweight production pathway, not a test
+	// seam) — so the authored scenario waits the real curve out before the
+	// second session's turn instead of losing A's billed contribution to a
+	// cooldown skip. The mark happened strictly before turn one completed
+	// (t1done), so resuming at t1done+62 s — the 60 s curve plus a 2 s clock
+	// margin — leaves the whole cooldown elapsed on this clock.
+	if remaining := 62*time.Second - time.Since(t1done); remaining > 0 {
+		time.Sleep(remaining)
+	}
+	// This turn PINS model A. The authored unpinned turn cannot reach A any
+	// more: the pinned-B turns above legitimately persisted their pair switch
+	// on the shared agent (S-15/D5 pair switch — loop_config.go::
+	// handleModelSwitch flips agent.Model/agent.Candidates on the agent, not
+	// per session), so an unpinned turn now starts from B and never consults
+	// A at all — that, not the cooldown alone, is what removed A's
+	// contribution in this scenario's first version. Pinning A restores the
+	// scenario's intent: A is attempted first, its billed call is written by
+	// production accounting, and B answers after it. The cooldown wait above
+	// is still what makes that A attempt deterministic: without it the chain
+	// skips A on the 60 s curve and B answers alone.
+	f.turn(t, "PAGE-T1", "A")
 	second, err := f.al.GetSessionStore().ReadTranscript(f.sid)
 	require.NoError(t, err)
 	var answer map[string]any
