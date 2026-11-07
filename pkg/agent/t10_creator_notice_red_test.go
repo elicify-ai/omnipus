@@ -3,10 +3,13 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,6 +95,13 @@ func TestT10_CreatorNoticeFanOutAtRealRunCompletion(t *testing.T) {
 			} else if tc.creator != tc.starter && tc.creator != "worker" {
 				assert.Empty(t, got[creatorAddress], "no creator push or result content across the boundary")
 			}
+			if tc.foreign {
+				// The address production computes for this creator is its main in the
+				// TASK's workspace, which the creator does not belong to.
+				prospective, ok := f.main["parent-agent@task-workspace"]
+				require.True(t, ok, "SETUP: the foreign fixture must track the task-workspace creator address")
+				assert.Empty(t, got[prospective], "no creator copy may be stored at the task-workspace address of a foreign creator")
+			}
 			f.assertStoredRun(t, status, expected)
 			assert.Equal(t, captured, f.run.recipients)
 			if tc.unresolvable {
@@ -134,4 +144,59 @@ func TestT10_CreatorNoticeScheduledLifecycleDependencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// t10FailingCreatorDeliverer wraps the REAL upward deliverer and fails only for
+// one recipient (the creator's copy), recording every attempt. All other
+// recipients still go through the real inbox-then-wake path.
+type t10FailingCreatorDeliverer struct {
+	real     steer.UpwardDeliverer
+	failFor  string
+	mu       sync.Mutex
+	attempts []string
+}
+
+func (d *t10FailingCreatorDeliverer) Deliver(ctx context.Context, ev steer.UpwardEvent) (steer.Delivery, error) {
+	d.mu.Lock()
+	d.attempts = append(d.attempts, ev.RecipientSessionID)
+	d.mu.Unlock()
+	if ev.RecipientSessionID == d.failFor {
+		return steer.Delivery{}, errors.New("fixture creator delivery failure")
+	}
+	return d.real.Deliver(ctx, ev)
+}
+
+// Traces to: schedules-t10-spec-r6.md D-7.12; CHECK3 F3. An owed creator copy
+// whose real Deliver call fails must be counted and leave a visible record in
+// the task's transcript, while the captured recipients keep the full notice.
+func TestT10_CreatorNoticeDeliveryErrorIsRecorded(t *testing.T) {
+	f := t10NoticeSetup(t, "parent-agent", "starter", false)
+	creatorAddress := f.main["parent-agent"]
+	wrapper := &t10FailingCreatorDeliverer{real: f.al.getUpwardDeliverer(), failFor: creatorAddress}
+	f.al.steerDepsMu.Lock()
+	f.al.upwardDeliverer = wrapper
+	f.al.steerDepsMu.Unlock()
+	losses := taskNoticeLosses.Load()
+
+	applied := f.al.taskExecutor.completeTaskWithResult(f.task, f.task.SessionID, task.StatusInProgress, true, "full T10 result: alpha\nbeta", f.run)
+	require.True(t, applied)
+
+	wrapper.mu.Lock()
+	attempts := append([]string{}, wrapper.attempts...)
+	wrapper.mu.Unlock()
+	require.Contains(t, attempts, creatorAddress, "the failing Deliver for the creator copy must actually be reached")
+
+	assert.Equal(t, losses+1, taskNoticeLosses.Load(), "a failed creator delivery must be counted exactly once")
+	transcript, err := f.al.GetSessionStore().ReadTranscript(f.task.SessionID)
+	require.NoError(t, err)
+	text := fmt.Sprint(transcript)
+	assert.Contains(t, text, "could not be delivered", "the loss is visible in the task transcript")
+	assert.Contains(t, text, creatorAddress, "the record names the creator copy that was lost")
+	assert.Contains(t, text, "fixture creator delivery failure", "the record carries the delivery error")
+
+	want := fmt.Sprintf("Task run done: %q (run %s)\n\nfull T10 result: alpha\nbeta", f.task.Title, f.run.runID)
+	for _, address := range f.run.recipients {
+		assert.Equal(t, []string{want}, f.drain(t, address), "captured recipients still get the full notice")
+	}
+	assert.Empty(t, f.drain(t, creatorAddress), "the failed creator copy is not stored")
 }

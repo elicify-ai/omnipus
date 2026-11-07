@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -247,4 +248,130 @@ func TestT10_BootReconciliationsFinishBeforeFirstCollection(t *testing.T) {
 	assert.Equal(t, 1, collectKinds["task"], "first collection sees real reconciled task, not an empty boot")
 	assert.NotNil(t, st.runningServices.TaskTrigger)
 	assert.NotNil(t, st.runningServices.LoopScheduler)
+}
+
+// t10SeedIntervalLoop creates a real chat session that carries persisted
+// interval-loop state but NO scheduled step (the state a crash between the
+// state write and the job write leaves). runCount/maxRuns select whether the
+// loop still owes a step (0/10) or has exhausted its limit (10/10).
+func t10SeedIntervalLoop(t *testing.T, st *setupAndStartServicesState, runCount, maxRuns int) string {
+	t.Helper()
+	store := st.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "SETUP: the shared session store must exist")
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+	mode, every, prompt := "interval", int64(15*time.Minute/time.Millisecond), "boot recovery probe"
+	require.NoError(t, store.SetMeta(meta.ID, session.MetaPatch{
+		LoopMode: &mode, LoopPrompt: &prompt, LoopRunCount: &runCount, LoopMaxRuns: &maxRuns, LoopIntervalMS: &every,
+	}))
+	return meta.ID
+}
+
+// Traces to: schedules-t10-spec-r6.md FR-03/FR-05; CHECK2 F4. The observer
+// label alone cannot prove recovery ran: the loop's own outcome must exist
+// after the REAL gateway boot, and be visible to the first collection.
+func TestT10_BootRecoversActiveLoopThroughGatewayStage(t *testing.T) {
+	st := t10BootStage(t)
+	sid := t10SeedIntervalLoop(t, st, 0, 10)
+	var mu sync.Mutex
+	loopsAtCollection := 0
+	collected := make(chan struct{})
+	var first sync.Once
+	observer, ok := any(st).(interface {
+		SetSchedulerBootObserverForTest(func(string, *cron.CronService))
+	})
+	require.True(t, ok, "BLOCKED: pre-activation boot observer not implemented")
+	observer.SetSchedulerBootObserverForTest(func(stage string, cs *cron.CronService) {
+		if stage != "first_collection" {
+			return
+		}
+		first.Do(func() {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, j := range cs.ListJobs(true) {
+				if j.Payload.Kind == cron.KindLoop && j.Payload.Message == sid {
+					loopsAtCollection++
+				}
+			}
+			close(collected)
+		})
+	})
+	defer observer.SetSchedulerBootObserverForTest(nil)
+
+	before := time.Now().UnixMilli()
+	_, stop, err := st.startSchedulers()
+	require.NoError(t, err)
+	require.False(t, stop)
+
+	var loops []cron.CronJob
+	for _, j := range st.runningServices.CronService.ListJobs(true) {
+		if j.Payload.Kind == cron.KindLoop && j.Payload.Message == sid {
+			loops = append(loops, j)
+		}
+	}
+	require.Len(t, loops, 1, "boot recovery must re-arm the active loop with exactly one step")
+	step := loops[0]
+	assert.Equal(t, "every", step.Schedule.Kind)
+	require.NotNil(t, step.Schedule.EveryMS)
+	assert.Equal(t, int64(900000), *step.Schedule.EveryMS, "the re-armed step uses the persisted interval")
+	assert.Equal(t, "mia", step.AgentID)
+	require.NotNil(t, step.State.NextRunAtMS)
+	assert.Greater(t, *step.State.NextRunAtMS, before, "the repaired step is in the future")
+	meta, err := st.agentLoop.GetSessionStore().GetMeta(sid)
+	require.NoError(t, err)
+	assert.Equal(t, step.ID, meta.LoopJobID, "the recovered step is recorded in the session's loop state")
+	assert.Equal(t, "interval", meta.LoopMode, "an active loop stays active")
+
+	select {
+	case <-collected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("real first collection was not observed after successful boot")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 1, loopsAtCollection, "the first collection sees the recovered loop step, not an unrecovered store")
+}
+
+// Traces to: schedules-t10-spec-r6.md FR-05(h); CHECK2 F4. A recovery write
+// that fails must abort the REAL gateway boot, name the session, and leave the
+// engine unactivated.
+func TestT10_BootAbortsWhenLoopRecoveryCannotPersist(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not bind root; the injected write failure needs a non-root user")
+	}
+	st := t10BootStage(t)
+	sid := t10SeedIntervalLoop(t, st, 10, 10) // limit reached: recovery must persist the stopped state
+	var sessionDirs []string
+	require.NoError(t, filepath.WalkDir(st.agentLoop.GetSessionStore().BaseDir(), func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() && d.Name() == sid {
+			sessionDirs = append(sessionDirs, p)
+		}
+		return nil
+	}))
+	require.Len(t, sessionDirs, 1, "SETUP: exactly one session directory for the seeded loop")
+	require.NoError(t, os.Chmod(sessionDirs[0], 0o555))
+	t.Cleanup(func() { _ = os.Chmod(sessionDirs[0], 0o755) })
+
+	var mu sync.Mutex
+	var events []string
+	observer, ok := any(st).(interface {
+		SetSchedulerBootObserverForTest(func(string, *cron.CronService))
+	})
+	require.True(t, ok, "BLOCKED: pre-activation boot observer not implemented")
+	observer.SetSchedulerBootObserverForTest(func(stage string, _ *cron.CronService) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, stage)
+	})
+	defer observer.SetSchedulerBootObserverForTest(nil)
+
+	_, stop, err := st.startSchedulers()
+	require.Error(t, err, "a loop recovery write failure must fail the boot")
+	assert.True(t, stop)
+	assert.Contains(t, err.Error(), "error recovering /loop schedules")
+	assert.Contains(t, err.Error(), sid, "the failure names the session")
+	mu.Lock()
+	defer mu.Unlock()
+	assert.NotContains(t, events, "loop_reconciled")
+	assert.NotContains(t, events, "activate", "nothing may be activated after a failed recovery")
 }

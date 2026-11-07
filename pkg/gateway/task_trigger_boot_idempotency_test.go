@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -103,4 +104,103 @@ func TestTaskTriggerGatewayBootIdempotency(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, before, after, "boot must not change the scheduled task definition")
 	}
+}
+
+// CHECK2 F6: the setup assertion on task preparation was removed when the
+// preparation moved inside startSchedulers. Its error oracle is restored here
+// as a behavioural probe of the REAL boot: a preparation failure (here: the
+// store refuses the write that removes a duplicate trigger job) must abort the
+// boot with the preparation error, nothing activated, and the store unchanged.
+func TestTaskTriggerGatewayBootAbortsWhenPreparationFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("directory permissions do not bind root; the injected write failure needs a non-root user")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	store := task.New(filepath.Join(home, "tasks"))
+	rule, tz := "FREQ=DAILY;COUNT=5", "UTC"
+	due := time.Now().Add(48 * time.Hour).Truncate(time.Second).UnixMilli()
+	require.NoError(t, store.Create(&task.Task{
+		ID: "prep-fail-task", Title: "prep-fail-task", AgentID: "mia", WorkspaceID: "default",
+		Status: task.StatusDone,
+		Trigger: &task.Trigger{Type: task.TriggerRecurring, Config: task.TriggerConfig{
+			Rrule: &rule, DtstartMs: &due, Tz: &tz,
+		}},
+	}))
+	newStage := func() (*setupAndStartServicesState, *config.Config, func()) {
+		cfg := &config.Config{
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{
+					Home:         filepath.Join(home, "workspace"),
+					DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096,
+				},
+				List: []config.AgentConfig{{ID: "mia"}},
+			},
+		}
+		msgBus := bus.NewMessageBus()
+		al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+		stage := &setupAndStartServicesState{ctx: context.Background(), cfg: cfg, agentLoop: al, msgBus: msgBus, homePath: home}
+		return stage, cfg, func() {
+			if stage.runningServices != nil {
+				stopAndCleanupServices(stage.runningServices, 5*time.Second, false)
+			}
+			al.Close()
+			msgBus.Close()
+		}
+	}
+
+	// Boot 1 (healthy) writes the task's trigger job.
+	stage, cfg, closeStage := newStage()
+	_, stop, err := stage.startSchedulers()
+	require.NoError(t, err)
+	require.False(t, stop)
+	closeStage()
+	storePath := filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json")
+	data, err := os.ReadFile(storePath)
+	require.NoError(t, err)
+	var stored cron.CronStore
+	require.NoError(t, json.Unmarshal(data, &stored))
+	require.Len(t, stored.Jobs, 1, "SETUP: the healthy boot wrote exactly one trigger job")
+
+	// Make a duplicate trigger job for the same task, then forbid store writes.
+	dup := stored.Jobs[0]
+	dup.ID = dup.ID + "-duplicate"
+	stored.Jobs = append(stored.Jobs, dup)
+	data, err = json.MarshalIndent(stored, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(storePath, data, 0o600))
+	before, err := os.ReadFile(storePath)
+	require.NoError(t, err)
+	cronDir := filepath.Dir(storePath)
+	require.NoError(t, os.Chmod(cronDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(cronDir, 0o755) })
+
+	stage2, _, closeStage2 := newStage()
+	defer closeStage2()
+	var mu sync.Mutex
+	var events []string
+	observer, ok := any(stage2).(interface {
+		SetSchedulerBootObserverForTest(func(string, *cron.CronService))
+	})
+	require.True(t, ok, "BLOCKED: pre-activation boot observer not implemented")
+	observer.SetSchedulerBootObserverForTest(func(label string, _ *cron.CronService) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, label)
+	})
+	defer observer.SetSchedulerBootObserverForTest(nil)
+
+	_, stop, err = stage2.startSchedulers()
+	require.Error(t, err, "a failed task preparation must fail the boot")
+	assert.True(t, stop)
+	assert.Contains(t, err.Error(), "error preparing task trigger scheduler")
+	mu.Lock()
+	defer mu.Unlock()
+	assert.NotContains(t, events, "task_reconciled")
+	assert.NotContains(t, events, "activate", "nothing may be activated after a failed preparation")
+	after, err := os.ReadFile(storePath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a failed preparation leaves the store as the dead process left it")
 }

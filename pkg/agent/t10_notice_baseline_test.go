@@ -86,6 +86,15 @@ func t10NoticeSetup(t *testing.T, creator, starter string, foreign bool, noRun .
 		main[id] = sid
 		resolver.elig[[2]string{w, id}] = sid
 	}
+	if foreign {
+		// Production forms the creator copy's address from the TASK's workspace
+		// (creatorNoticeAddress), not from the creator's own workspace. Track that
+		// prospective address too so every test that drains f.main observes it.
+		prospective, err := session.MainSessionID(ws, "parent-agent")
+		require.NoError(t, err)
+		require.NotEqual(t, main["parent-agent"], prospective, "SETUP: the foreign creator's real main differs from the task-workspace address")
+		main["parent-agent@task-workspace"] = prospective
+	}
 	te.SetMainSessionResolver(resolver)
 	// A real task session and durable lifecycle edge are required by the real
 	// deliverer; a nil-run onTaskComplete fixture cannot prove terminal delivery.
