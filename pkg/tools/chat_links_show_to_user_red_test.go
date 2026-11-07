@@ -630,11 +630,12 @@ func TestShowToUser_MissingSecretUnderSymlinkedDirMatchesMissing(t *testing.T) {
 	}
 }
 
-// C2 B1: only a regular file opens. An in-library symlink is not a regular
-// file, even when it points at one. The refusal is the not-found sentence
-// (BS-6.9), publishes no open, is audited (BS-6.15), and does not consume
-// the 5-call budget (BS-6.13). The file it points at still opens.
-func TestShowToUser_InLibrarySymlinkRefusedAsNotRegular(t *testing.T) {
+// Founder ruling 2026-11-07: a symlink whose target is an absolute path is
+// refused, even when that path is a normal file inside the Library. The
+// refusal is the not-found sentence (BS-6.9), publishes no open, is audited
+// (BS-6.15), and does not consume the 5-call budget (BS-6.13). The file
+// itself still opens.
+func TestShowToUser_AbsoluteSymlinkTargetIsRefused(t *testing.T) {
 	tool := chatLinksShowToUser(t, "BS-6.9 / C2 B1")
 	ctx, work := chatLinksOwnFile(t)
 	ctx = chatLinksAuditRoot(ctx, "symlink-file-root")
@@ -642,6 +643,9 @@ func TestShowToUser_InLibrarySymlinkRefusedAsNotRegular(t *testing.T) {
 	link := filepath.Join(work, "notes", "via.md")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
+	}
+	if got, err := os.Readlink(link); err != nil || !filepath.IsAbs(got) {
+		t.Fatalf("fixture target %q, want an absolute path", got)
 	}
 	chatLinksSetWatching(t, tool, func(string) bool { return true })
 	missingCtx := chatLinksAuditRoot(ctx, "symlink-file-missing")
@@ -687,4 +691,72 @@ func textOf(res *ToolResult) string {
 		return ""
 	}
 	return res.ForLLM
+}
+
+// Founder ruling 2026-11-07: show_to_user opens a symlink whose target is
+// relative and stays inside the Library, the same as a clicked chat link.
+// The open is the real file (BS-6.10), not the symlink's own name.
+func TestShowToUser_RelativeSymlinkInsideLibraryOpensRealFile(t *testing.T) {
+	tool := chatLinksShowToUser(t, "founder ruling 2026-11-07 / BS-6.10")
+	ctx, work := chatLinksOwnFile(t)
+	ctx = chatLinksAuditRoot(ctx, "symlink-relative-root")
+	link := filepath.Join(work, "notes", "via.md")
+	if err := os.Symlink("plan.md", link); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.Readlink(link)
+	if err != nil || filepath.IsAbs(got) || strings.Contains(got, "..") {
+		t.Fatalf("fixture target %q, want a relative path that stays inside the Library", got)
+	}
+	chatLinksSetWatching(t, tool, func(string) bool { return true })
+	res := tool.Execute(ctx, map[string]any{"ref": "notes/via.md"})
+	if res == nil || res.IsError {
+		t.Fatalf("relative in-library symlink = %q, want the real file to open", textOf(res))
+	}
+	if !strings.Contains(res.ForLLM, chatLinksAsked) {
+		t.Fatalf("result = %q, want %q (BS-6.10; the real file is plan.md)", res.ForLLM, chatLinksAsked)
+	}
+	if strings.Contains(res.ForLLM, "via.md") {
+		t.Fatalf("result names the symlink instead of the real file: %q", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, chatLinksPlanLink) {
+		t.Fatalf("result = %q, want %q", res.ForLLM, chatLinksPlanLink)
+	}
+	_, ws, rel, present := chatLinksOpenTarget(t, res)
+	if !present || ws != "W" || rel != "notes/plan.md" {
+		t.Fatalf("open target = present %v workspace %q path %q, want W notes/plan.md", present, ws, rel)
+	}
+}
+
+// Founder ruling 2026-11-07: a relative symlink that climbs out of the Library
+// is refused. BS-6.9: a path outside every Library uses the outside sentence.
+func TestShowToUser_RelativeSymlinkClimbingOutIsRefused(t *testing.T) {
+	tool := chatLinksShowToUser(t, "founder ruling 2026-11-07 / BS-6.9")
+	ctx, work := chatLinksOwnFile(t)
+	ctx = chatLinksAuditRoot(ctx, "symlink-climb-root")
+	linkDir, err := filepath.EvalSymlinks(filepath.Join(work, "notes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(outsideDir, "escaped.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(linkDir, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(rel) || !strings.HasPrefix(rel, "..") {
+		t.Fatalf("fixture target %q, want a relative path that climbs out of the Library", rel)
+	}
+	link := filepath.Join(linkDir, "climb.md")
+	if err := os.Symlink(rel, link); err != nil {
+		t.Fatal(err)
+	}
+	res := tool.Execute(ctx, map[string]any{"ref": "notes/climb.md"})
+	chatLinksExactRefusal(t, res, chatLinksOutside, "escaped.txt", "relative climb out of the Library")
 }
