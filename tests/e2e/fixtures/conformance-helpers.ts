@@ -113,25 +113,71 @@ export async function apiFetch<T = unknown>(
   path: string,
   data?: unknown,
 ): Promise<ApiResult<T>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (method !== 'GET') {
-    headers['X-Csrf-Token'] = await getCsrfToken(page)
-  }
-  const res = await page.request.fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    data: data !== undefined ? JSON.stringify(data) : undefined,
-  })
-  const raw = await res.text()
-  let body: unknown = null
-  if (raw) {
+  // Transport-level retry, for exactly one failure class: the peer reset the
+  // TCP connection before a response arrived ("socket hang up" / ECONNRESET).
+  // CI run 42334402301, shard llm-conformance-plan (job 128297656734):
+  // Conformance_t3b's PUT /api/v1/agents/{id}/tools died this way ~1-3s after
+  // the preceding GET on the same context succeeded, and the no-flaky gate
+  // failed the shard even though the retried attempt passed 7.3m later. The
+  // gateway log for that window shows no panic, no error and no connection
+  // close it could have chosen (gateway_panic.log empty; the reload that ran
+  // 05:17:58→05:18:28 does NOT restart the HTTP listener — stopAndCleanupServices
+  // skips the channel manager when isReload). The one connection-closing
+  // mechanism the server does have is the keep-alive idle deadline:
+  // Manager.SetupHTTPServer (pkg/channels/manager.go) sets ReadTimeout/Write-
+  // Timeout 30s and no IdleTimeout, so an idle keep-alive connection is closed
+  // after 30s — and a Node-side client (unlike a browser) does not transpar-
+  // ently replay a request that raced that close. This gateway's own SPA and
+  // every real client tolerate the same close; replaying the transport error
+  // here matches them instead of turning a normal server behaviour into a
+  // shard-failing flake.
+  //
+  // WHY ONLY GET AND PUT: GET is idempotent. The suite's single PUT is the
+  // revision-guarded read-modify-write of PUT /api/v1/agents/{id}/tools
+  // (createMainAgent below echoes the GET's revision; HandleAgentToolsRegistry
+  // rejects a stale revision with 409) — so if the reset happened AFTER the
+  // server had actually processed the first attempt, the replay surfaces as a
+  // loud 409 that the caller's !ok check throws, never as a masked pass. POST
+  // is deliberately NOT retried: replaying a create after a lost response
+  // would duplicate the entity silently — exactly the quiet-corruption shape
+  // this suite must not paper over.
+  const TRANSPORT_RESET = /socket hang up|ECONNRESET|ECONNABORTED|EPIPE/i
+  const attempts = method === 'GET' || method === 'PUT' ? 2 : 1
+  let lastErr: unknown
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      await page.waitForTimeout(1_000)
+    }
     try {
-      body = JSON.parse(raw)
-    } catch {
-      body = null
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (method !== 'GET') {
+        headers['X-Csrf-Token'] = await getCsrfToken(page)
+      }
+      const res = await page.request.fetch(`${BASE_URL}${path}`, {
+        method,
+        headers,
+        data: data !== undefined ? JSON.stringify(data) : undefined,
+      })
+      const raw = await res.text()
+      let body: unknown = null
+      if (raw) {
+        try {
+          body = JSON.parse(raw)
+        } catch {
+          body = null
+        }
+      }
+      return { ok: res.ok(), status: res.status(), body: body as T, raw }
+    } catch (err) {
+      lastErr = err
+      const msg = err instanceof Error ? err.message : String(err)
+      if (attempt === attempts - 1 || !TRANSPORT_RESET.test(msg)) {
+        throw err
+      }
     }
   }
-  return { ok: res.ok(), status: res.status(), body: body as T, raw }
+  // Unreachable: the loop either returns or throws; kept for control-flow analysis.
+  throw lastErr
 }
 
 // ── Plan / member helpers ───────────────────────────────────────────────────
