@@ -200,7 +200,24 @@ test(
   // detection returns for a plain-text file — so this is robust even if
   // magic-byte detection is inconclusive for text.
   async ({ page }) => {
-    test.setTimeout(120_000);
+    // Budget (WORST-CASE ceiling, computed the same way test (a) above and
+    // chat.spec.ts (b) were: test.setTimeout is a hard governor, so it must
+    // sum every step's own worst-case timeout, INCLUDING the
+    // waitForTurnFullyDone leg added below for the same mid-turn done:true
+    // blip race (a) documents):
+    //   Sidebar agent selection + input visibility ..................... ~35s
+    //   assistantMessages toHaveCount ceiling ........................... 60s
+    //   waitForTurnFullyDone: gapMs(8s) + follow-up-call ceiling(180s) .. 188s
+    //   downloadLink toBeVisible ceiling ................................ 15s
+    //   download event + path + read-back ............................... ~20s
+    //   a11y scan ......................................................... 10s
+    // Worst-case total: 35 + 60 + 188 + 15 + 20 + 10 = 328s.
+    // Previous budget (120s) predated the guard: a real (if slow) turn that
+    // called send_file AFTER the count assertion resolved on a mid-turn blip
+    // had no wall-clock left to reach the download-link assertion, and CI run
+    // 42334402301 (shard llm-light) burned two of its four attempts exactly
+    // there — reply arrived, link never did within 15s.
+    test.setTimeout(360_000);
 
     // Seed a real fixture file directly on disk inside the workspace's work/
     // directory (the ADR-046 P1 filesystem re-root every CoreTeam agent's
@@ -236,6 +253,23 @@ test(
     await input.press('Enter');
 
     await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 60_000 });
+
+    // Guard against the premature-"complete" race described at the top of
+    // waitForTurnFullyDone above — the SAME instrument gap test (a) already
+    // fixed. The count assertion reads data-status, and the first LLM
+    // completion segment of this turn can end (done:true) before send_file
+    // has run at all, so `toHaveCount(countBefore + 1)` can resolve on that
+    // blip while the tool call is still ahead of the model. Without this
+    // wait, the download-link assertion's 15s budget starts from the blip and
+    // expires before send_file lands — a failure that looks like a missing
+    // media frame but is really a mid-turn snapshot. If the model never calls
+    // send_file, this wait ends with no follow-up call observed and the link
+    // assertion still fails below — the guard cannot turn a real
+    // non-compliance into a pass, it only stops measuring from the wrong
+    // moment. (CI run 42334402301, shard llm-light: attempts 1-2 failed
+    // exactly at that 15s link budget with no send_file error anywhere in the
+    // gateway log.)
+    await waitForTurnFullyDone(page, 8_000);
 
     // Structural assertion: the non-image branch of InlineMedia renders an
     // <a download="..."> link (ChatScreen.tsx:378-386), never an <img>, for
