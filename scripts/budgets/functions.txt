@@ -34,16 +34,20 @@
 # size-budget-grandfather-2026-09-15.md.
 # Re-seeded 2026-11-07 to code lines (founder option C). Blank lines and
 # comment-only lines do not count. A number is that file+name's code-line
-# count, and it is never higher than the previous number. Where one listed
-# number is all that covers other same-directory functions of the same name
-# (directory fallback), the number is the largest of those code-line counts
-# still at or under the old number, so a function the old pin already
-# allowed does not turn red. No row was added.
+# count, and it is never higher than the previous number. Corrected 2026-11-07
+# (fix round, CHECK finding F2) after the TS counter was repaired: the first
+# reseed copied counts from a counter that over-counted some TS files, so 17
+# numbers sat above the true code-line counts. Every number now equals the
+# true code-line count of its function; the only exceptions are the two
+# directory-shadow rows below. No row was added. Where one listed number is
+# all that covers other same-directory functions of the same name (directory
+# fallback), the row holding the largest old number carries the largest of those
+# covered code-line counts.
 # Removed, because no function of that name remains in the listed directory:
 #   pkg/agent/subturn.go  spawnSubTurn  was 603
 # Held above the listed function's own code lines to keep the directory shadow, still under the old number:
-#   src/components/agents/AgentProfile.test.tsx  (arg of describe)  own 238  old 402  now 270
-#   src/components/chat/mermaid-renderer.test.tsx  (arg of describe)  own 294  old 458  now 383
+#   src/components/agents/AgentProfile.test.tsx  (arg of describe)  own 238  old 402  now 270 (covers ToolsAndPermissions.overrides.test.tsx, 270)
+#   src/components/chat/mermaid-renderer.test.tsx  (arg of describe)  own 294  old 458  now 372 (covers ChatScreen.restart-interrupted.test.tsx, 372)
 # file	qualified name	code lines
 pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	269
 pkg/agent/loop_wire.go	registerSharedToolsWire3.registerBrowserTools	105
@@ -66,24 +70,24 @@ pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	233
 pkg/tools/validate_test.go	TestValidateToolArgs	284
 src/components/agents/AgentProfile.test.tsx	(arg of describe)	270
 src/components/browser/BrowserLiveView.controlToggle.test.tsx	(arg of describe)	177
-src/components/browser/BrowserLiveView.tsx	(arg of useEffect)	272
+src/components/browser/BrowserLiveView.tsx	(arg of useEffect)	164
 src/components/browser/BrowserLiveView.webrtcInputRouting.test.tsx	(arg of describe)	278
 src/components/chat/AskUserQuestionCard.test.tsx	(arg of describe)	151
-src/components/chat/ChatScreen.tool-order.test.tsx	(arg of describe)	177
-src/components/chat/ChatScreen.virtualization.test.tsx	(arg of describe)	290
+src/components/chat/ChatScreen.tool-order.test.tsx	(arg of describe)	144
+src/components/chat/ChatScreen.virtualization.test.tsx	(arg of describe)	219
 src/components/chat/GoalEchoCard.test.tsx	(arg of describe)	217
-src/components/chat/mermaid-renderer.test.tsx	(arg of describe)	383
+src/components/chat/mermaid-renderer.test.tsx	(arg of describe)	372
 src/components/connectors/EmailMailboxPanel.test.tsx	(arg of describe)	233
-src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	325
+src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	298
 src/components/library/knowledge/KnowledgeNoteView.test.tsx	(arg of describe)	305
-src/components/library/LibraryExplorer.test.tsx	(arg of describe)	136
+src/components/library/LibraryExplorer.test.tsx	(arg of describe)	126
 src/components/library/LibraryPanel.test.tsx	(arg of describe)	34
 src/components/library/preview/BasePreview.test.tsx	(arg of describe)	332
-src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	228
-src/components/library/preview/LibraryPdfPreview.tsx	(anonymous)	90
-src/components/library/preview/LibraryPdfPreview.tsx	(arg of useEffect)	113
+src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	188
+src/components/library/preview/LibraryPdfPreview.tsx	(anonymous)	54
+src/components/library/preview/LibraryPdfPreview.tsx	(arg of useEffect)	72
 src/components/library/preview/useLibraryFileEditor.ts	useLibraryFileEditor	204
-src/components/providers/provider-picker-model.test.ts	(arg of describe)	325
+src/components/providers/provider-picker-model.test.ts	(arg of describe)	321
 src/components/providers/SignInDialog.test.tsx	(arg of describe)	178
 src/components/screens/UsageScreen.test.tsx	(arg of describe)	216
 src/components/settings/MemorySection.test.tsx	(arg of describe)	212
@@ -91,25 +95,25 @@ src/components/settings/PerformanceSection.goal.test.tsx	(arg of describe)	221
 src/components/settings/PerformanceSection.test.tsx	(arg of describe)	169
 src/components/settings/SandboxSection.test.tsx	(arg of describe)	134
 src/components/ui/model-selector.test.tsx	(arg of describe)	202
-src/components/workspaces/WorkspaceTeamTab.test.tsx	(arg of describe)	128
+src/components/workspaces/WorkspaceTeamTab.test.tsx	(arg of describe)	123
 src/hooks/useAutoSave.test.tsx	(arg of describe)	802
 src/hooks/useAutoSave.ts	useAutoSave	200
 src/hooks/useSlashMenu.test.ts	(arg of describe)	233
-src/hooks/useSlashMenu.ts	useSlashMenu	720
+src/hooks/useSlashMenu.ts	useSlashMenu	376
 src/lib/api.test.ts	(arg of describe)	230
 src/routes/_app/-library.test.tsx	(arg of describe)	68
-src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	135
+src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	85
 src/store/chat.test.ts	(arg of describe)	293
 src/store/chat.tool-call-offset.test.ts	(arg of describe)	659
 src/store/chat/slices/frames.ts	createFrameSlice	560
 src/store/chat/slices/frames.ts	handleFrame	556
-src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	644
-src/store/chat/slices/outbound-lifecycle.ts	sendMessage	339
+src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	333
+src/store/chat/slices/outbound-lifecycle.ts	sendMessage	185
 src/store/chat/slices/replay-and-status-frames.ts	(arg of produce)	37
 src/store/chat/slices/replay-and-status-frames.ts	(arg of withBucket)	43
-src/store/chat/slices/replay-and-status-frames.ts	handleReplayAndStatusFrame	477
+src/store/chat/slices/replay-and-status-frames.ts	handleReplayAndStatusFrame	300
 src/store/chat/store.ts	(arg of create)	375
-src/store/session.ts	(arg of create)	221
+src/store/session.ts	(arg of create)	172
 src/test/contract.test.ts	(arg of describe)	205
 tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	164
 tests/security/command_injection_test.go	TestExecCommandInjection_WorkspaceRestriction	342

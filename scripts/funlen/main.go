@@ -59,8 +59,28 @@ type funcRow struct {
 	start     int    // line of the `func` keyword (parser line, same as before)
 	lines     int    // code lines inside the span, not blanks or comment-only lines
 	test      bool   // true for a _test.go file
-	exception string // "" none, "!" empty reason, otherwise the reason
+	exception exception
 }
+
+// exception is the result of looking for a budget directive above a function.
+// present with an empty reason is the failing "empty exception reason" form;
+// a separate flag (not a reserved reason string) keeps every non-empty reason,
+// including "!", an ordinary reason.
+type exception struct {
+	present bool
+	reason  string // trimmed; empty only when present is true and the reason is missing
+}
+
+// sourceInfo is what the real Go scanner learned about one file.
+type sourceInfo struct {
+	code     map[int]struct{}      // physical lines (1-based) holding a non-comment token character
+	first    map[int]int           // line -> start offset of the first token on it, or -1 when that token began on an earlier line (a raw-string tail)
+	comments map[int]commentOnLine // line -> a real // comment that starts it
+}
+
+// commentOnLine is a real // comment (a COMMENT token, never text inside a
+// string) that is alone on its physical line.
+type commentOnLine struct{ text string }
 
 func main() {
 	root := flag.String("root", ".", "repo root to scan")
@@ -159,20 +179,19 @@ func scanFile(fset *token.FileSet, p, rel string) ([]funcRow, bool) {
 		return nil, isTest
 	}
 	starts := lineStarts(src)
-	codeLines := codeLinesIn(src, starts)
-	srcLines := strings.Split(string(src), "\n")
+	info := analyze(src, starts)
 	var rows []funcRow
 	for _, decl := range f.Decls {
 		fd, ok := decl.(*ast.FuncDecl)
 		if !ok || fd.Body == nil {
 			continue
 		}
-		rows = append(rows, rowForFunc(fset, src, starts, codeLines, srcLines, rel, isTest, fd))
+		rows = append(rows, rowForFunc(fset, src, starts, info, rel, isTest, fd))
 	}
 	return rows, isTest
 }
 
-func rowForFunc(fset *token.FileSet, src []byte, starts []int, codeLines map[int]struct{}, srcLines []string, rel string, isTest bool, fd *ast.FuncDecl) funcRow {
+func rowForFunc(fset *token.FileSet, src []byte, starts []int, info sourceInfo, rel string, isTest bool, fd *ast.FuncDecl) funcRow {
 	file := fset.File(fd.Pos())
 	startOff := file.Offset(fd.Pos())
 	endOff := file.Offset(fd.End())
@@ -193,9 +212,9 @@ func rowForFunc(fset *token.FileSet, src []byte, starts []int, codeLines map[int
 		name:      qualifiedName(fd),
 		kind:      "function",
 		start:     fset.Position(fd.Pos()).Line,
-		lines:     countCode(codeLines, physStart, physEnd),
+		lines:     countCode(info.code, physStart, physEnd),
 		test:      isTest,
-		exception: exceptionAbove(srcLines, physStart),
+		exception: exceptionAbove(info, physStart, startOff),
 	}
 }
 
@@ -222,29 +241,51 @@ func lineAt(starts []int, off int) int {
 	return i + 1
 }
 
-// codeLinesIn records physical lines that contain a non-comment, non-whitespace
-// token character. Comment tokens and inserted semicolons do not mark a line.
-func codeLinesIn(src []byte, starts []int) map[int]struct{} {
+// analyze runs the real Go scanner over src (it understands raw strings, rune
+// literals and comments) and records, per physical line, whether it holds code,
+// what token starts it, and whether a real // comment stands alone on it.
+// Comment tokens and inserted semicolons do not mark a line as code.
+func analyze(src []byte, starts []int) sourceInfo {
 	fset := token.NewFileSet()
 	file := fset.AddFile("", fset.Base(), len(src))
 	var s scanner.Scanner
 	s.Init(file, src, nil, scanner.ScanComments)
-	lines := map[int]struct{}{}
+	info := sourceInfo{
+		code:     map[int]struct{}{},
+		first:    map[int]int{},
+		comments: map[int]commentOnLine{},
+	}
 	for {
 		pos, tok, lit := s.Scan()
 		if tok == token.EOF {
 			break
 		}
 		end := s.End()
-		if tok == token.COMMENT || (tok == token.SEMICOLON && lit == "\n") {
+		if tok == token.SEMICOLON && lit == "\n" {
 			continue
 		}
-		markToken(src, file, starts, lines, pos, end)
+		if tok == token.COMMENT {
+			recordComment(src, starts, info.comments, file.Offset(pos), lit)
+			continue
+		}
+		markToken(src, file, starts, &info, pos, end)
 	}
-	return lines
+	return info
 }
 
-func markToken(src []byte, file *token.File, starts []int, lines map[int]struct{}, pos, end token.Pos) {
+// recordComment keeps a // comment that has only whitespace before it on its line.
+func recordComment(src []byte, starts []int, comments map[int]commentOnLine, off int, lit string) {
+	if !strings.HasPrefix(lit, "//") {
+		return
+	}
+	line := lineAt(starts, off)
+	if hasNonSpace(src[starts[line-1]:off]) {
+		return
+	}
+	comments[line] = commentOnLine{text: strings.TrimSpace(strings.TrimRight(lit, "\r"))}
+}
+
+func markToken(src []byte, file *token.File, starts []int, info *sourceInfo, pos, end token.Pos) {
 	if !pos.IsValid() || !end.IsValid() {
 		return
 	}
@@ -267,7 +308,15 @@ func markToken(src []byte, file *token.File, starts []int, lines map[int]struct{
 			segEnd = i + lineEnd
 		}
 		if hasNonSpace(src[i:segEnd]) {
-			lines[lineAt(starts, i)] = struct{}{}
+			l := lineAt(starts, i)
+			info.code[l] = struct{}{}
+			if _, seen := info.first[l]; !seen {
+				if i == startOff {
+					info.first[l] = startOff
+				} else {
+					info.first[l] = -1
+				}
+			}
 		}
 		if lineEnd < 0 {
 			break
@@ -298,36 +347,40 @@ func countCode(code map[int]struct{}, first, last int) int {
 	return n
 }
 
-// exceptionAbove returns the closest budget directive in the // comment block
-// that ends on the line immediately above startLine (1-based). A blank line
-// or a non-comment line ends the block. "" means no directive, "!" means the
-// directive is present with an empty reason.
-func exceptionAbove(srcLines []string, startLine int) string {
-	for i := startLine - 2; i >= 0 && i < len(srcLines); i-- {
-		trim := strings.TrimSpace(strings.TrimRight(srcLines[i], "\r"))
-		if trim == "" || !strings.HasPrefix(trim, "//") {
+// exceptionAbove returns the closest budget directive in the real // comment
+// block that ends on the line immediately above startLine (1-based). Only
+// comment tokens count (text inside a raw string never does), a blank line or
+// any non-comment line ends the block, and the directive is pinned to this
+// function: the func keyword (at funcOff) must be the first token on its own
+// line, so a string tail or another statement before it cuts the link.
+func exceptionAbove(info sourceInfo, startLine, funcOff int) exception {
+	for l := startLine - 1; l >= 1; l-- {
+		c, ok := info.comments[l]
+		if !ok {
 			break
 		}
-		if reason, ok := directiveReason(trim); ok {
-			return reason
+		reason, found := directiveReason(c.text)
+		if !found {
+			continue
 		}
+		if first, ok := info.first[startLine]; !ok || first != funcOff {
+			return exception{}
+		}
+		return reason
 	}
-	return ""
+	return exception{}
 }
 
-func directiveReason(line string) (string, bool) {
+func directiveReason(line string) (exception, bool) {
 	m := budgetDirective.FindStringSubmatch(line)
 	if m == nil {
-		return "", false
+		return exception{}, false
 	}
 	reason := ""
 	if len(m) > 1 {
 		reason = strings.TrimSpace(m[1])
 	}
-	if reason == "" {
-		return "!", true
-	}
-	return reason, true
+	return exception{present: true, reason: reason}, true
 }
 
 // qualifiedName mirrors the naming in
@@ -357,21 +410,21 @@ func recvName(t ast.Expr) string {
 func filterReported(rows []funcRow, limit int) []funcRow {
 	out := make([]funcRow, 0, len(rows))
 	for _, r := range rows {
-		if r.lines > limit || r.exception != "" {
+		if r.lines > limit || r.exception.present {
 			out = append(out, r)
 		}
 	}
 	return out
 }
 
-func formatException(exc string) string {
-	switch exc {
-	case "":
+func formatException(exc exception) string {
+	switch {
+	case !exc.present:
 		return "0"
-	case "!":
+	case exc.reason == "":
 		return "1"
 	default:
-		return "2" + sanitizeReason(exc)
+		return "2" + sanitizeReason(exc.reason)
 	}
 }
 

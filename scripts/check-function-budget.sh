@@ -20,8 +20,11 @@
 #       //budget:exception <one-line reason>
 #       // budget:exception <one-line reason>
 #     The reason is the rest of the line, trimmed. An empty reason fails the
-#     gate. A reason does not fail the size rule. The directive does nothing
-#     on a React component (already warn-only): it is not listed and an empty
+#     gate. A reason does not fail the size rule. The marker counts only as a
+#     real comment (never text inside a string or template), it must sit in
+#     the comment-only block directly above the function, and that function
+#     must be the first thing on its line; a lookalike elsewhere does nothing. The
+#     directive does nothing on a React component (already warn-only): it is not listed and an empty
 #     reason on a component is not a failure.
 #
 # Matching is by `file<TAB>qualified name`, never by line number, so a
@@ -41,7 +44,7 @@
 #   (always last). <k> is the number of EXCEPTION lines, not empty-reason fails.
 #
 # Exit: 0 clean or warn-only, 1 any FAIL, 2 the gate itself could not run
-# (missing scanner, scanner crashed, bad arguments) — a false green here
+# (missing scanner, scanner crashed, bad arguments, an option without its value) — a false green here
 # would be worse than a false red (docs/internal/false-green-patterns.md).
 #
 # Usage: bash scripts/check-function-budget.sh [--root <dir>] [--budget <file>]
@@ -59,8 +62,10 @@ BUDGET="$SCRIPT_DIR/budgets/functions.txt"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --root) ROOT="$2"; shift 2 ;;
-    --budget) BUDGET="$2"; shift 2 ;;
+    --root|--budget)
+      [ $# -ge 2 ] || { echo "$NAME: $1 needs a value" >&2; exit 2; }
+      if [ "$1" = "--root" ]; then ROOT="$2"; else BUDGET="$2"; fi
+      shift 2 ;;
     *) echo "$NAME: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

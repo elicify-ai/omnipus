@@ -60,6 +60,32 @@
 #      do not apply to components; code lines, not physical)
 #   v. the gate invoked with a root that does not exist            -> exit 2
 #      (the gate itself could not run)
+#   Fix-round rows (CHECK findings F1, F3, F4 and the option-value exit):
+#   w. a 400-code-line .ts function whose template literal has an
+#      interpolation and a tail starting with /*                  -> must FAIL
+#      citing 400 (a context-free lexer counted 2 and passed it)
+#   x. 399 code lines with the regular expression /[/*]/           -> must FAIL
+#      citing 399
+#   y. 241 code lines in a .tsx hook whose JSX text lines start with // and
+#      /* (text, not comments)                                     -> must FAIL
+#      citing 241
+#   z. Go: an exception-like line inside a raw string that ends on the line
+#      where a 250-line function starts                            -> must FAIL,
+#      no EXCEPTION line
+#   aa. the same in TS with a template literal                     -> must FAIL
+#   ab/ac. a real marker with another // comment line between it and the
+#      function (Go, TS)                                           -> must pass
+#      and be listed
+#   ad/ae. a marker, a blank line, then a 260-line function (Go, TS) -> must FAIL
+#   af/ag. a marker, a code line, then the function (Go, TS)        -> must FAIL
+#   ah/ai. a marker above an unrelated short function, then a separate
+#      260-line function with none (Go, TS): only the short one is
+#      listed, the long one must FAIL
+#   aj/ak. a real marker above a line where another statement precedes the
+#      function (Go, TS)                                           -> must FAIL
+#   al. an exception reason that is the single character !         -> must pass,
+#      listed with reason ! (Go, TS)
+#   am/an. --root or --budget as the last argument, no value        -> exit 2
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
@@ -372,6 +398,163 @@ else
     echo "selfcheck ok:   (v) missing root (exit 2)"
   fi
 fi
+
+
+# body_go <n>: n code lines inside a Go function body. body_ts <n>: the same for TS.
+body_go() { local i=0; while [ "$i" -lt "$1" ]; do printf '\t_ = %d\n' "$i"; i=$((i + 1)); done; }
+body_ts() { local i=0; while [ "$i" -lt "$1" ]; do printf '  const v%d = %d;\n' "$i" "$i"; i=$((i + 1)); done; }
+
+no_exception_line() { # no_exception_line <label>
+  grep -q '^EXCEPTION' "$TMP/out" && { echo "selfcheck FAIL: $1 a lookalike was accepted as an exception" >&2; FAIL=1; }
+}
+
+# (w) a 400-code-line function with an interpolated template whose tail
+# starts a comment-looking /*: the parser's own tokens, not a context-free
+# lexer, must decide what is a comment.
+fresh_tree
+{ printf 'function templateTail() {\n  const text = `prefix ${1}\n/*`;\n'; body_ts 396; echo '}'; } > "$TMP/tree/tests/fixture_w.ts"
+if expect "(w) 400 code lines with an interpolated template tail" 1; then
+  grep -q 'templateTail 400 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (w) FAIL line did not cite 400 code lines" >&2; FAIL=1; }
+fi
+
+# (x) 399 code lines with a regular expression containing /*.
+fresh_tree
+{ printf 'function regexBody() {\n  const r = /[/*]/;\n'; body_ts 396; echo '}'; } > "$TMP/tree/tests/fixture_x.ts"
+if expect "(x) 399 code lines with a /[/*]/ regular expression" 1; then
+  grep -q 'regexBody 399 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (x) FAIL line did not cite 399 code lines" >&2; FAIL=1; }
+fi
+
+# (y) 241 code lines in a hook; two JSX text lines look like comments but are
+# text. Counted as comments the function would be 239 and pass.
+fresh_tree
+{ printf 'function useJsxText() {\n  const el = (<div>\n// jsx text is code\n/* so is this */\n</div>);\n'; body_ts 235; echo '}'; } > "$TMP/tree/src/components/FixtureY.tsx"
+if expect "(y) 241 code lines counting JSX text that begins with // and /*" 1; then
+  grep -q 'useJsxText 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (y) FAIL line did not cite 241 code lines" >&2; FAIL=1; }
+fi
+
+# (z) Go: a raw string holds an exception-like line and ends on the line where
+# the 250-line function starts. There is no comment, so no exception.
+fresh_tree
+{ printf 'package fixture\n\nvar lookalike = `\n//budget:exception fake string reason\n`; func RawLookalike() {\n'; body_go 248; echo '}'; } > "$TMP/tree/pkg/fixture_z.go"
+if expect "(z) Go marker inside a raw string" 1; then
+  grep -q 'RawLookalike 250 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (z) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(z)"
+fi
+
+# (aa) TS: the same through a template literal.
+fresh_tree
+{ printf 'const lookalike = `\n// budget:exception fake string reason\n`; function rawLookalike() {\n'; body_ts 248; echo '}'; } > "$TMP/tree/tests/fixture_aa.ts"
+if expect "(aa) TS marker inside a template literal" 1; then
+  grep -q 'rawLookalike 250 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (aa) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(aa)"
+fi
+
+# (ab) Go: a real marker, one more comment line, then the function.
+fresh_tree
+{ printf 'package fixture\n\n//budget:exception doc follows the marker\n// Doc says what the function does.\nfunc BlockGo() {\n'; body_go 258; echo '}'; } > "$TMP/tree/pkg/fixture_ab.go"
+if expect "(ab) Go marker with a further comment line before the function" 0; then
+  grep -q '^EXCEPTION .*BlockGo 260 doc follows the marker$' "$TMP/out" || { echo "selfcheck FAIL: (ab) missing EXCEPTION line" >&2; FAIL=1; }
+fi
+
+# (ac) TS: the same.
+fresh_tree
+{ printf '// budget:exception doc follows the marker\n// Doc says what the function does.\nfunction blockTs() {\n'; body_ts 258; echo '}'; } > "$TMP/tree/tests/fixture_ac.ts"
+if expect "(ac) TS marker with a further comment line before the function" 0; then
+  grep -q '^EXCEPTION .*blockTs 260 doc follows the marker$' "$TMP/out" || { echo "selfcheck FAIL: (ac) missing EXCEPTION line" >&2; FAIL=1; }
+fi
+
+# (ad) Go: a blank line between the marker and the function ends the link.
+fresh_tree
+{ printf 'package fixture\n\n//budget:exception detached by a blank line\n\nfunc DetachedGo() {\n'; body_go 258; echo '}'; } > "$TMP/tree/pkg/fixture_ad.go"
+if expect "(ad) Go marker separated by a blank line" 1; then
+  grep -q 'DetachedGo 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ad) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(ad)"
+fi
+
+# (ae) TS: the same.
+fresh_tree
+{ printf '// budget:exception detached by a blank line\n\nfunction detachedTs() {\n'; body_ts 258; echo '}'; } > "$TMP/tree/tests/fixture_ae.ts"
+if expect "(ae) TS marker separated by a blank line" 1; then
+  grep -q 'detachedTs 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ae) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(ae)"
+fi
+
+# (af) Go: a code line sits between the marker and the function.
+fresh_tree
+{ printf 'package fixture\n\n//budget:exception code intervenes\nvar between = 1\nfunc InterveneGo() {\n'; body_go 258; echo '}'; } > "$TMP/tree/pkg/fixture_af.go"
+if expect "(af) Go marker with a code line before the function" 1; then
+  grep -q 'InterveneGo 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (af) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(af)"
+fi
+
+# (ag) TS: the same.
+fresh_tree
+{ printf '// budget:exception code intervenes\nconst between = 1;\nfunction interveneTs() {\n'; body_ts 258; echo '}'; } > "$TMP/tree/tests/fixture_ag.ts"
+if expect "(ag) TS marker with a code line before the function" 1; then
+  grep -q 'interveneTs 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ag) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(ag)"
+fi
+
+# (ah) Go: the marker belongs to a short function; a later long function with
+# no marker in the same file must still fail.
+fresh_tree
+{ printf 'package fixture\n\n//budget:exception only for the short one\nfunc ShortGo() {\n\t_ = 1\n}\n\nfunc LongGo() {\n'; body_go 258; echo '}'; } > "$TMP/tree/pkg/fixture_ah.go"
+if expect "(ah) Go marker above another function, long function unmarked" 1; then
+  grep -q 'LongGo 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ah) the unmarked long function was not failed" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*ShortGo' "$TMP/out" || { echo "selfcheck FAIL: (ah) the marked short function was not listed" >&2; FAIL=1; }
+  grep -q 'EXCEPTION .*LongGo' "$TMP/out" && { echo "selfcheck FAIL: (ah) LongGo was listed as an exception" >&2; FAIL=1; }
+fi
+
+# (ai) TS: the same.
+fresh_tree
+{ printf '// budget:exception only for the short one\nfunction shortTs() {\n  return 1;\n}\n\nfunction longTs() {\n'; body_ts 258; echo '}'; } > "$TMP/tree/tests/fixture_ai.ts"
+if expect "(ai) TS marker above another function, long function unmarked" 1; then
+  grep -q 'longTs 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ai) the unmarked long function was not failed" >&2; FAIL=1; }
+  grep -q '^EXCEPTION .*shortTs' "$TMP/out" || { echo "selfcheck FAIL: (ai) the marked short function was not listed" >&2; FAIL=1; }
+  grep -q 'EXCEPTION .*longTs' "$TMP/out" && { echo "selfcheck FAIL: (ai) longTs was listed as an exception" >&2; FAIL=1; }
+fi
+
+# (aj) Go: the marker is directly above a line where another declaration
+# comes before the func keyword, so it is not pinned to the function.
+fresh_tree
+{ printf 'package fixture\n\n//budget:exception belongs to the var\nvar before = 1; func PrefixGo() {\n'; body_go 258; echo '}'; } > "$TMP/tree/pkg/fixture_aj.go"
+if expect "(aj) Go marker above a line that starts with another declaration" 1; then
+  grep -q 'PrefixGo 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (aj) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(aj)"
+fi
+
+# (ak) TS: the same.
+fresh_tree
+{ printf '// budget:exception belongs to the const\nconst before = 1; function prefixTs() {\n'; body_ts 258; echo '}'; } > "$TMP/tree/tests/fixture_ak.ts"
+if expect "(ak) TS marker above a line that starts with another statement" 1; then
+  grep -q 'prefixTs 260 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ak) missing the not-grandfathered FAIL" >&2; FAIL=1; }
+  no_exception_line "(ak)"
+fi
+
+# (al) a reason that is just ! is an ordinary reason, not the empty form.
+fresh_tree
+{ printf 'package fixture\n\n//budget:exception !\nfunc BangGo() {\n'; body_go 258; echo '}'; } > "$TMP/tree/pkg/fixture_al.go"
+if expect "(al) Go exception whose reason is !" 0; then
+  grep -q '^EXCEPTION .*BangGo 260 !$' "$TMP/out" || { echo "selfcheck FAIL: (al) missing EXCEPTION line with reason !" >&2; FAIL=1; }
+fi
+fresh_tree
+{ printf '// budget:exception !\nfunction bangTs() {\n'; body_ts 258; echo '}'; } > "$TMP/tree/tests/fixture_al.ts"
+if expect "(al) TS exception whose reason is !" 0; then
+  grep -q '^EXCEPTION .*bangTs 260 !$' "$TMP/out" || { echo "selfcheck FAIL: (al) missing TS EXCEPTION line with reason !" >&2; FAIL=1; }
+fi
+
+# (am/an) an option given with no value is a gate that could not run: exit 2.
+for opt in --root --budget; do
+  bash "$CHECK" "$opt" >"$TMP/out" 2>&1
+  got=$?
+  if [ "$got" -ne 2 ]; then
+    echo "selfcheck FAIL: (am/an) $opt without a value wanted exit 2, got $got" >&2
+    sed 's/^/    | /' "$TMP/out" >&2
+    FAIL=1
+  else
+    echo "selfcheck ok:   (am/an) $opt without a value (exit 2)"
+  fi
+done
 
 if [ "$FAIL" -ne 0 ]; then
   echo "selfcheck: check-function-budget.sh does not behave — see above" >&2

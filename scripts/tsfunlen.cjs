@@ -249,39 +249,82 @@ function classifyKind(ts, sf, isTsx, fn, target) {
   return hasJsxReturn(ts, fn) ? 'component' : 'function';
 }
 
-// codeLineSet records 0-based physical lines that contain a non-comment token
-// character other than whitespace. Comment and whitespace trivia do not mark
-// a line. A multi-line token marks only the lines where its own text is not
-// whitespace, so a blank line inside a string stays blank.
-function codeLineSet(ts, sf, text) {
-  const scanner = ts.createScanner(sf.languageVersion, /*skipTrivia*/ false, sf.languageVariant, text);
-  const lines = new Set();
-  while (true) {
-    const tok = scanner.scan();
-    if (tok === ts.SyntaxKind.EndOfFileToken) break;
-    if (isIgnoredTrivia(ts, tok)) continue;
-    markTokenLines(sf, text, lines, scanner.getTokenPos(), scanner.getTextPos());
+// analyzeSource walks the parsed tree's leaf tokens (so template tails, regular
+// expressions and JSX text are tokenised with the parser's own context, which a
+// context-free scanner cannot do) and returns:
+//   codeLines     0-based physical lines holding a non-whitespace character of a
+//                 real token. Comments and blank lines are not tokens, so they do
+//                 not count; a blank line inside a multi-line string stays blank.
+//   firstOnLine   0-based line -> start offset of the first token touching it, or
+//                 -1 when that token began on an earlier line (a string tail).
+//   lineComments  0-based line -> {text, only} for every real `//` comment found
+//                 between tokens; `only` is true when nothing but whitespace
+//                 precedes it on its line. Text that merely looks like a comment
+//                 inside a string or template never appears here.
+function analyzeSource(ts, sf, text) {
+  const codeLines = new Set();
+  const firstOnLine = new Map();
+  const lineComments = new Map();
+  let lastEnd = 0;
+  const isJsDoc = (n) => n.kind >= ts.SyntaxKind.FirstJSDocNode && n.kind <= ts.SyntaxKind.LastJSDocNode;
+  const visit = (n) => {
+    if (isJsDoc(n)) return;
+    const kids = n.getChildren(sf);
+    if (kids.length > 0) {
+      for (const k of kids) visit(k);
+      return;
+    }
+    if (n.kind === ts.SyntaxKind.EndOfFileToken) return;
+    const start = n.kind === ts.SyntaxKind.JsxText ? n.pos : n.getStart(sf);
+    const end = n.end;
+    if (!(end > start) || start < lastEnd) return;
+    collectGapComments(sf, text, lineComments, lastEnd, start);
+    markTokenLines(sf, text, codeLines, firstOnLine, start, end);
+    lastEnd = end;
+  };
+  visit(sf);
+  collectGapComments(sf, text, lineComments, lastEnd, text.length);
+  return { codeLines, firstOnLine, lineComments };
+}
+
+// collectGapComments parses the pure trivia text[from,to) between two tokens:
+// whitespace, newlines, // comments and /* */ comments are the only things there.
+function collectGapComments(sf, text, lineComments, from, to) {
+  let i = from;
+  while (i < to) {
+    const c = text[i];
+    if (c === '/' && text[i + 1] === '/') {
+      let e = text.indexOf('\n', i);
+      if (e < 0 || e > to) e = to;
+      const line = sf.getLineAndCharacterOfPosition(i).line;
+      const lineStart = sf.getPositionOfLineAndCharacter(line, 0);
+      lineComments.set(line, {
+        text: text.slice(i, e).replace(/\r$/, '').trim(),
+        only: !hasNonSpace(text, lineStart, i),
+      });
+      i = e;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const e = text.indexOf('*/', i + 2);
+      i = e < 0 || e + 2 > to ? to : e + 2;
+    } else if (c === '#' && text[i + 1] === '!' && i === 0) {
+      const e = text.indexOf('\n', i);
+      i = e < 0 || e > to ? to : e;
+    } else {
+      i++;
+    }
   }
-  return lines;
 }
 
-function isIgnoredTrivia(ts, tok) {
-  return (
-    tok === ts.SyntaxKind.SingleLineCommentTrivia ||
-    tok === ts.SyntaxKind.MultiLineCommentTrivia ||
-    tok === ts.SyntaxKind.NewLineTrivia ||
-    tok === ts.SyntaxKind.WhitespaceTrivia ||
-    tok === ts.SyntaxKind.ShebangTrivia
-  );
-}
-
-function markTokenLines(sf, text, lines, start, end) {
-  if (!(end > start)) return;
+function markTokenLines(sf, text, lines, firstOnLine, start, end) {
   let i = start;
   while (i < end) {
     let lineEnd = text.indexOf('\n', i);
     if (lineEnd < 0 || lineEnd > end) lineEnd = end;
-    if (hasNonSpace(text, i, lineEnd)) lines.add(sf.getLineAndCharacterOfPosition(i).line);
+    if (hasNonSpace(text, i, lineEnd)) {
+      const line = sf.getLineAndCharacterOfPosition(i).line;
+      lines.add(line);
+      if (!firstOnLine.has(line)) firstOnLine.set(line, i === start ? start : -1);
+    }
     if (lineEnd >= end) break;
     i = lineEnd + 1;
   }
@@ -296,7 +339,7 @@ function hasNonSpace(text, start, end) {
 }
 
 // countCodeLines counts 1-based inclusive [startLine, endLine] against a
-// 0-based set from codeLineSet.
+// 0-based set from analyzeSource.
 function countCodeLines(codeLines, startLine, endLine) {
   let n = 0;
   for (let l = startLine; l <= endLine; l++) {
@@ -305,28 +348,44 @@ function countCodeLines(codeLines, startLine, endLine) {
   return n;
 }
 
+const NONE = { kind: 0, reason: '' };
 const BUDGET_DIRECTIVE = /^\/\/\s*budget:exception(?:\s(.*))?$/;
 
-// exceptionAbove returns '' (no directive), '!' (empty reason), or the reason.
-// The directive must be in the // comment block that ends on the line
-// immediately above startLine (1-based). A blank or non-comment line ends it.
-function exceptionAbove(text, startLine) {
-  const lines = text.split('\n');
-  for (let i = startLine - 2; i >= 0 && i < lines.length; i--) {
-    const trim = lines[i].replace(/\r$/, '').trim();
-    if (trim === '' || !trim.startsWith('//')) break;
-    const m = BUDGET_DIRECTIVE.exec(trim);
+// exceptionAbove returns {kind: 0 none, 1 empty reason, 2 reason, reason}.
+// The directive must be a real // comment (analyzeSource only records those) in
+// the comment-only block that ends on the line immediately above the function's
+// start line (1-based), and the function (or an enclosing node that starts the
+// same statement) must be the first token on its own line, so a marker can never
+// reach a function through a string tail or another statement. A blank or
+// non-comment line ends the block.
+function exceptionAbove(ts, info, fn, sf, startLine) {
+  for (let l = startLine - 2; l >= 0; l--) {
+    const c = info.lineComments.get(l);
+    if (!c || !c.only) break;
+    const m = BUDGET_DIRECTIVE.exec(c.text);
     if (!m) continue;
+    if (!firstTokenBelongsTo(ts, info, fn, sf, startLine - 1)) return NONE;
     const reason = (m[1] || '').trim();
-    return reason === '' ? '!' : reason;
+    return reason === '' ? { kind: 1, reason: '' } : { kind: 2, reason };
   }
-  return '';
+  return NONE;
+}
+
+// firstTokenBelongsTo: the first token on line0 starts the function or one of its
+// ancestors (e.g. `describe('x', () => {` starts the call that holds the arrow).
+function firstTokenBelongsTo(ts, info, fn, sf, line0) {
+  const first = info.firstOnLine.get(line0);
+  if (first === undefined || first < 0) return false;
+  for (let n = fn; n && n.kind !== ts.SyntaxKind.SourceFile; n = n.parent) {
+    if (n.getStart(sf) === first) return true;
+  }
+  return false;
 }
 
 function formatException(exc) {
-  if (!exc) return '0';
-  if (exc === '!') return '1';
-  return '2' + String(exc).replace(/[\t\r\n]/g, ' ');
+  if (exc.kind === 0) return '0';
+  if (exc.kind === 1) return '1';
+  return '2' + String(exc.reason).replace(/[\t\r\n]/g, ' ');
 }
 
 // scanFile parses one TS/TSX/JS file and returns every counted function-like
@@ -336,7 +395,7 @@ function scanFile(ts, file, limit) {
   const isTsx = file.abs.endsWith('.tsx');
   const src = fs.readFileSync(file.abs, 'utf8');
   const sf = ts.createSourceFile(file.abs, src, ts.ScriptTarget.Latest, true);
-  const codeLines = codeLineSet(ts, sf, src);
+  const info = analyzeSource(ts, sf, src);
   const rows = [];
   let total = 0;
   const visit = (n) => {
@@ -344,9 +403,9 @@ function scanFile(ts, file, limit) {
       total++;
       const start = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
       const end = sf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
-      const lines = countCodeLines(codeLines, start, end);
-      const exc = exceptionAbove(src, start);
-      if (lines > limit || exc !== '') {
+      const lines = countCodeLines(info.codeLines, start, end);
+      const exc = exceptionAbove(ts, info, n, sf, start);
+      if (lines > limit || exc.kind !== 0) {
         const { name, target } = resolveName(ts, sf, n);
         const kind = classifyKind(ts, sf, isTsx, n, target);
         rows.push({ file: file.rel, name, kind, start, lines, exc });
