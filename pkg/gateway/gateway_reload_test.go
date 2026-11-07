@@ -148,21 +148,20 @@ func TestExecuteReload_UnreadableChannelCredentialAppliesWithScopedDegradation(t
 }
 
 // TestRestartServices_LoopAndTaskTriggerStorePaths_MatchBootHomePath boots
-// the real gateway service set with agents.defaults.home pointed at a nested
-// path whose PARENT directory is NOT the real OMNIPUS_HOME, then drives a
-// reload through the real restartServices function and asserts the loop
-// scheduler and task-trigger scheduler are (re)built against the SAME
-// on-disk store paths boot used — never against
-// filepath.Dir(cfg.AgentHomeBasePath()), which would land in a sibling
-// directory under this fixture.
+// the real gateway with agents.defaults.home pointed at a nested path whose
+// parent is NOT the gateway home, then reloads through restartServices.
+// FR-04: the only scheduler store is the copy-1 path,
+// <AgentHomeBasePath>/cron/jobs.json, and reload does not re-home it via
+// filepath.Dir(AgentHomeBasePath()). FR-01/FR-14: tasks_triggers/jobs.json and
+// loops/jobs.json are retired and are never created.
 func TestRestartServices_LoopAndTaskTriggerStorePaths_MatchBootHomePath(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 
 	// A customized agents workspace whose parent is NOT tmpDir: reproduces
-	// the exact divergence the bug depended on. If restartServices ever goes
-	// back to deriving the home dir via filepath.Dir(cfg.AgentHomeBasePath()),
-	// this resolves to <tmpDir>/custom, not <tmpDir>.
+	// the exact divergence the old reload bug depended on. If restartServices
+	// ever goes back to filepath.Dir(cfg.AgentHomeBasePath()), that resolves
+	// to <tmpDir>/custom, not the copy-1 workspace.
 	customAgentsHome := filepath.Join(tmpDir, "custom", "agents_workspace")
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 0},
@@ -206,37 +205,39 @@ func TestRestartServices_LoopAndTaskTriggerStorePaths_MatchBootHomePath(t *testi
 	require.Equal(t, tmpDir, rs.homePath,
 		"services.homePath must be the real OMNIPUS_HOME the gateway was booted with, "+
 			"not derived from agents.defaults.home")
-
-	bootLoopStore := filepath.Join(tmpDir, "loops", "jobs.json")
-	bootTriggerStore := filepath.Join(tmpDir, "tasks_triggers", "jobs.json")
-	require.FileExists(t, bootLoopStore, "boot must create the loop scheduler store under the real homePath")
-	require.FileExists(t, bootTriggerStore, "boot must create the task-trigger store under the real homePath")
-
-	// The wrong, pre-fix derivation would have written here instead — assert
-	// the fixture genuinely creates the divergence this test exists to catch.
-	wrongLoopStore := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "loops", "jobs.json")
-	wrongTriggerStore := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "tasks_triggers", "jobs.json")
-	require.NotEqual(t, bootLoopStore, wrongLoopStore,
-		"fixture bug: customAgentsHome must make filepath.Dir(cfg.AgentHomeBasePath()) diverge from tmpDir")
-	require.NotEqual(t, bootTriggerStore, wrongTriggerStore,
-		"fixture bug: customAgentsHome must make filepath.Dir(cfg.AgentHomeBasePath()) diverge from tmpDir")
-	require.NoFileExists(t, wrongLoopStore, "boot itself must not have used the wrong derivation")
-	require.NoFileExists(t, wrongTriggerStore, "boot itself must not have used the wrong derivation")
+	assertT10SchedulerStores(t, tmpDir, cfg)
 
 	// Drive a reload through the REAL production function.
 	require.NoError(t, restartServices(al, rs, msgBus))
+	assert.Equal(t, tmpDir, rs.homePath, "reload must keep the booted gateway home")
+	assertT10SchedulerStores(t, tmpDir, cfg)
+}
 
-	assert.FileExists(t, bootLoopStore,
-		"restartServices must still write the loop scheduler store under the SAME real homePath boot used")
-	assert.FileExists(t, bootTriggerStore,
-		"restartServices must still write the task-trigger store under the SAME real homePath boot used")
-	assert.NoFileExists(t, wrongLoopStore,
-		"restartServices must NOT re-derive homePath via filepath.Dir(cfg.AgentHomeBasePath()) — "+
-			"that silently re-homes the loop scheduler to a divergent, likely-empty directory whenever "+
-			"agents.defaults.home is customized")
-	assert.NoFileExists(t, wrongTriggerStore,
-		"restartServices must NOT re-derive homePath via filepath.Dir(cfg.AgentHomeBasePath()) "+
-			"for the task-trigger store either")
+// assertT10SchedulerStores checks the merged store rule (FR-01, FR-04, FR-14,
+// S-A.1). The shared store is the copy-1 path. The retired auxiliary files
+// are absent under the gateway home, the agents workspace, and the pre-fix
+// parent-directory derivation.
+func assertT10SchedulerStores(t *testing.T, gatewayHome string, cfg *config.Config) {
+	t.Helper()
+	agentsHome := cfg.AgentHomeBasePath()
+	wrongHome := filepath.Dir(agentsHome)
+	shared := filepath.Join(agentsHome, "cron", "jobs.json")
+	require.NotEqual(t, gatewayHome, wrongHome,
+		"fixture bug: customAgentsHome must make filepath.Dir(cfg.AgentHomeBasePath()) diverge from the gateway home")
+	require.NotEqual(t, shared, filepath.Join(wrongHome, "cron", "jobs.json"))
+	require.FileExists(t, shared, "the shared store is <AgentHomeBasePath>/cron/jobs.json (FR-04 copy-1 path)")
+	require.NoFileExists(t, filepath.Join(wrongHome, "cron", "jobs.json"),
+		"reload must not re-home the shared store via filepath.Dir(AgentHomeBasePath())")
+	if gatewayShared := filepath.Join(gatewayHome, "cron", "jobs.json"); gatewayShared != shared {
+		require.NoFileExists(t, gatewayShared,
+			"the shared store is the copy-1 path, not a second file under the gateway home")
+	}
+	for _, root := range []string{gatewayHome, agentsHome, wrongHome} {
+		require.NoFileExists(t, filepath.Join(root, "loops", "jobs.json"),
+			"FR-01/FR-14: loops/jobs.json is retired and must never be created under "+root)
+		require.NoFileExists(t, filepath.Join(root, "tasks_triggers", "jobs.json"),
+			"FR-01/FR-14: tasks_triggers/jobs.json is retired and must never be created under "+root)
+	}
 }
 
 // TestRestartServices_ReappliesSessionMessagingCaps guards against the caps

@@ -26,8 +26,10 @@ func (r *i1CronLiveWork) RunScheduled(_ context.Context, job *cron.CronJob) (str
 	return job.SessionID, nil
 }
 
-// An already-passing control: exercise the actual hot-reload method with an
-// old process-local lane still live, not just Start on a reused pointer.
+// Traces to: schedules-t10-spec-r6.md S-C.3, FR-26.
+// A same-process reload keeps the one engine. The in-flight callback is not
+// stranded: Running stays set across the reload and clears when that same
+// instance's callback returns.
 func TestI1CronHotReloadPreservesLiveRunning(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -38,46 +40,48 @@ func TestI1CronHotReloadPreservesLiveRunning(t *testing.T) {
 	al, err := agent.NewAgentLoop(cfg, mb, &restMockProvider{})
 	require.NoError(t, err)
 	t.Cleanup(func() { al.Close(); mb.Close() })
-	old := cron.NewCronService(filepath.Join(home, "cron", "jobs.json"))
+	engine := cron.NewCronService(filepath.Join(home, "cron", "jobs.json"))
 	work := &i1CronLiveWork{entered: make(chan struct{}), release: make(chan struct{})}
-	old.SetRunner(work)
-	old.SetStopDrainTimeout(time.Millisecond)
-	require.NoError(t, old.Start())
+	engine.SetRunner(work)
+	require.NoError(t, engine.Start())
 	interval := int64(300000)
-	job, err := old.AddJobFull(cron.JobSpec{Kind: cron.KindHeartbeat, Name: "live-heartbeat", AgentID: "mia",
+	job, err := engine.AddJobFull(cron.JobSpec{Kind: cron.KindHeartbeat, Name: "live-heartbeat", AgentID: "mia",
 		SessionMode: cron.SessionModeContinue, SessionID: "live-heartbeat-session",
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &interval}, Message: "live work"})
 	require.NoError(t, err)
 	finished := make(chan error, 1)
-	go func() { _, _, runErr := old.RunNow(job.ID); finished <- runErr }()
+	go func() { _, _, runErr := engine.RunNow(job.ID); finished <- runErr }()
 	var once sync.Once
-	t.Cleanup(func() { once.Do(func() { close(work.release) }); old.Stop(); old.WaitForLane() })
+	release := func() { once.Do(func() { close(work.release) }) }
+	t.Cleanup(func() { release(); engine.Stop(); engine.WaitForLane() })
 	select {
 	case <-work.entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("real old cron lane never entered its external runner")
+		t.Fatal("real cron lane never entered its external runner")
 	}
-	old.Stop() // Deliberately returns while the non-cooperative work remains live.
-	stored, ok := old.GetJob(job.ID)
+	stored, ok := engine.GetJob(job.ID)
 	require.True(t, ok)
-	require.True(t, stored.State.Running)
-	svc := &services{homePath: home, CronService: old}
+	require.True(t, stored.State.Running, "the live callback must be in flight before reload")
+	svc := &services{homePath: home, CronService: engine}
 	rs := &restartServicesState{al: al, msgBus: mb, runningServices: svc}
-	reloadErr, stop := rs.restartCron() // EXACT same-process hot-reload entry.
+	reloadErr, stop := rs.restartCron()
 	require.NoError(t, reloadErr)
 	require.False(t, stop)
-	t.Cleanup(svc.CronService.Stop)
-	assert.NotSame(t, old, svc.CronService)
+	require.Same(t, engine, svc.CronService, "FR-26: a reload keeps the one engine; it does not reconstruct it")
 	loaded, ok := svc.CronService.GetJob(job.ID)
 	require.True(t, ok)
-	assert.True(t, loaded.State.Running, "hot reload cannot mistake live old work for a dead physical boot")
+	assert.True(t, loaded.State.Running, "reload must not clear a live Running flag or strand the callback on a new load")
 	assert.Equal(t, job.SessionID, loaded.SessionID)
 	assert.Equal(t, job.Schedule, loaded.Schedule)
-	once.Do(func() { close(work.release) })
+	release()
 	select {
 	case runErr := <-finished:
 		require.NoError(t, runErr)
 	case <-time.After(5 * time.Second):
-		t.Fatal("released old runner did not join")
+		t.Fatal("released runner did not join on the kept engine")
 	}
+	settled, ok := svc.CronService.GetJob(job.ID)
+	require.True(t, ok)
+	assert.False(t, settled.State.Running, "completion lands on the same engine; the running job is not stranded")
+	assert.Same(t, engine, svc.CronService, "settlement did not swap the engine")
 }

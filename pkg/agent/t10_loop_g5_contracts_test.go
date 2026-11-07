@@ -105,11 +105,15 @@ func t10LoopAuditIdentity(t *testing.T) {
 		if rec["event"] != audit.EventToolPolicyDenyAttempted {
 			continue
 		}
-		fields, ok := rec["details"].(map[string]any)
-		require.True(t, ok)
-		if fields["tool"] != "dangerous_tool" && fields["tool_name"] != "dangerous_tool" {
+		// S-F.5 / FR-10(e): the WithScheduledJobContext equivalent is an
+		// audit.Entry. The denied tool is the top-level "tool" field.
+		// Job identity stays in details. A name only under details["tool"]
+		// or details["tool_name"] is not that entry.
+		if rec["tool"] != "dangerous_tool" {
 			continue
 		}
+		fields, ok := rec["details"].(map[string]any)
+		require.True(t, ok)
 		found++
 		assert.Equal(t, jobs[0].ID, fields["schedule_job_id"])
 		assert.Equal(t, jobs[0].Name, fields["schedule_job_name"])
