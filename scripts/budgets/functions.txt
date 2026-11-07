@@ -48,6 +48,12 @@
 # Held above the listed function's own code lines to keep the directory shadow, still under the old number:
 #   src/components/agents/AgentProfile.test.tsx  (arg of describe)  own 238  old 402  now 270 (covers ToolsAndPermissions.overrides.test.tsx, 270)
 #   src/components/chat/mermaid-renderer.test.tsx  (arg of describe)  own 294  old 458  now 372 (covers ChatScreen.restart-interrupted.test.tsx, 372)
+# Held above the release's own code lines so the pin also fits the frozen
+# landing/effort branch (b7f87e754), which grows these three functions. Each is
+# the larger of the two measured counts, and far under the old number:
+#   src/store/chat/slices/frames.ts  createFrameSlice  release 560  with effort 564  old 1770  now 564
+#   src/store/chat/slices/frames.ts  handleFrame  release 556  with effort 560  old 1766  now 560
+#   src/store/chat/store.ts  (arg of create)  release 375  with effort 389  old 901  now 389
 # file	qualified name	code lines
 pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	269
 pkg/agent/loop_wire.go	registerSharedToolsWire3.registerBrowserTools	105
@@ -105,14 +111,14 @@ src/routes/_app/-library.test.tsx	(arg of describe)	68
 src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	85
 src/store/chat.test.ts	(arg of describe)	293
 src/store/chat.tool-call-offset.test.ts	(arg of describe)	659
-src/store/chat/slices/frames.ts	createFrameSlice	560
-src/store/chat/slices/frames.ts	handleFrame	556
+src/store/chat/slices/frames.ts	createFrameSlice	564
+src/store/chat/slices/frames.ts	handleFrame	560
 src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	333
 src/store/chat/slices/outbound-lifecycle.ts	sendMessage	185
 src/store/chat/slices/replay-and-status-frames.ts	(arg of produce)	37
 src/store/chat/slices/replay-and-status-frames.ts	(arg of withBucket)	43
 src/store/chat/slices/replay-and-status-frames.ts	handleReplayAndStatusFrame	300
-src/store/chat/store.ts	(arg of create)	375
+src/store/chat/store.ts	(arg of create)	389
 src/store/session.ts	(arg of create)	172
 src/test/contract.test.ts	(arg of describe)	205
 tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	164
