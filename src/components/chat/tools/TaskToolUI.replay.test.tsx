@@ -21,7 +21,14 @@
  * table in SetGoalToolUI.tsx's file doc comment (live = JSON string, replay
  * = `{ text: "<json>" }` envelope, some paths already-parsed object) — the
  * card must render from all three, or a card that renders live vanishes
- * after a reload (the pre-S12 regression).
+ * after a reload (the pre-S12 regression). Once-trigger zone rule — C1 B,
+ * founder decision 2026-11-07 11:16Z: a ONCE trigger shows the VIEWER's own
+ * local time (task detail panel's existing display,
+ * src/components/workspaces/taskFormFields.ts:135, used at
+ * TaskDetailPanel.tsx:1034), never the trigger-zone time; recurring keeps
+ * the founder example "every Monday at 09:00 (Berlin time)" (trigger zone).
+ * The viewer zone is deterministically UTC via the repo's test pin
+ * (vite.config.ts:264: TZ 'UTC', LC_ALL 'en-US').
  *
  * TEST-ID contract: see TaskToolUI.live-wiring.test.tsx's header — both
  * paths render the SAME test ids, which is how "same card" is asserted here.
@@ -69,6 +76,12 @@ const RECURRING_TRIGGER = {
   type: 'recurring',
   config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' },
 }
+// once: the tz stays so the trigger's zone (Europe/Berlin) DIFFERS from the
+// pinned viewer zone (UTC, vite.config.ts:264) — under C1 B (founder
+// 2026-11-07 11:16Z) the card must format the instant in the VIEWER's zone
+// (08:00); an implementation that formats in the trigger's zone (09:00)
+// fails the once test below.
+const ONCE_TRIGGER = { type: 'once', config: { at_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' } }
 const BASE_ARGS = {
   title: 'Weekly report',
   prompt: 'Write the weekly report',
@@ -142,6 +155,32 @@ describe('case (f) — history replay renders the same readable card', () => {
       'href',
       '/workspaces/ws_1/calendar',
     )
+  })
+
+  it('a replayed once trigger shows the VIEWER-local time, not the trigger-zone time (C1 B)', () => {
+    // C1 B (founder 2026-11-07 11:16Z) on the replay path too: the detail
+    // panel's display (taskFormFields.ts:135) formats in the viewer's zone;
+    // with the pinned viewer UTC the fixture instant (09:00 Europe/Berlin)
+    // must read 08:00, and 09:00 must not appear. Use the process-start pin
+    // (src/lib/calendar/eventMapping.test.ts:289–297; vite.config.ts:264),
+    // not a runtime TZ override.
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
+    render(
+      <ToolCallBadge
+        toolCall={makeTaskCall({
+          params: { ...BASE_ARGS, trigger: ONCE_TRIGGER },
+          result: { text: RESULT_CREATE },
+        })}
+      />,
+    )
+    const card = screen.getByTestId('task-tool-card')
+    const schedule = within(card).getByTestId('task-tool-schedule')
+    // Same viewer-local date as the detail panel: 9 November 2026. Accept
+    // date-part ordering as in src/components/ui/date-picker.test.tsx:27–39.
+    expect(schedule.textContent ?? '').toMatch(/2026/)
+    expect(schedule.textContent ?? '').toMatch(/\b(?:Nov(?:ember)?\s+0?9|0?9\s+Nov(?:ember)?|11\/0?9\/2026|2026-11-09)\b/i)
+    expect(schedule.textContent ?? '').toMatch(/(^|\D)0?8[:.]00/)
+    expect(schedule.textContent ?? '').not.toMatch(/(^|\D)0?9[:.]00/)
   })
 
   it('a replayed refused create shows the refusal — never a success card ((h) parity)', () => {

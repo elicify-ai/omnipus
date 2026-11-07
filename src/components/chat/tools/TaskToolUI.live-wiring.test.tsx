@@ -33,6 +33,13 @@
  *    deep link `/workspaces/$workspaceId/chat?panel=tasks` (the board route
  *    is a redirect stub TO exactly this URL:
  *    workspaces.$workspaceId.board.tsx::WorkspaceBoardRedirect).
+ *  - Case (b) zone rule — C1 B, founder decision 2026-11-07 11:16Z: a ONCE
+ *    trigger shows the VIEWER's own local time, the same way the task detail
+ *    panel shows it today: src/components/workspaces/taskFormFields.ts:135
+ *    (`Runs once — ${new Date(at).toLocaleString()}` — viewer locale, viewer
+ *    zone), rendered in the panel at src/components/workspaces/
+ *    TaskDetailPanel.tsx:1034. The card must show the same date and clock
+ *    time for the same instant, and NOT the trigger-zone time.
  *  - Result payload SHAPES for fixtures only (production truth: pkg/tools/
  *    task.go create/update/delete, pkg/tools/run_task.go) — the assertions
  *    never depend on those payloads beyond using them as inputs.
@@ -48,10 +55,17 @@
  * Case (h) asserts visible refusal TEXT, not a test id — the failure
  * presentation is deliberately not over-constrained.
  *
- * Vitest pins TZ=UTC and locale en-US (vite.config.ts test.env), so an
- * implementation that formats in the VIEWER's zone renders 08:00 for the
- * fixtures below and fails these assertions — the founder's example names the
- * TRIGGER's zone ("09:00 (Berlin time)"), not the viewer's.
+ * Vitest pins TZ=UTC and locale en-US for every test (vite.config.ts:264,
+ * the repo's zone-sensitive-test pin), so the viewer zone is deterministically
+ * UTC while the fixtures carry Europe/Berlin. The two cases lean OPPOSITE
+ * ways, by founder decision:
+ *  - recurring (case (a)): the schedule shows the TRIGGER's zone time — the
+ *    founder's example "every Monday at 09:00 (Berlin time)" — so an
+ *    implementation that formats in the viewer's zone renders 08:00 and fails.
+ *  - once (case (b)): C1 B (founder 2026-11-07 11:16Z) — the VIEWER's own
+ *    local time, exactly what the task detail panel shows today — so an
+ *    implementation that formats in the TRIGGER's zone renders 09:00 and
+ *    fails, and the 09:00 time must not appear at all.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -128,8 +142,11 @@ const RECURRING_TRIGGER = {
   type: 'recurring',
   config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' },
 }
-// once = config.at_ms (tz is wire-legal on the partial config and is the zone
-// the brief's case (b) requires the card to name).
+// once = config.at_ms. The tz stays in the fixture so the trigger's zone
+// (Europe/Berlin) DIFFERS from the pinned viewer zone (UTC, vite.config.ts:
+// 264) — under C1 B (founder 2026-11-07 11:16Z) the card must format the
+// instant in the VIEWER's zone (08:00), and an implementation that formats in
+// the trigger's zone (09:00) fails case (b) below.
 const ONCE_TRIGGER = { type: 'once', config: { at_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' } }
 
 const BASE_ARGS = {
@@ -222,21 +239,35 @@ describe('case (a) — create_task with a recurring trigger', () => {
   })
 })
 
-// ── (b) once trigger: explicit date, time and zone ──────────────────────────
-describe('case (b) — create_task with a once trigger', () => {
-  it('shows an explicit date, the time in the trigger zone, and the zone — never raw epoch ms or rule text', () => {
+// ── (b) once trigger: explicit date + VIEWER-local time (C1 B) ─────────────
+describe('case (b) — create_task with a once trigger (C1 B: viewer-local time)', () => {
+  it('shows an explicit date and the VIEWER-local clock time for the instant — never the trigger-zone time, raw epoch ms, or rule text', () => {
+    // Use the process-start TZ pin, not a runtime TZ override: see
+    // src/lib/calendar/eventMapping.test.ts:289–297 and vite.config.ts:264.
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
     renderTaskTool('create_task', ARGS_ONCE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const schedule = within(card).getByTestId('task-tool-schedule')
     const cardText = card.textContent ?? ''
-    // Explicit date: the fixture year appears (date FORMAT is locale-driven
-    // and deliberately not pinned).
+    // C1 B requires the SAME viewer-local date, not merely the right year.
+    // 2026-11-09T08:00Z is 9 November 2026 for the pinned UTC viewer. Accept
+    // textual, local numeric, or ISO ordering without inventing display copy
+    // (date-part precedent: src/components/ui/date-picker.test.tsx:27–39).
     expect(schedule.textContent ?? '').toMatch(/2026/)
-    // The schedule's own time in the trigger zone — under the pinned TZ=UTC a
-    // viewer-zone implementation renders 08:00 and fails this (founder
-    // example shows the trigger-zone time).
-    expect(schedule.textContent ?? '').toMatch(/0?9[:.]00/)
-    expect(cardText).toMatch(/berlin/i)
+    expect(schedule.textContent ?? '').toMatch(/\b(?:Nov(?:ember)?\s+0?9|0?9\s+Nov(?:ember)?|11\/0?9\/2026|2026-11-09)\b/i)
+    // C1 B (founder 2026-11-07 11:16Z): a ONCE trigger shows the VIEWER's own
+    // local time, the same way the task detail panel shows it today —
+    // taskFormFields.ts:135 `Runs once — ${new Date(at).toLocaleString()}`
+    // (viewer locale + viewer zone), rendered in the panel via
+    // TaskDetailPanel.tsx:1034. The repo pins the test viewer zone and locale
+    // globally (vite.config.ts:264: TZ 'UTC', LC_ALL 'en-US'), so for the
+    // fixture instant (09:00 Europe/Berlin = 08:00 UTC) the card must show
+    // 08:00. The (^|\D) guard keeps a wrong-zone "18:00" from matching.
+    expect(schedule.textContent ?? '').toMatch(/(^|\D)0?8[:.]00/)
+    // Kills the round-1 behaviour (trigger-zone formatting): the trigger's
+    // zone clock time (09:00) must NOT be what is shown while the zones
+    // differ.
+    expect(schedule.textContent ?? '').not.toMatch(/(^|\D)0?9[:.]00/)
     // "Explicit" excludes the raw wire forms: no epoch-ms literal, no rule.
     expect(cardText).not.toMatch(/1[0-9]{12}/)
     expect(cardText).not.toMatch(RAW_RULE_RE)
