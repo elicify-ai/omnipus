@@ -1200,6 +1200,30 @@ func (s *TaskTriggerScheduler) isArmedLocked(taskID string, nowMs int64) bool {
 	return job.State.NextRunAtMS != nil || s.cs.JobDispatchInFlight(tracked.jobID)
 }
 
+// ArmedOccurrenceMS is the read-only projection of taskID's live registration
+// for the Calendar's run-now control (T10 spec r6, FR-16 "armed-occurrence
+// read contract"; wire field TaskOccurrenceSet.armed_occurrence_ms). It
+// returns the tracked job's unconsumed next-run instant — future or overdue
+// but not yet collected — and true. It returns false when the task has no
+// tracked job, the tracked job no longer resolves in the engine, or the job
+// holds no next run (a collected fire queued or running, or a de-armed
+// registration). It never consults the task definition or run history, so
+// two tasks with identical recurrence differ here when only one is armed.
+// It writes nothing.
+func (s *TaskTriggerScheduler) ArmedOccurrenceMS(taskID string) (int64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tracked, ok := s.taskToJob[taskID]
+	if !ok {
+		return 0, false
+	}
+	job, ok := s.cs.GetJob(tracked.jobID)
+	if !ok || job.State.NextRunAtMS == nil {
+		return 0, false
+	}
+	return *job.State.NextRunAtMS, true
+}
+
 // shouldReArmLocked is RunRecoverySweep's per-task orphan/ambiguous
 // classification and streak bookkeeping (H1). Caller must hold mu.
 //

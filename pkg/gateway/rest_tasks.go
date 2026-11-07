@@ -489,7 +489,23 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 		jsonErr(w, http.StatusInternalServerError, "could not expand occurrences")
 		return
 	}
+	if sched := agent.GetTaskTriggerScheduler(a.agentLoop); sched != nil {
+		projectArmedOccurrences(sets, sched.ArmedOccurrenceMS)
+	}
 	jsonOK(w, sets)
+}
+
+// projectArmedOccurrences stamps each set's armed_occurrence_ms from the live
+// scheduler registration (T10 spec r6, FR-16 armed-occurrence read contract).
+// armed is the scheduler's read seam; a task with no armed registration keeps
+// the field absent. The recurrence expansion and run overlay are untouched.
+func projectArmedOccurrences(sets []gen.TaskOccurrenceSet, armed func(taskID string) (int64, bool)) {
+	for i := range sets {
+		if ms, ok := armed(sets[i].TaskId); ok {
+			v := ms
+			sets[i].ArmedOccurrenceMs = &v
+		}
+	}
 }
 
 // LiveTaskActivityReader is the narrow gateway-side seam for a running
