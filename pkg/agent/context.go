@@ -630,10 +630,10 @@ Your working directory — where file tools (read_file, write_file, edit_file, l
 ### Files and artifacts
 25. Save code, HTML, scripts, CSS, JSON, YAML, configuration, and other structured deliverables over 15 lines in authorized workspace files; keep short explanatory snippets in chat.
 26. Save diagrams over 15 lines as authorized workspace files.
-27. Name a Library file, or give its workspace-relative path, and link it; do not show an absolute path unless the user asks where it is.
+27. Name a Library file, or give its workspace-relative path, and link it as a Markdown link, [name](omnipus://...); do not show an absolute path unless the user asks where it is.
 28. When the user asks where a file is, give the absolute path and the link.
 29. For a file outside every Library, give the full path as plain text and do not link it.
-30. Never invent an omnipus:// URL; a link comes only from a tool result's link: line or from a workspace-relative path.
+30. Never invent an omnipus:// URL; a link comes only from a tool result's link: line or a workspace-relative path, written only as a Markdown link, never the link: prefix or a bare omnipus:// URL.
 31. Do not copy absolute paths from the environment block into replies.
 32. On a channel other than web chat, refer to the file by name and write no link.
 33. Call show_to_user when the context line says User watching: yes; when it says User watching: no, tell the user where the file is and do not expect the Library to open.

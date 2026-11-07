@@ -33,11 +33,16 @@ func TestBaseInstructions_LinkSection(t *testing.T) {
 	}
 
 	// Topics the rewritten "### Files and artifacts" group must state (BS-7.1).
+	// The two Markdown-link phrases pin how rules 27 and 30 tell the agent to
+	// write a link (US-1 AS-1): the [name](omnipus://...) form in rule 27, and
+	// rule 30's ban on printing the link: prefix or a bare omnipus:// URL.
 	for _, phrase := range []string{
 		"show_to_user",
 		"User watching: yes",
 		"omnipus://",
 		"link:",
+		"link it as a Markdown link, [name](omnipus://...)",
+		"written only as a Markdown link, never the link: prefix or a bare omnipus:// URL",
 	} {
 		if !strings.Contains(body, phrase) {
 			t.Errorf("operating rules missing %q (BS-7.1 / FR-023)", phrase)
