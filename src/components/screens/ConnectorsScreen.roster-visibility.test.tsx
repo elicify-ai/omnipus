@@ -28,7 +28,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { ChannelEntry } from '@/lib/api/generated/openapi-types'
+import type { ChannelEntry, ChannelOutboundRead } from '@/lib/api/generated/openapi-types'
 import { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
@@ -39,6 +39,27 @@ import { ConnectorsScreen } from './ConnectorsScreen'
 // a stored credential (rest_channels.go::redactChannelConfig). Synthetic
 // reference name, never a secret value.
 const CONFIGURED_SENTINEL = '[configured]'
+
+// A contract-valid healthy Discord outbound read, typed against the generated
+// wire type — the exact shape src/lib/api/channels.ts::fetchChannelOutbound
+// validates with the generated Zod schema. Honest values:
+//   start_supported: true  — Discord is start-supported
+//                            (pkg/channels/outbound_policy.go::platformStartRules)
+//   availability: not_running — this fixture's instance is disabled
+//   revision: present — so the Starting-messages section renders its FULL
+//                       healthy layout, its own Save included (F10: the
+//                       previous body served state 'stopped', which the
+//                       generated ChannelAvailability enum rejects — the
+//                       decoder failed and the section silently showed its
+//                       "Couldn't load" notice — and start_supported false,
+//                       which hid the section's own Save from the Configure
+//                       Save lookup).
+const OUTBOUND_DISCORD_READ: ChannelOutboundRead = {
+  outbound: { policy: 'reply_only', targets: [] },
+  revision: 'roster-fixture-revision',
+  availability: { state: 'not_running', reason: 'fixture instance is disabled' },
+  start_supported: true,
+}
 
 function instance(id: string, name: string, enabled: boolean): ChannelEntry {
   return {
@@ -98,14 +119,10 @@ function transportFixture(
       throw new Error(`unexpected HTTP boundary: ${method} ${path}`)
     }
     if (/^\/api\/v1\/channels\/[^/]+\/outbound$/.test(path)) {
-      // Served like the real gateway (ChannelOutboundRead shape) so the real
-      // panel's Starting-messages section renders during the D5 Save flow.
-      return json({
-        outbound: { policy: 'reply_only', targets: [] },
-        revision: 'roster-fixture-revision',
-        availability: { state: 'stopped' },
-        start_supported: false,
-      })
+      // Served like the real gateway: the typed, contract-valid healthy
+      // Discord read below (F10, CHECK round 3), so the real Starting-messages
+      // section renders during the D5 Save flow.
+      return json(OUTBOUND_DISCORD_READ)
     }
     if (/^\/api\/v1\/channels\/[^/]+\/routing$/.test(path)) return json(ROUTING)
     const configMatch = path.match(/^\/api\/v1\/channels\/([^/]+)$/)
@@ -585,11 +602,24 @@ describe('Connectors — a Save in Configure refreshes the saved-settings classi
     // staying disabled and unbound (Save, never Save & Enable).
     await act(async () => { fireEvent.click(tile) })
     const tokenInput = await screen.findByLabelText(/Bot Token/)
+    // F10 (CHECK round 3): the Starting-messages section must load from the
+    // contract-valid outbound read. Its frame renders as soon as the outbound
+    // read settles — in the healthy state AND in the failed state — so the
+    // heading here is only the settle premise; the assertion below is the
+    // discriminator.
+    const configureSheet = await screen.findByRole('dialog', { name: 'Configure Discord' })
+    await within(configureSheet).findByText('Starting messages')
+    expect(within(configureSheet).queryByText(/Couldn't load the Starting messages setting/),
+      'F10: the outbound read must be contract-valid — a schema-invalid availability state lands the section on its "Couldn\'t load" error instead of its real healthy layout').not.toBeInTheDocument()
     await act(async () => {
       fireEvent.change(tokenInput, { target: { value: 'qa-tok-round5-d5' } })
     })
+    // The Configure Save is the panel footer's — the one beside "Save &
+    // Enable" — never the Starting-messages section's own Save, which the
+    // healthy read now renders as a sibling control in the same sheet (F10).
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      const saveAndEnable = within(configureSheet).getByRole('button', { name: 'Save & Enable' })
+      fireEvent.click(within(saveAndEnable.closest('div') ?? configureSheet).getByRole('button', { name: 'Save' }))
     })
     // The save committed through the real HTTP boundary…
     await waitFor(() => {
