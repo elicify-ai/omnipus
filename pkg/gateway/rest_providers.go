@@ -450,8 +450,14 @@ type providerPut struct {
 	reqProtocol     string
 	// reqRegion is issue #800's own field (Bedrock region contract): the
 	// per-provider-row selected region, persisted verbatim when non-empty.
-	reqRegion           string
-	isCustomRow         bool
+	reqRegion   string
+	isCustomRow bool
+	// storedIdentity is set only when admission filled an omitted
+	// api_base/protocol from the stored custom row (#1639, ruling B). The
+	// write re-checks that row under configMu and refuses with 409 when it
+	// was removed or changed in between (ruling rule 5).
+	storedIdentity *storedCustomIdentity
+
 	keyChanged          bool
 	putValidationResult providers_pkg.ValidationResult
 	credRefName         string
@@ -584,6 +590,12 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 	p.reqRegion = derefStr(p.req.Region)
 	var admitErr error
 	p.isCustomRow, admitErr = providerAdmission(a.providerCatalog, p.providerID, p.reqAPIBase, p.reqProtocol)
+	if errors.Is(admitErr, providers_pkg.ErrUnknownProvider) && a.providerPutFillStoredCustomIdentity(p) {
+		// #1639 (architect ruling B): an existing custom row keeps its
+		// stored base/protocol when the request leaves them out; admit the
+		// combined pair through the same shared rule.
+		p.isCustomRow, admitErr = providerAdmission(a.providerCatalog, p.providerID, p.reqAPIBase, p.reqProtocol)
+	}
 	if admitErr != nil {
 		field := "id"
 		if errors.Is(admitErr, providers_pkg.ErrUnknownProvider) && p.reqAPIBase != "" {
@@ -595,6 +607,65 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 		return nil, false
 	}
 	return p, true
+}
+
+// storedCustomIdentity is the stored custom row's base and protocol that a
+// PUT's admission relied on (#1639, architect ruling B).
+type storedCustomIdentity struct {
+	apiBase  string
+	protocol string
+}
+
+// errProviderRowChanged aborts a fallback-admitted provider write whose
+// stored custom row was removed or changed after admission (ruling rule 5).
+var errProviderRowChanged = errors.New("provider was removed or changed; reload")
+
+// providerPutFillStoredCustomIdentity fills an omitted or empty api_base
+// and/or protocol from the stored row with the same id — only when that row
+// is custom with a non-empty base and a valid custom protocol (ruling B,
+// rules 1, 3 and 4). It reports whether anything was filled; the caller then
+// runs the normal admission on the combined pair. It lives in the gateway
+// PUT only: the onboarding probe and CLI onboard keep needing both fields.
+func (a *restAPI) providerPutFillStoredCustomIdentity(p *providerPut) bool {
+	needBase := strings.TrimSpace(p.reqAPIBase) == ""
+	needProtocol := strings.TrimSpace(p.reqProtocol) == ""
+	if !needBase && !needProtocol {
+		return false
+	}
+	for _, m := range a.agentLoop.GetConfig().Providers {
+		if m.IsVirtual() || strings.TrimSpace(m.Provider) != p.providerID {
+			continue
+		}
+		base := strings.TrimSpace(m.APIBase)
+		if !m.Custom || base == "" || !providers_pkg.IsCustomRowProtocol(m.Protocol) {
+			return false
+		}
+		p.storedIdentity = &storedCustomIdentity{apiBase: base, protocol: strings.TrimSpace(m.Protocol)}
+		if needBase {
+			p.reqAPIBase = base
+		}
+		if needProtocol {
+			p.reqProtocol = p.storedIdentity.protocol
+		}
+		return true
+	}
+	return false
+}
+
+// stillMatches reports whether the persisted provider list still holds the
+// same custom row this save was admitted against (ruling rule 5).
+func (s *storedCustomIdentity) stillMatches(providerList []any, providerID string) bool {
+	for _, entry := range providerList {
+		row, ok := entry.(map[string]any)
+		if !ok || strings.TrimSpace(strVal(row, "provider")) != providerID {
+			continue
+		}
+		custom, _ := row["custom"].(bool)
+		return custom &&
+			strings.TrimSpace(strVal(row, "api_base")) == s.apiBase &&
+			strings.TrimSpace(strVal(row, "protocol")) == s.protocol
+	}
+	return false
 }
 
 // providerPutResolveExisting looks the provider up in the current config and applies first-row defaults.
@@ -789,6 +860,11 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 	putStampStr := p.putStamp.Format(time.RFC3339)
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		providerList, _ := m["providers"].([]any)
+		if p.storedIdentity != nil && !p.storedIdentity.stillMatches(providerList, p.providerID) {
+			// Never append or rewrite a row whose identity this save
+			// took from a row that is no longer there (#1639 rule 5).
+			return errProviderRowChanged
+		}
 		updated := false
 		for _, entry := range providerList {
 			model, ok := entry.(map[string]any)
@@ -850,6 +926,12 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errProviderRowChanged) {
+			slog.Warn("rest: provider update refused: stored custom row removed or changed during save",
+				"provider", p.providerID)
+			jsonErr(p.w, http.StatusConflict, errProviderRowChanged.Error())
+			return false
+		}
 		slog.Error("rest: save config for provider update", "error", err)
 		jsonServerFailure(p.w, http.StatusInternalServerError, "could not save config", err)
 		return false
