@@ -32,6 +32,20 @@ Correction: the original pack called S-02 a passing pin and described several un
 
 GREEN, scratch-clone mutation checks, proof-of-failability checklist completion and an independent CHECK verdict are **deferred to CHECK**. No RED suite here is described as feature delivery.
 
+## Round 6 — chip strings, founder decision 2026-11-07
+
+The visible chip is the level actually used, or "Nothing sent". The longer sentence is the accessible name. Dashed outline means inherited (`data-effort-inherited`); the amber dot (`data-effort-mark=attention`) means a different level was sent, or nothing was sent; the gold dot (`data-effort-mark=command`) means `/effort`. C5 (XHigh versus "Extra high") is unchanged: it is still an open question.
+
+| Place | What the test or spec now requires |
+|---|---|
+| `tests/e2e/effort.spec.ts` S-41 | Before the other conversation: visible "Max", name "Effort: Max, set for this conversation", gold dot present. After: gold dot absent and that name absent. The old negative text check passed even before the reset. |
+| `tests/e2e/effort.spec.ts` S-86 lines that open on the model which offers Off | Visible "Off", dashed, name "Effort: Not set: Agent's setting: Off", no amber or command dot. |
+| `model-effort-picker.wireframe.test.tsx` CHECK6 F1 | Inherited High on levels `["none"]`, switch false: visible "Nothing sent", amber, name "Effort: Not set: Agent's setting: High, nothing sent here", and `onChange` is not called. Changing the inherited setting to Off without a model switch shows "Off" and still does not call `onChange`. |
+| Same file, CHECK6 F5 | `getByRole('dialog', { name: 'Effort · {model}' })` for the ordinary popover and `getByRole('dialog', { name: 'Finish switching to {model}' })` for the blocked step. |
+| Spec of record `effort-levels-spec-r10.md` | S-12, S-41, S-72, S-87, the composer state row, the journey, the stale-level row, and the plain-copy line now say the same. |
+
+C4 keeps one sentence, "Omnipus can't change effort for this model.", as the muted chip's text and its accessible name.
+
 ## Round-4 test reconciliation — author observations, not independent CHECK
 
 ### Repairs and retained oracles

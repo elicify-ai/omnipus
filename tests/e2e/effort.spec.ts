@@ -137,8 +137,18 @@ test('S-21: saved answers keep exact mapped note, no note for exact High, and re
 test('S-41: web /effort max stays local, sends no server message, and resets in another conversation',async({page,effort})=>{
  const sends=observeSends(page);let writes=0;await page.route('**/api/v1/agents/**',async route=>{if(route.request().method()!=='GET')writes++;await route.continue()})
  await open(page,effort);await page.getByTestId('chat-input').fill('/effort max');await page.getByTestId('chat-input').press('Enter')
- await expect(page.getByTestId('effort-chip')).toContainText('Max, set for this conversation');expect(sends).toEqual([]);expect(writes).toBe(0)
- await openSessionByDeepLink(page,effort.otherId,effort.origin);await expect(page.getByTestId('effort-chip')).not.toContainText('Max, set for this conversation')
+ // Founder 2026-11-07 C2: visible text is the level; the sentence is the accessible name, with the gold command dot.
+ const commanded=page.getByTestId('effort-chip')
+ await expect(commanded).toHaveText('Max')
+ await expect(commanded).toHaveAccessibleName('Effort: Max, set for this conversation')
+ await expect(commanded.locator('[data-effort-mark="command"]')).toHaveCount(1)
+ expect(sends).toEqual([]);expect(writes).toBe(0)
+ await openSessionByDeepLink(page,effort.otherId,effort.origin)
+ // Present-before / absent-after. The chip must be on screen first: a missing chip also has zero command dots.
+ const reset=page.getByTestId('effort-chip')
+ await expect(reset).toBeVisible()
+ await expect(reset.locator('[data-effort-mark="command"]')).toHaveCount(0)
+ await expect(reset).not.toHaveAccessibleName(/set for this conversation/)
 })
 test('S-95: scrolling real history viewport and reloading preserves all three recorded-answer notes and counts',async({page,effort})=>{
  const history=await recordedHistory(page,effort,true);await open(page,effort)
@@ -197,6 +207,17 @@ test('S-61 wizard: Change now puts High on the declared completion variant with 
  expect(defaultWrites).toBe(0)
 })
 
+// Founder 2026-11-07 C1. The chat model offers Off, so Not set shows that level
+// (not the source sentence), with a dashed outline and no attention or command dot.
+async function expectOfferedInheritedOff(page:Page){
+ const chip=page.getByTestId('effort-chip')
+ await expect(chip).toHaveText('Off')
+ await expect(chip).toHaveAccessibleName("Effort: Not set: Agent's setting: Off")
+ await expect(chip).toHaveAttribute('data-effort-inherited','true')
+ await expect(chip.locator('[data-effort-mark="attention"]')).toHaveCount(0)
+ await expect(chip.locator('[data-effort-mark="command"]')).toHaveCount(0)
+}
+
 // S-86 chat caller: the actual composer owns the pending switch. API edges
 // provide stored inherited Off; no mapper/control/transaction is substituted.
 async function inheritedChat(page:Page,e:Environment,target:string){
@@ -214,7 +235,8 @@ async function inheritedChat(page:Page,e:Environment,target:string){
  const connected=providers.body as Array<Record<string,unknown>>;expect(connected.length).toBeGreaterThan(0)
  await page.route('**/api/v1/providers',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify([{...connected[0],id:'openrouter',name:'openrouter',display_name:'OpenRouter',status:'connected',models:[MODEL,toLevels,toMuted]}])}))
  await open(page,e)
- await expect(page.getByTestId('effort-chip')).toContainText("Agent's setting: Off")
+ // Founder 2026-11-07 C1: this model offers Off, so the chip shows that level, dashed, and keeps the source in the name.
+ await expectOfferedInheritedOff(page)
  await page.getByTestId('composer-model-selector').click();await page.getByText(target,{exact:true}).last().click()
  return page.getByTestId('composer-model-selector')
 }
@@ -233,7 +255,7 @@ test('S-86 chat: inherited Off blocks a no-Off model until High is explicitly ch
 test('S-86 chat: Escape preserves the previous model and Not set when effective inherited Off blocks',async({page,effort})=>{
  const sends=observeSends(page);const trigger=await inheritedChat(page,effort,'openai/gpt-6.1-sol')
  await page.keyboard.press('Escape');await expect(trigger).toContainText(MODEL);await expect(trigger).toBeFocused()
- await expect(page.getByTestId('effort-chip')).toContainText("Agent's setting: Off");expect(sends).toEqual([])
+ await expectOfferedInheritedOff(page);expect(sends).toEqual([])
  await page.getByTestId('effort-chip').click();await expect(page.getByRole('radio',{name:/^(Not set|Agent's setting)/i})).toHaveAttribute('aria-checked','true')
 })
 test('S-86 chat: inherited Off to nothing sendable stores Provider default only after the explicit escape choice',async({page,effort})=>{
@@ -246,6 +268,6 @@ test('S-86 chat: inherited Off to nothing sendable stores Provider default only 
 for(const action of ['Cancel','Escape'])test(`S-86 chat: ${action} on nothing sendable keeps previous model and Not set`,async({page,effort})=>{
  const sends=observeSends(page);const trigger=await inheritedChat(page,effort,'budget-only-model')
  if(action==='Escape')await page.keyboard.press('Escape');else await page.getByRole('button',{name:'Cancel',exact:true}).click()
- await expect(trigger).toContainText(MODEL);await expect(page.getByTestId('effort-chip')).toContainText("Agent's setting: Off");expect(sends).toEqual([])
+ await expect(trigger).toContainText(MODEL);await expectOfferedInheritedOff(page);expect(sends).toEqual([])
  await page.getByTestId('effort-chip').click();await expect(page.getByRole('radio',{name:/^(Not set|Agent's setting)/i})).toHaveAttribute('aria-checked','true')
 })

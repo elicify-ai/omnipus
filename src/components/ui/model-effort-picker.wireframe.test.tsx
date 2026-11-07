@@ -209,6 +209,57 @@ describe('chip text as the founder decided (C1 to C3, 2026-11-07)', () => {
     expect(litBars(chip)).toBeNull()
   })
 
+  // Founder 2026-11-07 C1 / CHECK6 F1. D2 case 25: High on levels ["none"], switch
+  // false, maps to Provider default (no effort field). The stored chat choice
+  // stays Not set; rendering must not write Provider default.
+  it('CHECK6 F1: inherited High on a none-only model shows Nothing sent and does not store a choice', async () => {
+    const onChange = vi.fn()
+    renderWithCatalog(
+      <EffortControl
+        value={{ provider: 'openrouter', model: NONE_ONLY_MODEL, effort: '' }}
+        scope="chat"
+        inherit="high"
+        onChange={onChange}
+        data-testid="chip"
+      />,
+    )
+    const chip = await screen.findByTestId('chip')
+    expect(chip.textContent).toBe('Nothing sent')
+    expect(chip).toHaveAttribute('data-effort-inherited', 'true')
+    expect(chip).toHaveAccessibleName("Effort: Not set: Agent's setting: High, nothing sent here")
+    expect(chip.querySelector('[data-effort-mark="attention"]')).not.toBeNull()
+    expect(litBars(chip)).toBeNull()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  // The agent's setting can change with no model switch and no new stored choice.
+  // Off is offered on this model as `none`, so the chip becomes the offered level.
+  it('CHECK6 F1: an inherited-setting change without a model switch updates the chip and keeps Not set stored', async () => {
+    const onChange = vi.fn()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (inherit: string) => (
+      <QueryClientProvider client={client}>
+        <EffortControl
+          value={{ provider: 'openrouter', model: NONE_ONLY_MODEL, effort: '' }}
+          scope="chat"
+          inherit={inherit}
+          onChange={onChange}
+          data-testid="chip"
+        />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view('high'))
+    const chip = await screen.findByTestId('chip')
+    expect(chip.textContent).toBe('Nothing sent')
+    expect(chip).toHaveAccessibleName("Effort: Not set: Agent's setting: High, nothing sent here")
+    rerender(view('off'))
+    expect(chip.textContent).toBe('Off')
+    expect(chip).toHaveAttribute('data-effort-inherited', 'true')
+    expect(chip).toHaveAccessibleName("Effort: Not set: Agent's setting: Off")
+    expect(chip.querySelector('[data-effort-mark="attention"]')).toBeNull()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('C2: after /effort the chip shows the gold dot and the level only; the name says "set for this conversation"', async () => {
     renderWithCatalog(
       <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: 'high' }} scope="chat" setByCommand data-testid="chip" />,
@@ -217,6 +268,32 @@ describe('chip text as the founder decided (C1 to C3, 2026-11-07)', () => {
     expect(chip.textContent).toBe('High')
     expect(chip).toHaveAccessibleName('Effort: High, set for this conversation')
     expect(chip.querySelector('[data-effort-mark="command"]')).not.toBeNull()
+  })
+})
+
+describe('CHECK6 F5: effort dialogs have accessible names (founder 2026-11-07)', () => {
+  beforeEach(() => {
+    vi.mocked(fetchProvidersCatalog).mockResolvedValue(CATALOG)
+  })
+
+  it('names the ordinary popover "Effort · {model}" and the blocked step "Finish switching to {model}"', async () => {
+    const user = userEvent.setup()
+    const ordinary = renderWithCatalog(
+      <EffortControl value={{ provider: 'openrouter', model: LEVELS_MODEL, effort: 'high' }} scope="chat" data-testid="chip" />,
+    )
+    await user.click(await screen.findByTestId('chip'))
+    expect(await screen.findByRole('dialog', { name: `Effort · ${LEVELS_MODEL}` })).toBeInTheDocument()
+    ordinary.unmount()
+
+    renderWithCatalog(
+      <EffortControl
+        value={{ provider: 'openrouter', model: PREVIOUS_MODEL, effort: 'off' }}
+        scope="chat"
+        pendingSwitch={{ provider: 'openrouter', model: LEVELS_MODEL, kind: 'levels', nearest: 'low' }}
+      />,
+    )
+    expect(await screen.findByRole('dialog', { name: `Finish switching to ${LEVELS_MODEL}` })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: `Effort · ${LEVELS_MODEL}` })).toBeNull()
   })
 })
 
