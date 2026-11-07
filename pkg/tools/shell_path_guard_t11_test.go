@@ -245,9 +245,10 @@ func TestGuard_BraceConcatenationStillRefused(t *testing.T) {
 
 // TestGuard_UnquotedBraceWithholdsExemption is the simplified S5 rule.
 // The stand-alone exemption holds only when no text the shell reads has an
-// unquoted brace. Braces inside quotes, escaped braces, and a here-document
-// fed to a non-shell stay allowed. Nested shells, eval, and a here-document
-// fed to a shell still refuse. Unparsable text withholds the exemption.
+// unquoted brace. Quoted and escaped braces retain their no-document behaviour.
+// Under Q11 A the positive Python document below matches the approved whole
+// command, not a general non-shell-document exception. Nested shells, eval and
+// shell-fed documents still refuse. Unparsable text withholds the exemption.
 func TestGuard_UnquotedBraceWithholdsExemption(t *testing.T) {
 	tool, cwd := guardFixture(t)
 	restore := t11ForceRootWritable(t, false)
