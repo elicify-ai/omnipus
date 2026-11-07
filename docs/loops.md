@@ -57,7 +57,11 @@ An active loop from an older install, whose job lived in a separate file, contin
 
 ## Replacing or stopping a loop
 
-Starting another loop in the same chat, or `/loop stop`, is meant to leave only the selected next step. **Pending a production fix:** in the current build, a turn that finishes at the same moment can leave a competing step, and if saving the stopped state fails, the command can still say "Loop stopped." while the saved loop stays active and may restart at the next boot. Do not rely on Stop or replacement being instant and permanent until that fix is verified.
+`/loop stop` and starting another loop in the same chat wait for a run that is just finishing. A step that run scheduled is removed too, and the stopped status is the last one the chat receives.
+
+- If the stopped state cannot be saved, nothing changes: the reply says "Could not stop the loop … The loop is still running; try again", and the loop carries on as before.
+- A new loop starts only once every step of the old one is gone. If an old step cannot be removed, the reply starts with "Could not start the loop"; the old loop is stopped when its stopped state was saved, and you can try again.
+- When a loop reaches its run limit but its stopped state cannot be saved, no stopped status is shown and no further run starts. The stop is tried again at the next scheduled time or the next gateway start.
 
 ## If recovery cannot be saved
 

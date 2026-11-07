@@ -92,7 +92,7 @@ When an **agent** created the task and has such a main chat, that creator gets o
 - If the creator is already the assignee or the agent that started the run, they get that one message, not a second copy.
 - An agent who is not a member of the workspace the task belongs to gets no result message and no substitute status message.
 - A skipped or missed time, where nothing ran, tells nobody.
-- If that run recorded no recipient at all (no eligible main chat for the assignee, and no agent starter), the creator is not sent a copy either. The copy is added only alongside at least one recipient the run already had.
+- The creator still gets its copy when the run itself has nobody else to tell. For example, a person used **Run now** on a task assigned to a worker: the worker has no main chat and a person is not an agent starter, so the creator is the only one told. The creator is never added to the run's own list of recipients.
 - If the creator's chat in that workspace cannot be resolved, the loss is written on the task's own conversation ("The completion notice for … could not be delivered") and nobody else is substituted in.
 - If a late result loses to a Stop, the notice is the stopped outcome, once. A conflict while the task is not finished sends nothing.
 
