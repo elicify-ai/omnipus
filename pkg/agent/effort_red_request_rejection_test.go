@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -343,22 +344,26 @@ func TestT_P2_S26_RejectionRememberedUntilRestart(t *testing.T) {
 	assert.False(t, bodyHasEffort(bodies[2]), "no effort field on the remembered rejection request")
 }
 
-// TestT_P2_S28_Only400And422TriggerRetry pins dataset D4: only 400 and 422
-// to an effort-carrying request trigger the single resend.
-// Traces to: S-28, D4 rows 2-6.
+// TestT_P2_S28_Only400And422TriggerRetry pins dataset D4 plus the founder's
+// issue #1280 decision: only 400 and 422 to an effort-carrying request
+// trigger the single effort-FREE resend (S-28), while 500/503 are retried by
+// the fallback chain's #1280 retry plan — 1 call + 5 retries (retry_plan.go),
+// every one of them KEEPING the effort setting.
+// Traces to: S-28, D4 rows 2-6, issue #1280.
 func TestT_P2_S28_Only400And422TriggerRetry(t *testing.T) {
 	tests := []struct {
-		name      string
-		status    int
-		wantRetry bool
+		name        string
+		status      int
+		wantRetry   bool // S-28: the single resend WITHOUT effort
+		planResends bool // #1280: the plan resends WITH the effort kept
 	}{
-		{"400 retries once", http.StatusBadRequest, true},
-		{"422 retries once", http.StatusUnprocessableEntity, true},
-		{"401 no retry", http.StatusUnauthorized, false},
-		{"403 no retry", http.StatusForbidden, false},
-		{"429 no retry", http.StatusTooManyRequests, false},
-		{"500 no retry", http.StatusInternalServerError, false},
-		{"503 no retry", http.StatusServiceUnavailable, false},
+		{"400 retries once", http.StatusBadRequest, true, false},
+		{"422 retries once", http.StatusUnprocessableEntity, true, false},
+		{"401 no retry", http.StatusUnauthorized, false, false},
+		{"403 no retry", http.StatusForbidden, false, false},
+		{"429 no retry", http.StatusTooManyRequests, false, false},
+		{"500 plan resends keeping effort (#1280)", http.StatusInternalServerError, false, true},
+		{"503 plan resends keeping effort (#1280)", http.StatusServiceUnavailable, false, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -384,6 +389,13 @@ func TestT_P2_S28_Only400And422TriggerRetry(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			f := newRejectionFixture(t, srv.URL, "", "", "high")
+			if tc.planResends {
+				// The #1280 plan's real waits (2s/5s/10s/20s/40s, retry_plan.go)
+				// are shortened through the chain's existing WithRetryWait test
+				// seam — the waits themselves are pkg/providers' own plan tests'
+				// subject, and the real 77 s must not run here per row.
+				f.al.fallback = f.al.fallback.WithRetryWait(func(ctx context.Context, _ time.Duration) error { return nil })
+			}
 			_, callErr := f.rt.callProviderOnce(f.rf.callMessages, nil)
 			if tc.wantRetry {
 				require.NoError(t, callErr, "the one effort-free resend succeeds")
@@ -405,11 +417,15 @@ func TestT_P2_S28_Only400And422TriggerRetry(t *testing.T) {
 			if tc.wantRetry {
 				wantEffortFree = 1
 				require.Len(t, bodies, 2, "400/422 cause exactly one resend")
+			} else if tc.planResends {
+				require.Len(t, bodies, providers.RetryPlanMaxAttempts,
+					"#1280: the plan makes the original call plus 5 retries, all keeping the effort")
 			} else if tc.status != http.StatusTooManyRequests {
 				require.Len(t, bodies, 1, "non-rate-limit failures do not resend at all")
 			}
 			// S-28 counts only extra requests WITHOUT effort. Existing 429
-			// rate-limit retries may repeat the original effort-bearing request.
+			// rate-limit retries and the #1280 5xx plan retries may repeat the
+			// original effort-bearing request.
 			assert.Equal(t, wantEffortFree, effortFree, "status %d: exact effort-free extra requests (S-28)", tc.status)
 		})
 	}

@@ -72,6 +72,12 @@ func tlPersistentDeps(t *testing.T) (*systools.Deps, *config.Config) {
 	tlInstallEffortCatalog(t)
 	deps, cfg := newTestDeps(t)
 	deps.SaveConfigLocked = func(c *config.Config) error { return config.SaveConfig(deps.ConfigPath, c) }
+	// S-76/S-77: get_agent fields ["all"] reads tool_permissions from the
+	// central tool metadata catalog (r17 §7.12.1); with none wired the read
+	// is refused CATALOG_UNAVAILABLE. Wire the real builtin metadata, the
+	// same catalog defaultToolsExistingBody uses.
+	metadata := append(systools.AllTools(deps), tools.GeneralBuiltinMetadata()...)
+	deps.ToolCatalog = func() []tools.Tool { return metadata }
 	if err := config.SaveConfig(deps.ConfigPath, cfg); err != nil {
 		t.Fatal(err)
 	}

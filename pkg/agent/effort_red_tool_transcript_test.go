@@ -85,9 +85,15 @@ func TestT_Tools_S63_ActualDispatchStoresEffortCallAndResult(t *testing.T) {
 			calls++
 			assert.Equal(t, args, call.Parameters)
 			assert.Equal(t, "success", call.Status)
-			result, err := json.Marshal(call.Result)
-			require.NoError(t, err)
-			require.Contains(t, string(result), `"reasoning_effort":"high"`, "durable tool result includes the stored effort")
+			// The loop stores the tool result text under Result["text"]
+			// (loop_run_turn_tools.go projectRecordedResult) — unwrap it and
+			// assert on the stored effort value itself, not on the escaped
+			// outer marshalling.
+			resultText, hasText := call.Result["text"].(string)
+			require.True(t, hasText, `durable tool result stores its text under Result["text"]: %v`, call.Result)
+			var stored map[string]any
+			require.NoError(t, json.Unmarshal([]byte(resultText), &stored), "the stored result text is the tool's JSON result")
+			require.Equal(t, "high", stored["reasoning_effort"], "durable tool result includes the stored effort")
 		}
 	}
 	require.Equal(t, 1, calls, "caller transcript records the actual parameters and successful result exactly once")
