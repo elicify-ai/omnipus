@@ -187,9 +187,10 @@ type services struct {
 	// construction failed at boot (a fatal error today — see
 	// setupAndStartServices).
 	PlanEngine *agent.PlanEngine
-	// LoopScheduler is the dedicated `/loop` time-driven scheduler (ADR-049
-	// D6/D7, Wave 2-C2), mirroring TaskTrigger's own dedicated-CronService
-	// pattern above. Constructed and Start()'d alongside TaskTrigger.
+	// LoopScheduler is the `/loop` time-driven scheduler (ADR-049 D6/D7): the
+	// `loop`-kind handler on CronService, the one shared engine (T10 FR-01).
+	// Constructed and recovered at physical boot before the engine activates
+	// (FR-03/FR-05); never reconstructed on reload (FR-26).
 	LoopScheduler *agent.LoopScheduler
 	// notifStore backs schedule-failure notifications and the header
 	// notification center (#264). Created once at boot, reused across reloads.
@@ -1815,7 +1816,12 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 		runningServices.ChannelManager.StopAll(shutdownCtx)
 	}
 	stopPollersReporting(runningServices, isReload)
-	if runningServices.CronService != nil {
+	// RELOAD MUST NOT STOP IT (T10 FR-26): the one timer engine — heartbeat
+	// and /loop jobs, each with its handler — is a reload-surviving service.
+	// Its in-flight callbacks settle on the instance they started on, and a
+	// reload neither reads nor writes its store. Engine settings (the retry
+	// backoff) are boot-time configuration, applied at the next physical boot.
+	if !isReload && runningServices.CronService != nil {
 		runningServices.CronService.Stop()
 	}
 	// ADR-067 W3: stop every knowledge drift schedule and close every open
@@ -1856,9 +1862,8 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if !isReload && runningServices.TaskTrigger != nil {
 		runningServices.TaskTrigger.Stop()
 	}
-	if runningServices.LoopScheduler != nil {
-		runningServices.LoopScheduler.Stop()
-	}
+	// The /loop scheduler has no engine of its own: the shared engine's Stop
+	// above (shutdown only) stops its jobs too.
 	if runningServices.MediaStore != nil {
 		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 			fms.Stop()

@@ -4,16 +4,18 @@
 
 // loop_scheduler.go implements the time-driven half of `/loop` (ADR-049
 // D6/D7, spec Part B US-9): interval-mode cron `every` jobs and self-paced
-// one-shot `at` jobs. Mirrors TaskTriggerScheduler's proven shape exactly
-// (task_trigger.go's doc comment) — a SECOND, dedicated pkg/cron.CronService
-// instance (separate store file: <home>/loops/jobs.json) rather than
-// co-mingling `/loop` jobs into the gateway's user-schedules service, for the
-// same "keep the systems orthogonal" reason task triggers do. RunScheduled
+// one-shot `at` jobs. Since T10 (schedules-t10-spec-r6 FR-01) the scheduler has
+// no engine of its own: it is the `loop`-kind handler on the ONE shared timer
+// engine (<home>/cron/jobs.json), registered by NewLoopScheduler. RunScheduled
 // fires by calling back into AgentLoop.ProcessScheduled — the SAME headless,
-// session-continuing entry point cron/heartbeat jobs use (pkg/gateway/
-// schedules.go's own RunScheduled), so a /loop run gets the identical
-// transcript-recording, auto-deny-ask, and deadline-bounded semantics a
-// SessionMode=continue schedule fire gets.
+// session-continuing entry point heartbeat jobs use, so a /loop run gets the
+// identical transcript-recording and auto-deny-ask semantics.
+//
+// Ownership (T10 FR-05): a session's loop state lives in its session metadata;
+// LoopJobID is a convenience pointer only. The single ownership rule is the
+// selected step (loop_selection.go): a job may run its turn, and a settled
+// callback may apply any post-turn mutation, only while it is the session's
+// selected step. Boot recovery lives in loop_recovery.go.
 package agent
 
 import (
@@ -21,6 +23,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -62,32 +65,50 @@ func loopJobName(sessionID string) string {
 	return "loop:" + sessionID
 }
 
-// LoopScheduler registers `/loop` cron jobs in a dedicated CronService and
-// fires them by calling back into AgentLoop.ProcessScheduled. It implements
-// cron.ScheduledRunner.
+// LoopScheduler is the `loop`-kind handler on the shared timer engine and the
+// /loop job producer. It implements cron.ScheduledRunner.
 type LoopScheduler struct {
 	cs *cron.CronService
 	al *AgentLoop
+	// postTurnHook is a test seam run after ProcessScheduled returns and
+	// before any post-turn mutation (SetPostTurnTestHook). nil in production.
+	postTurnHook atomic.Pointer[func()]
 }
 
-// NewLoopScheduler creates a scheduler using a dedicated CronService whose
-// store lives at storePath.
-func NewLoopScheduler(storePath string, al *AgentLoop) *LoopScheduler {
-	return &LoopScheduler{cs: cron.NewCronService(storePath), al: al}
+// NewLoopScheduler registers a scheduler as the `loop`-kind handler of the
+// shared engine cs (T10 FR-01/FR-02). The engine's lifecycle (restore,
+// activation, stop) belongs to its owner, the gateway, not to this scheduler.
+func NewLoopScheduler(cs *cron.CronService, al *AgentLoop) *LoopScheduler {
+	s := &LoopScheduler{cs: cs, al: al}
+	if err := cs.RegisterKindHandler(cron.KindLoop, s); err != nil {
+		// Only an unregistered kind or a nil handler can fail; neither is
+		// possible here, so this is a programming error, not a runtime state.
+		panic(fmt.Sprintf("loop_scheduler: register loop kind handler: %v", err))
+	}
+	return s
 }
 
-// Start wires this scheduler as its own cron runner and starts the engine.
-func (s *LoopScheduler) Start() error {
-	s.cs.SetRunner(s)
-	return s.cs.Start()
-}
+// Start starts the underlying engine. The gateway never calls it: it
+// activates the shared engine itself after boot recovery (FR-03). This is for
+// a standalone engine owned by a test.
+func (s *LoopScheduler) Start() error { return s.cs.Start() }
 
-// Stop shuts down the underlying dedicated cron engine.
+// Stop stops the underlying engine. Same scope as Start: the gateway stops the
+// shared engine once, on shutdown only (FR-26).
 func (s *LoopScheduler) Stop() { s.cs.Stop() }
 
-// SetClock passes a test clock through to the underlying CronService (used
-// by the self-paced-reschedule fake-clock test).
+// SetClock passes a test clock through to the underlying engine.
 func (s *LoopScheduler) SetClock(c cron.Clock) { s.cs.SetClock(c) }
+
+// SetPostTurnTestHook installs fn to run after a fired turn returns and before
+// the post-turn ownership check and mutations (tests only; nil clears).
+func (s *LoopScheduler) SetPostTurnTestHook(fn func()) {
+	if fn == nil {
+		s.postTurnHook.Store(nil)
+		return
+	}
+	s.postTurnHook.Store(&fn)
+}
 
 // RunDueJobs drives dispatch deterministically for tests.
 func (s *LoopScheduler) RunDueJobs(now time.Time) { s.cs.RunDueJobs(now) }
@@ -161,18 +182,24 @@ func (s *LoopScheduler) RemoveJob(jobID string) bool {
 }
 
 // RunScheduled implements cron.ScheduledRunner. It fires exactly one /loop
-// run: runs the turn via ProcessScheduled, THEN persists the incremented
-// run_count (review r1 comment fix — the prior wording claimed run_count was
-// "persisted before checking the bound", but it is actually persisted AFTER
-// the run completes, alongside LoopLastActivityAt, in the SAME SetMeta call
-// the bound check reads next; a crash mid-run therefore re-fires the same
-// count on the next cron tick rather than skipping it — there is no
-// "persist first" discipline here, unlike the task attempt counter this
-// comment used to (incorrectly) claim mirrors), stops the loop on reaching
-// LoopMaxRuns (FR-072's run-count boundary), and for self-paced mode
-// schedules the next one-shot fire from the run's own LOOP_NEXT reply
-// marker (falling back to a fixed delay, WARN-logged, if the model did not
-// emit one).
+// run, in this order:
+//
+//  1. A job whose session lost its loop state removes itself (FR-05(f)).
+//  2. A job that is not the session's selected step runs no turn and removes
+//     itself (FR-05 fire-time ownership).
+//  3. The owner must be registered and must not be a worker (FR-10 (a)/(b),
+//     the schedule runner's rule universalized); otherwise an error is
+//     recorded and no turn runs.
+//  4. The turn runs via ProcessScheduled with the job identity on the context
+//     (auto-deny audit, FR-10(e)) and a per-run child-process tracker; the
+//     tracked children are terminated when the turn returns (FR-10(d)).
+//  5. Post-turn, under the session's lock and only while this job is still
+//     the selected step (FR-05(g)): run_count and activity are persisted, the
+//     run cap stops the loop, and a self-paced loop schedules its next step
+//     from the reply's LOOP_NEXT marker (fixed fallback delay, WARN-logged).
+//
+// run_count is persisted AFTER the run, so a crash mid-run re-fires the same
+// count; recovery decides eligibility itself (loop_recovery.go).
 func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
 	sessionID := job.Payload.Message
 	if sessionID == "" || s.al == nil {
@@ -187,49 +214,109 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 	if err != nil || meta == nil || meta.LoopMode == "" {
 		// The loop was stopped/cleared out from under this job (e.g. /loop
 		// stop raced a fire, or a crash left an orphan) — remove it rather
-		// than firing a run nobody asked for.
+		// than firing a run nobody asked for. Not an error condition.
 		s.cs.RemoveJob(job.ID)
-		// No session to fire into — by design this is a no-op success (the
-		// race is expected — the loop was stopped/cleared out from under
-		// this job, so there's no session to fire into). Not an error condition.
 		return "", nil //nolint:nilerr
 	}
-
-	maxRuns := meta.LoopMaxRuns
-	if maxRuns < 1 {
-		maxRuns = config.DefaultLoopMaxRuns
+	if !s.isSelectedStep(sessionID, job.ID) {
+		s.cs.RemoveJob(job.ID)
+		logger.InfoCF("agent", "loop: a job that is not the session's selected step fired; removed without a turn",
+			map[string]any{"session_id": sessionID, "job_id": job.ID})
+		return "", nil
 	}
-	newRun := meta.LoopRunCount + 1
+	if oerr := s.checkOwner(job.AgentID); oerr != nil {
+		logger.WarnCF("agent", "loop: run refused",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": oerr.Error()})
+		return "", oerr
+	}
 
 	prompt := meta.LoopPrompt
 	if meta.LoopMode == loopModeSelfPaced {
 		prompt = loopSelfPacedSteeringPrompt(prompt)
 	}
+	runCtx, procs := withLoopRunContext(ctx, job)
+	reply, runErr := s.al.ProcessScheduled(runCtx, job.AgentID, sessionID, prompt, "", "")
+	procs.cleanup(sessionID, job.ID)
 
-	reply, runErr := s.al.ProcessScheduled(ctx, job.AgentID, sessionID, prompt, "", "")
-
-	// FR-064/D7 idle-expiry (review r1): the job genuinely fired — this IS
-	// activity for the calendar-brake clock, persisted in the SAME write as
-	// run_count (crash-safety: both land together or neither does). Bumped
-	// regardless of runErr — a scheduled run that actually executed (even
-	// one whose turn errored) is still real mechanical progress, not a
-	// judge-style unavailability pause.
-	activityNow := time.Now().UTC().Format(time.RFC3339)
-	if perr := store.SetMeta(sessionID, session.MetaPatch{
-		LoopRunCount:       &newRun,
-		LoopLastActivityAt: &activityNow,
-	}); perr != nil {
-		logger.WarnCF("agent", "loop: failed to persist run_count",
-			map[string]any{"session_id": sessionID, "error": perr.Error()})
+	if hook := s.postTurnHook.Load(); hook != nil {
+		(*hook)()
 	}
+	s.settleTurn(store, sessionID, job, reply)
+	return reply, runErr
+}
 
-	if newRun >= maxRuns {
-		s.al.stopLoop(sessionID, store, meta.LoopMode, maxRuns, newRun, fmt.Sprintf("run cap reached (%d/%d)", newRun, maxRuns))
-		s.cs.RemoveJob(job.ID)
-		return reply, runErr
+// checkOwner applies the G5 owner rules of the schedule runner (FR-10 (a) and
+// (b)): the owner must be registered, and a worker owner is refused — workers
+// run only via delegation, never on a timer cadence.
+func (s *LoopScheduler) checkOwner(owner string) error {
+	reg := s.al.GetRegistry()
+	if owner == "" || reg == nil {
+		return fmt.Errorf("loop_scheduler: owner unavailable: agent %q is not registered", owner)
 	}
+	inst, ok := reg.GetAgent(owner)
+	if !ok || inst == nil {
+		return fmt.Errorf("loop_scheduler: owner unavailable: agent %q is not registered", owner)
+	}
+	if inst.IsWorker() {
+		return fmt.Errorf(
+			"loop_scheduler: owner unavailable: agent %q is a worker (workers run only via delegation, never on a timer cadence)",
+			owner,
+		)
+	}
+	return nil
+}
 
-	if meta.LoopMode == loopModeSelfPaced {
+// loopSettleOutcome is what settleTurn decided under the session lock; the
+// status frame and admission release are published after the lock is gone.
+type loopSettleOutcome struct {
+	revoked bool
+	stopped bool
+	mode    string
+	run     int
+	maxRuns int
+	delayMS *int
+	state   string
+}
+
+// settleTurn applies the post-turn mutations atomically with the
+// selected-step check under the session's lock (FR-05(g); lock order session
+// then engine). A revoked callback — its job replaced, stopped or no longer
+// the selected step — changes nothing and publishes nothing.
+func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string, job *cron.CronJob, reply string) {
+	var out loopSettleOutcome
+	err := store.UpdateMetaLocked(sessionID, func(meta *session.UnifiedMeta, set func(session.MetaPatch) error) error {
+		if meta == nil || meta.LoopMode == "" || !s.isSelectedStep(sessionID, job.ID) {
+			out.revoked = true
+			return nil
+		}
+		out.mode, out.maxRuns, out.run = meta.LoopMode, effectiveLoopMaxRuns(meta), meta.LoopRunCount+1
+		// FR-064/D7 idle-expiry: a fired run is activity for the calendar
+		// brake, persisted in the SAME write as run_count; bumped even when
+		// the turn errored (it still really executed).
+		activityNow := time.Now().UTC().Format(time.RFC3339)
+		if perr := set(session.MetaPatch{LoopRunCount: &out.run, LoopLastActivityAt: &activityNow}); perr != nil {
+			logger.WarnCF("agent", "loop: failed to persist run_count",
+				map[string]any{"session_id": sessionID, "error": perr.Error()})
+		}
+		if out.run >= out.maxRuns {
+			if perr := set(loopStoppedPatch()); perr != nil {
+				logger.WarnCF("agent", "loop: failed to clear loop state at the run cap",
+					map[string]any{"session_id": sessionID, "error": perr.Error()})
+			}
+			if rerr := s.removeSessionJobs(sessionID); rerr != nil {
+				// The cleared state makes any surviving job remove itself on
+				// its next fire (step 1 of RunScheduled).
+				logger.WarnCF("agent", "loop: failed to remove the loop's jobs at the run cap",
+					map[string]any{"session_id": sessionID, "error": rerr.Error()})
+			}
+			out.stopped = true
+			return nil
+		}
+		if meta.LoopMode != loopModeSelfPaced {
+			// Interval mode: the engine's computeNextRun re-arms the `every` job.
+			out.state = "run_completed"
+			return nil
+		}
 		delayMS, _ := parseLoopNextMarker(reply)
 		if delayMS <= 0 {
 			delayMS = defaultSelfPacedFallbackDelayMS
@@ -240,24 +327,39 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 		if aerr != nil {
 			logger.WarnCF("agent", "loop: failed to schedule next self-paced run",
 				map[string]any{"session_id": sessionID, "error": aerr.Error()})
-			return reply, runErr
+			return nil
 		}
-		delayInt := int(delayMS)
-		if perr := store.SetMeta(sessionID, session.MetaPatch{
-			LoopJobID:       &newJobID,
-			LoopNextDelayMS: &delayMS,
-		}); perr != nil {
+		if perr := set(session.MetaPatch{LoopJobID: &newJobID, LoopNextDelayMS: &delayMS}); perr != nil {
 			logger.WarnCF("agent", "loop: failed to persist next-run job id",
 				map[string]any{"session_id": sessionID, "error": perr.Error()})
 		}
-		s.al.emitLoopStatusFrame(sessionID, meta.LoopMode, newRun, maxRuns, &delayInt, "scheduled_next")
-		return reply, runErr
+		delayInt := int(delayMS)
+		out.delayMS, out.state = &delayInt, "scheduled_next"
+		return nil
+	})
+	if err != nil {
+		logger.WarnCF("agent", "loop: post-turn settle could not read the session; no post-turn change applied",
+			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
+		return
 	}
+	switch {
+	case out.revoked:
+		logger.InfoCF("agent", "loop: a settled run is no longer the session's selected step; no post-turn change applied",
+			map[string]any{"session_id": sessionID, "job_id": job.ID})
+	case out.stopped:
+		s.al.finishLoopStop(sessionID, out.mode, out.maxRuns, out.run)
+	case out.state != "":
+		s.al.emitLoopStatusFrame(sessionID, out.mode, out.run, out.maxRuns, out.delayMS, out.state)
+	}
+}
 
-	// Interval mode: cron's own computeNextRun already recomputed
-	// NextRunAtMS for the "every" schedule — nothing further to schedule.
-	s.al.emitLoopStatusFrame(sessionID, meta.LoopMode, newRun, maxRuns, nil, "run_completed")
-	return reply, runErr
+// effectiveLoopMaxRuns is the loop's saved run limit, defaulted when a saved
+// value is below 1.
+func effectiveLoopMaxRuns(meta *session.UnifiedMeta) int {
+	if meta.LoopMaxRuns < 1 {
+		return config.DefaultLoopMaxRuns
+	}
+	return meta.LoopMaxRuns
 }
 
 // IdleExpirySweep expires any `/loop` job idle for longer than its effective
@@ -273,9 +375,10 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 		return
 	}
 	maxDays := cfg.EffectiveIdleExpiryDays(nil)
+	expired := map[string]bool{}
 	for _, job := range s.ListEnabledJobs() {
 		sessionID := job.Payload.Message
-		if sessionID == "" {
+		if sessionID == "" || expired[sessionID] {
 			continue
 		}
 		store := s.al.ResolveSessionStore(sessionID)
@@ -308,7 +411,14 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 				map[string]any{"session_id": sessionID, "job_id": job.ID, "why": why})
 			continue
 		}
-		s.RemoveJob(job.ID)
+		// Every loop job of the session goes, not only this one (FR-05): a
+		// leftover step must not survive the expiry.
+		if rerr := s.removeSessionJobs(sessionID); rerr != nil {
+			logger.WarnCF("agent", "loop idle sweep: could not remove the loop's jobs — not expiring this pass",
+				map[string]any{"session_id": sessionID, "error": rerr.Error()})
+			continue
+		}
+		expired[sessionID] = true
 		// stopLoop Releases the "loop" R5 admission-cap slot (paired with the
 		// Admit("loop") call at set time) as part of its shared body.
 		s.al.stopLoop(sessionID, store, meta.LoopMode, meta.LoopMaxRuns, meta.LoopRunCount, fmt.Sprintf("idle-expired after %d day(s)", maxDays))

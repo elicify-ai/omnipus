@@ -317,6 +317,9 @@ func TestLoopCommand_ReplaceOnSet_EmitsSchemaValidStoppedFrameForOldLoop(t *test
 func TestLoopScheduler_RunCapBoundary_EmitsSchemaValidStoppedFrame(t *testing.T) {
 	schema := loadLoopStatusFrameSchema(t)
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) {
+		// T10 FR-10(b): a worker never owns a timer-driven loop run; the loop owner
+		// here is an ordinary (non-worker) agent.
+		cfg.Agents.List[0].Type = "custom"
 		cfg.Planning.LoopMaxRuns = 1
 	})
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")

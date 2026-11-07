@@ -831,7 +831,8 @@ func restartServices(
 	return rs.applyMessagingCaps()
 }
 
-// restartCron recreates and starts the cron service, then refreshes its REST API reference.
+// restartCron keeps the one timer engine across a reload (T10 FR-26) and
+// re-points the REST API at it.
 func (rs *restartServicesState) restartCron() (error, bool) {
 	rs.cfg = rs.al.GetConfig()
 
@@ -859,30 +860,20 @@ func (rs *restartServicesState) restartCron() (error, bool) {
 		)
 	}
 
-	rs.runningServices.CronService, rs.err = setupCronTool(
-		rs.al,
-		rs.msgBus,
-		rs.cfg.AgentHomeBasePath(),
-		rs.cfg,
-		rs.runningServices.notifStore,
-	)
-	if rs.err != nil {
-		return fmt.Errorf("error restarting cron service: %w", rs.err), true
+	// T10 FR-26: a same-process reload keeps the one timer engine. It was not
+	// stopped (stopAndCleanupServices skips it on reload), it is not
+	// reconstructed and its store is not re-read, so every in-flight callback
+	// settles on the instance it started on. The restAPI already points at it.
+	if rs.runningServices.CronService == nil {
+		// Physical boot always creates the engine; only a partial service set
+		// (a test harness) reaches this. A reload never creates one.
+		logger.WarnCF("gateway", "reload: no timer engine is running; nothing to keep", nil)
+		return nil, false
 	}
-	if rs.err = rs.runningServices.CronService.Start(); rs.err != nil {
-		return fmt.Errorf("error restarting cron service: %w", rs.err), true
-	}
-	// Re-point the restAPI's cronService field to the newly started instance.
-	// restAPI.cronService is assigned once at construction time
-	// (setupAndStartServices). On each reload, restartServices replaces
-	// runningServices.CronService with a new instance whose laneCtx is live;
-	// without this update the restAPI holds a stale pointer whose laneCtx was
-	// canceled by the previous Stop(), causing "turn not started: context
-	// canceled" on every RunNow call (#412).
 	if rs.runningServices.restAPIRef != nil {
 		rs.runningServices.restAPIRef.cronService.Store(rs.runningServices.CronService)
 	}
-	fmt.Println("  ✓ Cron service restarted")
+	fmt.Println("  ✓ Cron service kept (reload never restarts it)")
 	return nil, false
 }
 
@@ -907,19 +898,8 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 	// skips it on reload), so ownership of an armed or queued occurrence never
 	// changes hands within a process.
 
-	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
-	// D6/D7). The previous instance was already Stop()'d in
-	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
-	// immediately above.
-	{
-		loopSchedStorePath := filepath.Join(rs.homePath, "loops", "jobs.json")
-		rs.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, rs.al)
-		if startErr := rs.runningServices.LoopScheduler.Start(); startErr != nil {
-			return fmt.Errorf("error restarting loop scheduler: %w", startErr), true
-		}
-		rs.al.SetLoopScheduler(rs.runningServices.LoopScheduler)
-		fmt.Println("  ✓ Loop scheduler restarted")
-	}
+	// The /loop scheduler is not restarted either: it is the loop-kind handler
+	// on the kept engine (T10 FR-26).
 
 	// Queued-task draining is owned by the dedicated TaskDrainService, never the
 	// heartbeat path — restart it here so dispatch survives a reload regardless of

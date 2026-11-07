@@ -102,7 +102,8 @@ func bootTimerServices(t *testing.T, provider providers.LLMProvider) (
 	require.NoError(t, err)
 
 	taskStore = filepath.Join(home, "tasks_triggers", "jobs.json")
-	loopStore = filepath.Join(home, "loops", "jobs.json")
+	// T10 FR-01/FR-04: /loop jobs live in the one shared store.
+	loopStore = filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json")
 	require.Len(t, readTimerStore(t, taskStore).Jobs, 1, "SETUP: the task trigger copy holds the task's job")
 	require.Len(t, readTimerStore(t, loopStore).Jobs, 1, "SETUP: the loop copy holds the loop job")
 	return stage, al, cfg, taskStore, loopStore

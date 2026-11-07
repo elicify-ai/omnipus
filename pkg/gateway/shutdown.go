@@ -253,9 +253,8 @@ func backgroundStopsOf(rs *services) shutdownBackgroundStops {
 	if rs.TaskTrigger != nil {
 		s.schedulers = append(s.schedulers, rs.TaskTrigger.Stop)
 	}
-	if rs.LoopScheduler != nil {
-		s.schedulers = append(s.schedulers, rs.LoopScheduler.Stop)
-	}
+	// /loop jobs run on the shared engine (CronService above); the loop
+	// scheduler has no engine of its own to stop.
 	if rs.PlanEngine != nil {
 		s.plan = rs.PlanEngine.Stop
 	}

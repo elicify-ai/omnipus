@@ -457,10 +457,13 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	if stg.err != nil {
 		return nil, true, fmt.Errorf("error setting up cron service: %w", stg.err)
 	}
-	if stg.err = stg.runningServices.CronService.StartAfterPhysicalBoot(); stg.err != nil {
+	// T10 FR-03 boot order on the one shared engine: checked load and
+	// crash-flag clear first, then the boot reconciliations, then activation.
+	// Nothing is collected or dispatched before every reconciliation ran; a
+	// failed load aborts here with the original error and no write.
+	if stg.err = stg.runningServices.CronService.RestoreAfterPhysicalBoot(); stg.err != nil {
 		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
 	}
-	fmt.Println("✓ Cron service started")
 
 	// ADR-027 — heartbeat is workspace-scoped. Reconcile workspace member_configs
 	// into the cron engine: every (workspace, agent) pair with heartbeat.enabled=true
@@ -479,6 +482,22 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		}
 	}
 	fmt.Println("✓ Heartbeat running as workspace-scoped schedules")
+
+	// /loop runs as the `loop` kind on the shared engine (T10 FR-01). Its boot
+	// recovery (FR-05, #1491) must complete before activation: a recovery
+	// that cannot persist its outcome aborts the boot, naming the session,
+	// and nothing dispatches; the next boot retries from durable state.
+	loops := agent.NewLoopScheduler(stg.runningServices.CronService, stg.agentLoop)
+	if recErr := loops.Reconcile(); recErr != nil {
+		return nil, true, fmt.Errorf("error recovering /loop schedules: %w", recErr)
+	}
+	stg.runningServices.LoopScheduler = loops
+	stg.agentLoop.SetLoopScheduler(loops)
+
+	if stg.err = stg.runningServices.CronService.Activate(); stg.err != nil {
+		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
+	}
+	fmt.Println("✓ Cron service started (heartbeat and /loop jobs)")
 
 	// Queued-task draining (dispatch of `next` tasks) is owned UNCONDITIONALLY by
 	// the dedicated TaskDrainService — never by the heartbeat path.
@@ -540,22 +559,6 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		}
 		fmt.Println("✓ Task trigger scheduler started")
 	}
-
-	// /loop time-driven scheduler (ADR-049 D6/D7, Wave 2-C2): a SECOND
-	// dedicated CronService instance, mirroring TaskTrigger's own pattern
-	// immediately above — orthogonal to the gateway's user-schedules
-	// service. No boot reconcile needed: unlike task triggers (derived from
-	// the task store), /loop jobs already persist their own cron store and
-	// their session-side UnifiedMeta state independently; a job whose
-	// session lost its loop state self-removes on next fire
-	// (LoopScheduler.RunScheduled).
-	loopSchedStorePath := filepath.Join(stg.homePath, "loops", "jobs.json")
-	stg.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, stg.agentLoop)
-	if startErr := stg.runningServices.LoopScheduler.Start(); startErr != nil {
-		return nil, true, fmt.Errorf("error starting loop scheduler: %w", startErr)
-	}
-	stg.agentLoop.SetLoopScheduler(stg.runningServices.LoopScheduler)
-	fmt.Println("✓ Loop scheduler started")
 	return nil, false, nil
 }
 

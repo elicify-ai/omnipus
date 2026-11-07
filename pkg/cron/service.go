@@ -235,7 +235,11 @@ type CronService struct {
 	testHooks cronTestHooks
 	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
 	runWindowUsed bool
-	stopChan      chan struct{}
+	// bootRestored is set by RestoreAfterPhysicalBoot and cleared by Activate:
+	// the store is restored but the engine does not collect yet, so boot
+	// reconciliations run in between (T10 FR-03).
+	bootRestored bool
+	stopChan     chan struct{}
 	// loopDone is closed by runLoop when it exits (#1450). Created per run
 	// window by startRunWindow; nil when no loop goroutine was started
 	// (startNoLoop) or after Stop has taken it.
@@ -419,15 +423,25 @@ const (
 // replay decision per interrupted one-time job. A nil replay runs every
 // interrupted job (the #1484 default).
 func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) (started bool, err error) {
-	if physicalBoot && cs.runWindowUsed {
+	if physicalBoot && (cs.runWindowUsed || cs.bootRestored) {
 		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
 	}
 	if cs.running {
 		return false, nil
 	}
+	if err := cs.restoreUnsafe(physicalBoot, replay); err != nil {
+		return false, err
+	}
+	cs.openRunWindowUnsafe()
+	return true, nil
+}
 
+// restoreUnsafe loads the store (checked), clears a dead process's Running
+// flags on a physical boot, recomputes next runs and saves. The caller holds
+// cs.mu. Nothing is collected or dispatched here.
+func (cs *CronService) restoreUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) error {
 	if err := cs.loadStore(); err != nil {
-		return false, fmt.Errorf("failed to load store: %w", err)
+		return fmt.Errorf("failed to load store: %w", err)
 	}
 	var interrupted []int
 	if physicalBoot {
@@ -462,9 +476,14 @@ func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay fun
 			"job_id", job.ID, "job", job.Name)
 	}
 	if err := cs.saveStoreUnsafe(); err != nil {
-		return false, fmt.Errorf("failed to save store: %w", err)
+		return fmt.Errorf("failed to save store: %w", err)
 	}
+	return nil
+}
 
+// openRunWindowUnsafe opens a run window: stop/wake channels, a live lane
+// context and the running flag. The caller holds cs.mu.
+func (cs *CronService) openRunWindowUnsafe() {
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
 		cs.wakeChan = make(chan struct{}, 1)
@@ -476,7 +495,44 @@ func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay fun
 	cs.laneRuns = &sync.WaitGroup{}
 	cs.running = true
 	cs.runWindowUsed = true
-	return true, nil
+	cs.bootRestored = false
+}
+
+// RestoreAfterPhysicalBoot is the first half of the physical-boot start (T10
+// FR-03): the checked load, the crash-flag clear and the next-run recompute,
+// with nothing collected or dispatched. Boot reconciliations run next, then
+// Activate opens the run window. A failed load returns the original error
+// (wrapped) and writes nothing. Gateway physical boot is its sole production
+// caller; it requires a service instance never started before.
+func (cs *CronService) RestoreAfterPhysicalBoot() error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.runWindowUsed || cs.bootRestored || cs.running {
+		return fmt.Errorf("cron: physical-boot restore requires an unused service instance")
+	}
+	if err := cs.restoreUnsafe(true, nil); err != nil {
+		return err
+	}
+	cs.bootRestored = true
+	return nil
+}
+
+// Activate opens the run window of a service restored by
+// RestoreAfterPhysicalBoot and starts its run loop. It does not reload the
+// store, so jobs written by boot reconciliation are kept as written.
+func (cs *CronService) Activate() error {
+	cs.mu.Lock()
+	if !cs.bootRestored {
+		cs.mu.Unlock()
+		return fmt.Errorf("cron: activate requires a completed physical-boot restore")
+	}
+	cs.openRunWindowUnsafe()
+	stop := cs.stopChan
+	done := make(chan struct{})
+	cs.loopDone = done
+	cs.mu.Unlock()
+	go cs.runLoop(stop, done)
+	return nil
 }
 
 func (cs *CronService) Start() error {

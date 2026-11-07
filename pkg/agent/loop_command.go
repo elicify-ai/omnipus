@@ -109,8 +109,16 @@ func (al *AgentLoop) applyLoopCommandPrompt(
 
 	// Replace-on-set: an already-active loop on this session is stopped
 	// first, mirroring /goal's FR-068 one-per-session discipline.
-	if existing, merr := store.GetMeta(sessionID); merr == nil && existing != nil && existing.LoopMode != "" {
-		ls.RemoveJob(existing.LoopJobID)
+	// Every loop job of the session goes — not only the one LoopJobID names —
+	// so a revoked step cannot mutate or chain alongside the replacement
+	// (T10 FR-05).
+	existing, merr := store.GetMeta(sessionID)
+	if rerr := ls.removeSessionJobs(sessionID); rerr != nil {
+		logger.WarnCF("agent", "loop: failed to remove the session's previous loop jobs",
+			map[string]any{"session_id": sessionID, "error": rerr.Error()})
+		return true, true, "Could not start the loop (internal error removing the previous schedule)."
+	}
+	if merr == nil && existing != nil && existing.LoopMode != "" {
 		al.stopLoop(sessionID, store, existing.LoopMode, existing.LoopMaxRuns, existing.LoopRunCount, "replaced by new /loop")
 	}
 
@@ -206,6 +214,10 @@ func (al *AgentLoop) startSelfPacedLoop(
 	mode := loopModeSelfPaced
 	zero := 0
 	var zeroMS int64
+	// The first step's delay is persisted with the loop so boot recovery can
+	// re-arm a never-fired first step with the same positive delay (T10
+	// FR-05(b)).
+	firstDelayMS := int64(firstSelfPacedRunDelayMS)
 	nowStr := time.Now().UTC().Format(time.RFC3339)
 	if perr := store.SetMeta(sessionID, session.MetaPatch{
 		LoopMode:           &mode,
@@ -213,6 +225,7 @@ func (al *AgentLoop) startSelfPacedLoop(
 		LoopRunCount:       &zero,
 		LoopMaxRuns:        &maxRuns,
 		LoopIntervalMS:     &zeroMS,
+		LoopNextDelayMS:    &firstDelayMS,
 		LoopJobID:          &jobID,
 		LoopStartedAt:      &nowStr,
 		LoopLastActivityAt: &nowStr,
@@ -258,9 +271,15 @@ func (al *AgentLoop) loopStatusReply(sessionID string, store *session.UnifiedSto
 func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedStore, ls *LoopScheduler) string {
 	meta, err := store.GetMeta(sessionID)
 	hadLoop := err == nil && meta != nil && meta.LoopMode != ""
+	// Every loop job of the session goes, not only the one LoopJobID names
+	// (T10 FR-05): a leftover step would otherwise keep the loop alive.
+	if rerr := ls.removeSessionJobs(sessionID); rerr != nil {
+		logger.WarnCF("agent", "loop: failed to remove the session's loop jobs on stop",
+			map[string]any{"session_id": sessionID, "error": rerr.Error()})
+		return "Could not stop the loop (internal error removing the schedule). Try again."
+	}
 	mode, maxRuns, run := "", 0, 0
 	if hadLoop {
-		ls.RemoveJob(meta.LoopJobID)
 		mode, maxRuns, run = meta.LoopMode, meta.LoopMaxRuns, meta.LoopRunCount
 	}
 	al.stopLoop(sessionID, store, mode, maxRuns, run, "stopped by user")
@@ -288,10 +307,20 @@ func (al *AgentLoop) stopLoopCommand(sessionID string, store *session.UnifiedSto
 // nothing running) suppresses the frame entirely: there is no real
 // transition to report, and an all-zero frame would fail validation anyway.
 func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, priorMode string, priorMaxRuns, priorRun int, note string) {
+	if err := store.SetMeta(sessionID, loopStoppedPatch()); err != nil {
+		logger.WarnCF("agent", "loop: failed to clear loop state",
+			map[string]any{"session_id": sessionID, "error": err.Error(), "note": note})
+	}
+	al.finishLoopStop(sessionID, priorMode, priorMaxRuns, priorRun)
+}
+
+// loopStoppedPatch is the stopped shape of a session's loop state: every
+// Loop* field cleared.
+func loopStoppedPatch() session.MetaPatch {
 	empty := ""
 	zero := 0
 	var zeroMS int64
-	if err := store.SetMeta(sessionID, session.MetaPatch{
+	return session.MetaPatch{
 		LoopMode:           &empty,
 		LoopPrompt:         &empty,
 		LoopRunCount:       &zero,
@@ -301,10 +330,12 @@ func (al *AgentLoop) stopLoop(sessionID string, store *session.UnifiedStore, pri
 		LoopJobID:          &empty,
 		LoopStartedAt:      &empty,
 		LoopLastActivityAt: &empty,
-	}); err != nil {
-		logger.WarnCF("agent", "loop: failed to clear loop state",
-			map[string]any{"session_id": sessionID, "error": err.Error(), "note": note})
 	}
+}
+
+// finishLoopStop is the part of a loop stop that follows the state clear:
+// the admission release and the "stopped" status frame (see stopLoop).
+func (al *AgentLoop) finishLoopStop(sessionID, priorMode string, priorMaxRuns, priorRun int) {
 	if pe := GetPlanEngine(al); pe != nil {
 		pe.Release("loop") // paired with the Admit("loop") call at set time
 	}

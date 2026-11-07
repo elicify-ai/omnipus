@@ -87,7 +87,7 @@ func TestT10_ProducersPublishFinalKindExactlyOnce(t *testing.T) {
 			case "interval", "one-shot":
 				// Both production constructors currently take a path. This existing binding
 				// is type checked; GREEN must pass its shared cs to the constructor instead.
-				ls := agent.NewLoopScheduler(path, nil)
+				ls := agent.NewLoopScheduler(cs, nil)
 				create = func() {
 					var err error
 					if producer == "interval" {

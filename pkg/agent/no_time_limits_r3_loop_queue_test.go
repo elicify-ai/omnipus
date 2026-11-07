@@ -48,10 +48,14 @@ func r3FindLoopJob(s *LoopScheduler, id string) (cron.CronJob, bool) {
 
 func TestR3LoopIdleExpiry_PendingCronLaneDispatchIsWorkUntilItFinishes(t *testing.T) {
 	provider := newGatedFinalProvider()
-	al, _ := newGoalLoopTestLoop(t, provider, nil)
+	al, _ := newGoalLoopTestLoop(t, provider, func(cfg *config.Config) {
+		// T10 FR-10(b): a worker never owns a timer-driven loop run; the loop owner
+		// here is an ordinary (non-worker) agent.
+		cfg.Agents.List[0].Type = "custom"
+	})
 	installTestSessionLauncher(t, al)
 	clock := newTriggerFakeClock() // future due times keep the real cron timer from racing manual dispatch
-	scheduler := NewLoopScheduler(filepath.Join(t.TempDir(), "loops.json"), al)
+	scheduler := NewLoopScheduler(cron.NewCronService(filepath.Join(t.TempDir(), "loops.json")), al)
 	scheduler.SetClock(clock)
 	scheduler.cs.SetAdmissionRule(func() (int, bool) { return 1, true }) // REAL lane, exactly one slot
 	if err := scheduler.Start(); err != nil {

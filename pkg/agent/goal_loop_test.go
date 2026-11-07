@@ -22,6 +22,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -40,7 +41,7 @@ import (
 func newLoopSchedulerForTest(t *testing.T, al *AgentLoop) (*LoopScheduler, *triggerFakeClock) {
 	t.Helper()
 	dir := t.TempDir()
-	ls := NewLoopScheduler(filepath.Join(dir, "jobs.json"), al)
+	ls := NewLoopScheduler(cron.NewCronService(filepath.Join(dir, "jobs.json")), al)
 	clk := newTriggerFakeClock()
 	ls.SetClock(clk)
 	if err := ls.Start(); err != nil {
@@ -1152,7 +1153,11 @@ func TestGoalLoop_JudgeThrottled_BoundedByOwnTimeout_NotCallerCtx(t *testing.T) 
 // --- /loop: interval mode, run cap, stop, self-paced reschedule ---------
 
 func TestLoopCommand_IntervalMode_FiresAndIncrementsRunCount(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) {
+		// T10 FR-10(b): a worker never owns a timer-driven loop run; the loop owner
+		// here is an ordinary (non-worker) agent.
+		cfg.Agents.List[0].Type = "custom"
+	})
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
 	ls, clk := newLoopSchedulerForTest(t, al)
@@ -1197,6 +1202,9 @@ func TestLoopCommand_IntervalMode_FiresAndIncrementsRunCount(t *testing.T) {
 
 func TestLoopScheduler_RunCapBoundary_StopsAndRemovesJob(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) {
+		// T10 FR-10(b): a worker never owns a timer-driven loop run; the loop owner
+		// here is an ordinary (non-worker) agent.
+		cfg.Agents.List[0].Type = "custom"
 		cfg.Planning.LoopMaxRuns = 2
 	})
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
@@ -1292,7 +1300,11 @@ func (p *selfPacedTurnProvider) GetDefaultModel() string { return "test-model" }
 
 func TestLoopScheduler_SelfPaced_ReschedulesFromLoopNextMarker(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(
-		t, &selfPacedTurnProvider{marker: "LOOP_NEXT: 10m — waiting for the next check"}, nil,
+		t, &selfPacedTurnProvider{marker: "LOOP_NEXT: 10m — waiting for the next check"}, func(cfg *config.Config) {
+			// T10 FR-10(b): a worker never owns a timer-driven loop run; the loop owner
+			// here is an ordinary (non-worker) agent.
+			cfg.Agents.List[0].Type = "custom"
+		},
 	)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)

@@ -31,7 +31,31 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	}
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
+	return us.setMetaLocked(sessionID, patch)
+}
 
+// UpdateMetaLocked runs fn while holding sessionID's shard: fn receives a copy
+// of the current meta and a set function that applies a patch under the SAME
+// hold, so a caller can check a condition and write atomically with it (T10
+// FR-05(g): a loop callback's post-turn mutations apply only while its job is
+// still the selected step). fn must not call back into this store for the same
+// session — the shard is not reentrant. Lock order: session shard first, then
+// anything fn takes (the cron engine's own lock).
+func (us *UnifiedStore) UpdateMetaLocked(sessionID string, fn func(meta *UnifiedMeta, set func(MetaPatch) error) error) error {
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+	meta, err := us.readMetaLocked(sessionID)
+	if err != nil {
+		return err
+	}
+	return fn(meta, func(patch MetaPatch) error { return us.setMetaLocked(sessionID, patch) })
+}
+
+// setMetaLocked is SetMeta's body. The caller holds sessionID's shard.
+func (us *UnifiedStore) setMetaLocked(sessionID string, patch MetaPatch) error {
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {
 		return err
