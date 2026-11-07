@@ -131,13 +131,46 @@ func TestHistory_UnknownMediaRefStillOpens(t *testing.T) {
 		}
 		t.Fatalf("attach mode = %q, want snapshot with no error frame (Q17 A)", mode)
 	}
+	var goneResult []byte
 	for _, frame := range frames {
 		if frame.Type == "error" {
 			t.Fatalf("attach sent an error frame: %s", frame.raw)
 		}
-		if frame.Type == "media" || strings.Contains(string(frame.raw), sentFileGoneRef) {
+		// Q17 A / docs/protocol/websocket-protocol.md: the media frame for a
+		// ref the store does not know is absent. The tool_call_result for that
+		// call stays, and its saved result is the transcript result unchanged.
+		// The card's URL is /api/v1/media/<id>, not the media:// ref, so the
+		// frame type is the check. This attach has no other file.
+		if frame.Type == "media" {
 			t.Fatalf("unknown ref still produced a media frame: %s", frame.raw)
 		}
+		if frame.Type != "tool_call_result" {
+			continue
+		}
+		var got generated.ToolCallResultFrame
+		if err := json.Unmarshal(frame.raw, &got); err != nil {
+			t.Fatalf("tool_call_result: %v", err)
+		}
+		if got.CallId != "call-gone" {
+			continue
+		}
+		goneResult = frame.raw
+		want, err := json.Marshal(map[string]any{"media": []any{map[string]any{
+			"ref": sentFileGoneRef, "filename": "gone.md", "content_type": "text/markdown", "type": "file",
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotResult, err := json.Marshal(got.Result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(gotResult) != string(want) || got.Tool != "send_file" || got.Status != "success" {
+			t.Fatalf("tool_call_result for call-gone saved result = tool %q status %q %s, want send_file success %s", got.Tool, got.Status, gotResult, want)
+		}
+	}
+	if goneResult == nil {
+		t.Fatal("attach snapshot dropped the tool_call_result for call-gone")
 	}
 	if !sentFileSawText(frames, "Keep this plan") {
 		t.Fatal("attach snapshot dropped the text row")
