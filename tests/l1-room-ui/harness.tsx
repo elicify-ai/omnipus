@@ -324,14 +324,32 @@ function disposeRegistration(registration: HarnessRegistration): void {
   registration.dispose()
 }
 
-function disposeAllRegistrations(): void {
-  for (const registration of [...liveRegistrations]) disposeRegistration(registration)
+// Both drains collect disposer failures instead of letting them propagate:
+// one throwing disposer must never stop the disposal of the registrations
+// after it (#1572, CHECK F3). The caller surfaces the collected failures.
+function disposeAllRegistrations(): unknown[] {
+  const failures: unknown[] = []
+  for (const registration of [...liveRegistrations]) {
+    try {
+      disposeRegistration(registration)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  return failures
 }
 
-function disposeRegistrationsOfTicket(ticket: number): void {
+function disposeRegistrationsOfTicket(ticket: number): unknown[] {
+  const failures: unknown[] = []
   for (const registration of [...liveRegistrations]) {
-    if (registration.ticket === ticket) disposeRegistration(registration)
+    if (registration.ticket !== ticket) continue
+    try {
+      disposeRegistration(registration)
+    } catch (error) {
+      failures.push(error)
+    }
   }
+  return failures
 }
 
 export function connectSocket() {
@@ -428,7 +446,17 @@ export async function openRoom(net: Network, state: RoomSnapshotFrame = snapshot
       // The owning test is already gone. Dispose only what THIS call created
       // (its own ticket's registrations — never a later test's resources) and
       // reject explicitly; a silent late continuation is the #1572 leak.
-      disposeRegistrationsOfTicket(ticket)
+      const disposalFailures = disposeRegistrationsOfTicket(ticket)
+      if (disposalFailures.length > 0) {
+        // Disposal itself failed: surface everything — the original failure
+        // first, then each disposer failure. Nothing is swallowed (#1572).
+        throw new AggregateError(
+          [error, ...disposalFailures],
+          `Harness lifecycle: openRoom was abandoned (ticket generation ${ticket}, current generation ${harnessGeneration}); ` +
+          `its leftovers are disposed and it rejects instead of leaking (#1572). Disposal failures follow the original error.`,
+          { cause: error },
+        )
+      }
       if (error instanceof Error && error.message.startsWith('Harness lifecycle:')) throw error
       throw new Error(
         `Harness lifecycle: openRoom (work between mounting and the room header) was abandoned — ` +
@@ -446,12 +474,41 @@ export function stopHarness(connection?: WsConnection): void {
   // resuming from here on is stale and rejects explicitly instead of mounting
   // late into the next test.
   harnessGeneration++
-  cleanup()
+  // Every step is failure-safe (CHECK F3): an RTL cleanup or disposer that
+  // throws must not strand the remaining teardown — a registered socket stays
+  // registered for retirement even when an earlier step failed. Failures are
+  // collected and surfaced AFTER all teardown ran; the original error is
+  // rethrown unchanged, or kept as the first error of an AggregateError.
+  const failures: unknown[] = []
+  try {
+    cleanup()
+  } catch (error) {
+    failures.push(error)
+  }
   // Dispose everything alive, including what an aborted openRoom left behind
-  // before its stale continuation ever got to run.
-  disposeAllRegistrations()
-  connection?.disconnect()
-  queryClient.clear()
+  // before its stale continuation ever got to run — even when cleanup() above
+  // threw.
+  failures.push(...disposeAllRegistrations())
+  if (connection) {
+    try {
+      connection.disconnect()
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  try {
+    queryClient.clear()
+  } catch (error) {
+    failures.push(error)
+  }
   document.cookie = 'csrf=; Max-Age=0; Path=/'
-  vi.unstubAllGlobals()
+  try {
+    vi.unstubAllGlobals()
+  } catch (error) {
+    failures.push(error)
+  }
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) {
+    throw new AggregateError(failures, 'stopHarness: teardown steps failed — every registered resource was still disposed; failures surfaced after the teardown ran (#1572)')
+  }
 }
