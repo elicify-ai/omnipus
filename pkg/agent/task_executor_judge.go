@@ -460,7 +460,13 @@ func taskRunNoticeStatus(t *task.Task) string {
 // update_task, with no run) delivers nothing. Never notified: skipped fires and
 // goal-loop retries, which never reach this function.
 func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task.Task, run *activeRun) {
-	if t == nil || t.SessionID == "" || run == nil || len(run.recipients) == 0 {
+	if t == nil || t.SessionID == "" || run == nil {
+		return
+	}
+	// The creator copy is owed even when the run captured no recipient (a
+	// person- or scheduler-started worker run; FR-18/19).
+	targets := noticeTargets(t, run)
+	if len(targets) == 0 {
 		return
 	}
 	deliverer := te.agentLoop.getUpwardDeliverer()
@@ -513,7 +519,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 		return
 	}
 
-	for _, recipient := range noticeTargets(t, run) {
+	for _, recipient := range targets {
 		visible, lost := te.recipientStillVisible(t, recipient)
 		if lost != nil {
 			te.recordNoticeLoss(t, recipient, lost.Error())
