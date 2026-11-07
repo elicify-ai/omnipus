@@ -63,10 +63,11 @@ func TestT10_ReloadKeepsBootBackoffUntilPhysicalRestart(t *testing.T) {
 			doc["schedules"] = schedules
 			encoded, err = json.Marshal(doc)
 			require.NoError(t, err)
-			next := *st.cfg
-			require.NoError(t, json.Unmarshal(encoded, &next))
+			next, err := st.cfg.Clone()
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(encoded, next))
 			stopAndCleanupServices(svc, time.Second, true)
-			st.agentLoop.SwapConfig(&next)
+			st.agentLoop.SwapConfig(next)
 			rs := &restartServicesState{al: st.agentLoop, msgBus: st.msgBus, runningServices: svc, cfg: st.agentLoop.GetConfig()}
 			reloadErr, stop := rs.restartCron()
 			require.NoError(t, reloadErr)
@@ -89,7 +90,7 @@ func TestT10_ReloadKeepsBootBackoffUntilPhysicalRestart(t *testing.T) {
 			cs.WaitForLane()
 			svc.CronService.Stop()
 			svc.CronService.WaitForLane()
-			fresh, err := setupCronTool(st.agentLoop, st.msgBus, st.homePath, &next, nil)
+			fresh, err := setupCronTool(st.agentLoop, st.msgBus, st.homePath, next, nil)
 			require.NoError(t, err)
 			fresh.SetClock(clk)
 			fresh.SetRunner(runner)

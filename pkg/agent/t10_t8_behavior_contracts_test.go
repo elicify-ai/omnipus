@@ -647,8 +647,9 @@ func t10T8ReloadIdentity(t *testing.T) {
 	before := f.s
 	// Kernel reload is real; gateway full-cycle coverage is separately in
 	// TestReload_DoesNotRestartEngineOrStrandRunning (not claimed equivalent).
-	cfg := *f.al.cfg
-	f.al.SwapConfig(&cfg)
+	cfg, err := f.al.cfg.Clone()
+	require.NoError(t, err)
+	f.al.SwapConfig(cfg)
 	assert.Same(t, before, f.al.taskTriggerScheduler())
 	assert.Equal(t, jobs, f.jobs(t, tk.ID))
 	f.s.RunDueJobs(f.clk.Now())
