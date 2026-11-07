@@ -65,7 +65,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
 import { freshChat } from './session-setup'
-import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
+import { saveStubCliProgram, stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 import { sessionMessages, type RetainedHistoryMessage } from './session-history'
 import { e2eAgentModelFields } from './e2e-agent-model'
 import { requireLiveModelKeys } from './e2e-model-keys'
@@ -521,6 +521,11 @@ export async function createPlanWithMembers(
  * LLM on the worker side. Put it on the workspace team like any other assignee.
  */
 export async function createStubCliWorkerAgent(page: Page, name: string, texts: StubCliTexts): Promise<string> {
+  // The program path is Settings-owned (r17 §3.11): save the stub as the
+  // person-chosen claude-code program BEFORE the agent body — an agent request
+  // carrying executor.cli_path is refused 400 ("cli_path cannot be set on an
+  // agent"), and without a saved path the worker is created unable to run.
+  await saveStubCliProgram(page)
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
     type: 'subagent_3p',
     name,
