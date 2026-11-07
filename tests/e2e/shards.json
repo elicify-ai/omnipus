@@ -10,7 +10,8 @@
         "tests/e2e/provider-retry.spec.ts",
         "tests/e2e/truncation-notice-live.spec.ts",
         "tests/e2e/terminal-outcome.spec.ts",
-        "tests/e2e/parent-wake-stream.spec.ts"
+        "tests/e2e/parent-wake-stream.spec.ts",
+        "tests/e2e/groupchat1449-remote-image.spec.ts"
       ]
     },
     {
@@ -83,7 +84,8 @@
         "tests/e2e/contract-counters.spec.ts",
         "tests/e2e/sidebar-agent-row-menu.spec.ts",
         "tests/e2e/side-panel-signin-return.spec.ts",
-        "tests/e2e/chat-composer-focus-replay.spec.ts"
+        "tests/e2e/chat-composer-focus-replay.spec.ts",
+        "tests/e2e/skills-builtin-copy.spec.ts"
       ]
     },
     {
@@ -163,6 +165,7 @@
         "tests/e2e/onboarding.spec.ts",
         "tests/e2e/profile-fontsize.spec.ts",
         "tests/e2e/providers.spec.ts",
+        "tests/e2e/providers-toast.spec.ts",
         "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts",
         "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts",
         "tests/e2e/trace-secret-canary.spec.ts"
@@ -178,7 +181,8 @@
         "tests/e2e/web-serve-canonical.spec.ts",
         "tests/e2e/web-serve-malformed.spec.ts",
         "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
-        "tests/e2e/chat-history-paging.usage-reload.spec.ts"
+        "tests/e2e/chat-history-paging.usage-reload.spec.ts",
+        "tests/e2e/chat-history-paging.large-output-preview.spec.ts"
       ]
     },
     {
@@ -189,8 +193,10 @@
         "tests/e2e/whatsapp-qr.spec.ts",
         "tests/e2e/channel-instance-crud.spec.ts",
         "tests/e2e/channel-routing.spec.ts",
+        "tests/e2e/channels-outbound.spec.ts",
         "tests/e2e/tool-iteration-limit.spec.ts",
         "tests/e2e/chat-history-paging.unavailable-history-live-controls.spec.ts",
+        "tests/e2e/agent-parity-approval.spec.ts",
         "tests/e2e/sidebar-session-backdrop.spec.ts"
       ]
     },

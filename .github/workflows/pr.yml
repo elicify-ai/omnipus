@@ -784,6 +784,33 @@ jobs:
         # reports green — see the script header for the 116-file incident.
         run: node scripts/check-vitest-coverage.mjs
 
+      # r15 S-11.19 bridge: src/lib/api/skills-real-responses.test.ts feeds the
+      # REAL gateway responses saved by the Go producer through the generated
+      # schemas and the real SPA adapters. It needs SKILLS_REST_CORPUS, so the
+      # producer runs first, serially, in the one group that owns src/lib/.
+      - name: Setup Go (skills response corpus producer)
+        if: matrix.group == 'lib-store'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Produce the real skills REST response corpus
+        if: matrix.group == 'lib-store'
+        run: |
+          set -euo pipefail
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+          go generate ./...
+          corpus="$RUNNER_TEMP/skills-real-responses.json"
+          log="$RUNNER_TEMP/skills-corpus-producer.log"
+          SKILLS_REST_CORPUS="$corpus" go test -v -tags goolm,stdjson -count=1 -timeout 300s \
+            -run '^TestRestS1119_ResponseCorpus$' ./pkg/gateway 2>&1 | tee "$log"
+          # `go test` exits 0 when the -run filter matches nothing or the test
+          # skips: the producer must have really run and passed.
+          grep -q -- '--- PASS: TestRestS1119_ResponseCorpus' "$log" || { echo "::error::the corpus producer did not run and pass" >&2; exit 1; }
+          if grep -q -- '--- SKIP' "$log"; then echo "::error::the corpus producer skipped" >&2; exit 1; fi
+          test -s "$corpus" || { echo "::error::no corpus written at $corpus" >&2; exit 1; }
+          printf 'SKILLS_REST_CORPUS=%s\n' "$corpus" >> "$GITHUB_ENV"
+
       - name: Run Vitest (${{ matrix.group }})
         env:
           VITEST_PATTERNS: ${{ matrix.patterns }}
@@ -871,10 +898,12 @@ jobs:
       # are merged — so both run in the design-system-audit job, not here.
       - run: npm run test:design-system:package
       # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
+      # Baseline re-based 2026-11-03 to the release/v0.1.1 tip 3e2dc1ace by founder
+      # decision B1 = A (#1183); it was the frozen 92aeb4d5d (2026-09-17) before.
       - name: Checkout immutable production baseline
         uses: actions/checkout@v7
         with:
-          ref: 92aeb4d5dcb0d545e2370ddd1c57c099a03392ba
+          ref: 3e2dc1ace3da5bf1c035ca9808de18964565182e
           path: dist/design-system-ci-baseline
       - name: Build baseline with its original dependency lock
         working-directory: dist/design-system-ci-baseline

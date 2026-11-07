@@ -580,7 +580,7 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unwired := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer"})
+	unwired := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer", "fields": []any{"activation_status"}})
 	if unwired.IsError {
 		t.Fatalf("get_agent failed: %s", unwired.ForLLM)
 	}
@@ -590,7 +590,7 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 	}
 
 	homeDeps.AgentIsLive = func(id string) bool { return id == "writer" }
-	live := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer"})
+	live := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer", "fields": []any{"activation_status"}})
 	if live.IsError {
 		t.Fatalf("get_agent failed: %s", live.ForLLM)
 	}
@@ -600,7 +600,7 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 	}
 
 	homeDeps.AgentIsLive = func(string) bool { return false }
-	stored := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer"})
+	stored := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer", "fields": []any{"activation_status"}})
 	storedBody := parseSuccess(t, stored.ForLLM)
 	if storedBody["activation_status"] != string(agentstore.ActivationNotAttempted) {
 		t.Errorf("stored-but-unpublished must report %s, got %v", agentstore.ActivationNotAttempted, storedBody["activation_status"])

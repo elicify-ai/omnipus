@@ -259,6 +259,26 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 // extra adds metadata to the wake (a group-chat room request adds its no-join
 // marker and room id, room_request.go) - the same one publication site.
 func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) error {
+	return al.publishRequestWakeMessage(ctx, requestWakeMessage(receiver, sender, requestID, receiverSessionID, content, extra...))
+}
+
+// publishCaptureWake is publishRequestWake for a stored capture: it also hands
+// the request's files to the turn (#1449 FR-019).
+func (al *AgentLoop) publishCaptureWake(ctx context.Context, c addressing.Capture, extra ...map[string]string) error {
+	msg := requestWakeMessage(c.Receiver, c.Sender, c.RequestID, c.ReceiverSessionID, c.Text, extra...)
+	msg.Media = append([]string(nil), c.Media...)
+	return al.publishRequestWakeMessage(ctx, msg)
+}
+
+// publishRequestWakeMessage is the one PublishInbound site both request wakes
+// share; msg is always built by requestWakeMessage (owner-wake marker, never
+// OperatorPrompt or UserInitiated).
+func (al *AgentLoop) publishRequestWakeMessage(ctx context.Context, msg bus.InboundMessage) error {
+	return al.bus.PublishInbound(ctx, msg)
+}
+
+// requestWakeMessage is the owner wake of an admitted request.
+func requestWakeMessage(receiver addressing.Pair, sender addressing.Sender, requestID, receiverSessionID, content string, extra ...map[string]string) bus.InboundMessage {
 	meta := map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"}
 	if sender.Agent.AgentID != "" {
 		// §6.18: the receiving turn's origin is this peer ("asked by <Agent>").
@@ -269,7 +289,7 @@ func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing
 			meta[k] = v
 		}
 	}
-	return al.bus.PublishInbound(ctx, bus.InboundMessage{
+	return bus.InboundMessage{
 		Channel:           "webchat",
 		ChatID:            "request:" + requestID,
 		Sender:            bus.SenderInfo{CanonicalID: "request:" + requestID},
@@ -277,7 +297,7 @@ func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing
 		SessionID:         receiverSessionID,
 		TranscriptEntryID: requestID,
 		Metadata:          meta,
-	})
+	}
 }
 
 // composeRequestText is the server-composed envelope the receiver reads. The
@@ -479,6 +499,10 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 	if err != nil {
 		return tools.ReplyReceipt{}, replyRefusal(err)
 	}
+	if len(req.Media) > 0 && capture.Source.Kind != addressing.SourceRoom {
+		// #1449 FR-020: files travel only with an answer into a group.
+		return tools.ReplyReceipt{}, errors.New("files can be attached only to an answer to a group chat request; nothing was sent")
+	}
 	var receipt tools.ReplyReceipt
 	switch capture.Source.Kind {
 	case addressing.SourceConnector:
@@ -490,8 +514,10 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 	default:
 		return tools.ReplyReceipt{}, fmt.Errorf("%w", addressing.ErrUnusableCorrelation)
 	}
-	if err == nil {
-		al.settleRequest(capture.RequestID) // answered: no reminder owed
+	if err == nil || errors.Is(err, tools.ErrReplyCompleting) {
+		// Answered (an accepted group answer with files completes on its
+		// own, FR-078 (5)): no reminder owed.
+		al.settleRequest(capture.RequestID)
 	}
 	return receipt, err
 }
@@ -537,7 +563,7 @@ func (al *AgentLoop) replyViaConnector(ctx context.Context, c addressing.Capture
 		SessionID:        c.Source.SessionID,
 		Content:          req.Content,
 		ReplyToMessageID: c.Source.PlatformMessageID,
-		// The author is the responder; OwnershipChecked stays false because
+		// The author is the responder; Operation stays "" because
 		// the author owns nothing here — the Return route is what authorizes.
 		AgentID:     responder.AgentID,
 		WorkspaceID: responder.WorkspaceID,

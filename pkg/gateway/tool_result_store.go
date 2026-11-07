@@ -38,6 +38,11 @@ const toolResultPreviewBytes = 4 * 1024 // 4 KiB
 // not exist under the given session directory.
 var ErrToolResultNotFound = errors.New("tool result not found")
 
+// ErrToolResultTooLarge is returned by readByRef when the stored body exceeds
+// the 1 MiB retrieval cap (replayMaxResultBytes). The body is refused whole,
+// never cut into a byte prefix that would not be the stored JSON.
+var ErrToolResultTooLarge = errors.New("tool result exceeds the retrieval cap")
+
 // toolResultStore handles persistence of tool results that exceed InlineToolResultMaxBytes.
 //
 // Files are written to $OMNIPUS_HOME/tool_results/<session_id>/<ref>.json (mode 0600).
@@ -115,14 +120,44 @@ func (s *toolResultStore) readByRef(sessionID, ref string) ([]byte, error) {
 		return nil, ErrToolResultNotFound
 	}
 
-	data, err := os.ReadFile(target)
+	f, err := os.Open(target)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrToolResultNotFound
 		}
 		return nil, fmt.Errorf("tool_result_store: read %s: %w", ref, err)
 	}
+	defer f.Close()
+	// Bound the read before allocating: an oversized or growing file is
+	// refused after at most replayMaxResultBytes+1 bytes, never read whole.
+	data, err := io.ReadAll(io.LimitReader(f, replayMaxResultBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("tool_result_store: read %s: %w", ref, err)
+	}
+	if len(data) > replayMaxResultBytes {
+		return nil, ErrToolResultTooLarge
+	}
 	return data, nil
+}
+
+// removeSession deletes every stored result of one deleted session. A missing
+// directory is not an error.
+func (s *toolResultStore) removeSession(sessionID string) error {
+	if s == nil || s.homePath == "" {
+		return nil
+	}
+	if err := validateEntityID(sessionID); err != nil {
+		return fmt.Errorf("invalid session id: %w", err)
+	}
+	base := filepath.Join(s.homePath, "tool_results")
+	dir := filepath.Join(base, sessionID)
+	if !hasPathPrefix(dir, base) || dir == filepath.Clean(base) {
+		return fmt.Errorf("tool_result_store: session directory escapes the store")
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("tool_result_store: remove session results: %w", err)
+	}
+	return nil
 }
 
 // retentionSweep deletes tool-result files whose mtime is older than
@@ -241,6 +276,19 @@ func maybeOffloadResult(
 		preview = encoded[:toolResultPreviewBytes]
 	}
 
+	// A ToolResultRef is only for a body the retrieval route can return whole
+	// (ToolResultRef.yaml: over the inline threshold but under the 1 MiB hard
+	// cap). Above the cap no reference is published: the generated
+	// TruncatedResult sentinel says the full body is not retrievable.
+	if len(encoded) > replayMaxResultBytes {
+		slog.Warn("tool_result_store: result exceeds the retrievable cap — emitting truncated sentinel",
+			"event", "tool_result_over_cap",
+			"session_id", sessionID,
+			"size_bytes", len(encoded),
+		)
+		return generated.TruncatedResult{Truncated: true, OriginalSizeBytes: len(encoded), Preview: string(preview)}, true
+	}
+
 	ref, ok := store.saveJSON(sessionID, encoded)
 	if !ok {
 		// Write failed (disk full, EPERM, etc.).  Do NOT re-inline the large body —
@@ -329,17 +377,20 @@ var unparseableFailureWarns atomic.Uint64
 // reconnect, into a log this project already has a documented flooding hazard
 // with. The signal is identical every time, so the first one is the whole
 // message; the rest is volume.
-func warnUnparseableStructuredFailure(err error, payload string) {
+//
+// Content-free on purpose (#1452 security gate SEC-2): this runs while history
+// pages are prepared, so the payload is saved tool-error text. Only a fixed
+// event/reason and counts are logged — never a payload prefix, and never the
+// JSON error text, whose SyntaxError quotes the offending payload character.
+func warnUnparseableStructuredFailure(payloadLen int) {
 	n := unparseableFailureWarns.Add(1)
 	if n != 1 && n%10 != 0 {
 		return
 	}
 	slog.Warn("gateway: structured tool-failure payload failed to parse; rendering as prose",
-		"error", err,
-		"len", len(payload),
-		// truncateRunesForFrame, not payload[:60] — a byte slice can cut a
-		// multi-byte rune in half and put invalid UTF-8 into a log field.
-		"prefix", truncateRunesForFrame(payload, 60),
+		"event", "structured_tool_failure_parse_failed",
+		"reason", "invalid_json",
+		"len", payloadLen,
 		"occurrences", n)
 }
 
@@ -361,14 +412,14 @@ func parseStructuredToolFailure(result string) (obj map[string]any, reason strin
 		return nil, "", false
 	}
 	var parsed map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+	if json.Unmarshal([]byte(trimmed), &parsed) != nil {
 		// A string that OPENS like one of our payloads but does not parse is
 		// almost certainly one that got truncated downstream — the producers
 		// bound their fields precisely so this cannot happen, so if it does,
 		// something moved. Silence here would render a JSON fragment to the
 		// user with no trace of why, which is how this class stays invisible.
 		if strings.HasPrefix(trimmed, `{"error":"`) {
-			warnUnparseableStructuredFailure(err, trimmed)
+			warnUnparseableStructuredFailure(len(trimmed))
 		}
 		return nil, "", false
 	}

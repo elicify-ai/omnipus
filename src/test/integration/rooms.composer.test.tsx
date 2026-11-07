@@ -1,20 +1,30 @@
 // RED — US-17 AS-3/12, FR-164/168/175/189/205/206, §6.13, K26.
 // REAL RoomScreen, stores, QueryClient, parser and room API. Only HTTP/socket
 // edges are doubled. Server fan-out and command execution remain backend/UAT.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { act } from 'react'
-import { screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { act, type ComponentType } from 'react'
+import { screen, waitFor, within } from '@testing-library/react'
+import type { PanelContentProps } from '@/components/panel-shell/types'
 import userEvent from '@testing-library/user-event'
 import type { RoomMessageRequest } from '@/lib/api/generated/openapi-types'
 import type { WsConnection } from '@/lib/ws'
 import { queryClient } from '@/lib/queryClient'
 import {
-  agents, Network, entry, json, openRoom, resetRealStores, room, ROOM_ID,
-  snapshot, stopHarness, WS,
+  agents, Network, entry, json, loadRoomScreen, mountAt, openRoom, requiredExport,
+  resetRealStores, room, ROOM_ID, snapshot, stopHarness, WS,
 } from '../../../tests/l1-room-ui/harness'
 
 let net: Network
 let connection: WsConnection | undefined
+let ParticipantsPanel: ComponentType<{ shellProps?: PanelContentProps }>
+// #616: use the existing hookTimeout for the real screen's module graph;
+// neither testTimeout nor hookTimeout is increased.
+beforeAll(async () => {
+  await loadRoomScreen()
+  ParticipantsPanel = await requiredExport(
+    '/src/components/rooms/ParticipantsPanel.tsx', 'ParticipantsPanel', '#1449 FR-035; S-52',
+  )
+})
 beforeEach(() => { resetRealStores(); net = new Network(); connection = undefined })
 afterEach(() => stopHarness(connection))
 
@@ -26,7 +36,7 @@ async function open(state = snapshot()) {
 
 async function sendText(text: string) {
   const user = userEvent.setup()
-  await user.type(screen.getByRole('textbox'), text)
+  await user.type(screen.getByRole('combobox', { name: 'Message the group' }), text)
   await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
 }
 
@@ -52,8 +62,12 @@ describe('Room composer — user addressing, not main-chat steering', () => {
   it('[FR-175; §6.13; BDD-17.3] the @ picker offers @all and exactly the current room members, not the entire workspace', async () => {
     net.currentRoom = room({ members: ['mia', 'jim'] })
     await open(snapshot({ members: ['mia', 'jim'] }))
-    await userEvent.setup().type(screen.getByRole('textbox'), '@')
-    expect(await screen.findByRole('option', { name: /^@?all$/i })).toBeVisible()
+    await userEvent.setup().type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
+    // #1449 S-14 / FR-011 require the all token, not a separator between
+    // its label and description in the computed accessible name. Match the
+    // name start, then require the exact visible token to reject @alligator.
+    const all = await screen.findByRole('option', { name: /^@all/i })
+    expect(within(all).getByText('@all', { exact: true })).toBeVisible()
     expect(screen.getByRole('option', { name: /Mia/ })).toBeVisible()
     expect(screen.getByRole('option', { name: /Jim/ })).toBeVisible()
     expect(screen.getAllByRole('option')).toHaveLength(3)
@@ -66,9 +80,9 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     net.currentRoom = room({ muted: ['jim'] })
     await open(snapshot({ muted: ['jim'] }))
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox'), '@')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     await user.click(await screen.findByRole('option', { name: /Jim/ }))
-    await user.type(screen.getByRole('textbox'), ' anything?')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' anything?')
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     expect((await posted()).mentions).toEqual(['jim'])
   })
@@ -76,9 +90,11 @@ describe('Room composer — user addressing, not main-chat steering', () => {
   it('[FR-164; §6.13; K26] choosing @all carries the reserved all token, not member display names', async () => {
     await open()
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox'), '@')
-    await user.click(await screen.findByRole('option', { name: /^@?all$/i }))
-    await user.type(screen.getByRole('textbox'), ' go')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
+    const all = await screen.findByRole('option', { name: /^@all/i })
+    expect(within(all).getByText('@all', { exact: true })).toBeVisible()
+    await user.click(all)
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' go')
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     const request = await posted()
     expect(request.mentions).toEqual(['all'])
@@ -89,12 +105,21 @@ describe('Room composer — user addressing, not main-chat steering', () => {
     net.roster = agents.map((agent) => agent.id === 'jim' ? { ...agent, name: 'Jim Smith' } : agent)
     await open()
     const user = userEvent.setup()
-    await user.type(screen.getByRole('textbox'), '@')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), '@')
     await user.click(await screen.findByRole('option', { name: /Jim Smith/ }))
-    await user.type(screen.getByRole('textbox'), ' review this')
+    await user.type(screen.getByRole('combobox', { name: 'Message the group' }), ' review this')
+    // #1449 D6 / FR-035: current member names live in Participants, not
+    // the retired header list. S-15 / FR-011 still require the picked ID.
+    await mountAt(<ParticipantsPanel shellProps={{
+      context: { workspaceId: WS, roomId: ROOM_ID }, presentation: 'docked',
+      close() {}, expand() {}, registerExpandContext() {}, onWidthSettle() {},
+    }} />)
+    const jim = await screen.findByTestId('participant-row-jim')
+    expect(within(jim).getByText('Jim Smith', { exact: true })).toBeVisible()
     net.roster = net.roster.map((agent) => agent.id === 'jim' ? { ...agent, name: 'James' } : agent)
     await act(async () => { await queryClient.invalidateQueries({ queryKey: ['agents'] }) })
-    expect(await screen.findByText('James', { exact: true })).toBeVisible()
+    expect(await within(jim).findByText('James', { exact: true })).toBeVisible()
+    expect(within(jim).queryByText('Jim Smith', { exact: true })).toBeNull()
     await user.click(screen.getByRole('button', { name: /^send(?: message)?$/i }))
     expect((await posted()).mentions).toEqual(['jim'])
   })
@@ -121,7 +146,7 @@ describe('Room composer — user addressing, not main-chat steering', () => {
   it('[§6.13; K26] deleting a picked mention cannot keep addressing that agent invisibly', async () => {
     await open()
     const user = userEvent.setup()
-    const input = screen.getByRole('textbox')
+    const input = screen.getByRole('combobox', { name: 'Message the group' })
     await user.type(input, '@')
     await user.click(await screen.findByRole('option', { name: /Jim/ }))
     await user.clear(input)
@@ -155,9 +180,10 @@ describe('FR-205 reduced command set — room requests never call main-chat comm
     const harness = await open()
     // Transport refusal is the process edge. A local refusal is equally valid;
     // neither path may invoke a main-chat command or mutate membership.
-    net.respond('POST', `/api/v1/rooms/${ROOM_ID}/messages`, () => json({ error: "Rooms don't steer agents — use Jim's main chat" }, 422))
+    // S-13 / Q1: the spec sentence uses a hyphen, not an em dash.
+    net.respond('POST', `/api/v1/rooms/${ROOM_ID}/messages`, () => json({ error: "Rooms don't steer agents - use Jim's main chat" }, 422))
     await sendText(command)
-    expect(await screen.findByText(/Rooms don't steer agents — use .*main chat/)).toBeVisible()
+    expect(await screen.findByText(/Rooms don't steer agents - use .*main chat/)).toBeVisible()
     for (const member of members) {
       const link = screen.getByRole('link', { name: new RegExp(`${member}.*main chat|main chat.*${member}`, 'i') })
       expect(link.getAttribute('href')).toMatch(new RegExp(`main-${member.toLowerCase()}-sales|agent_id=${member.toLowerCase()}`))

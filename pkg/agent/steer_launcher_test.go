@@ -192,7 +192,8 @@ func newTestSteeringSessionOwnedBy(t *testing.T, al *AgentLoop, workspaceID, own
 // call), not read live. Callers MUST create any skill fixture (writeSkill/
 // writeSkillWithName) under home BEFORE calling this, mirroring
 // loop_test.go's TestProcessMessage_SkillCommandLoadsRequestedSkill fixture
-// order.
+// order. r15 SD-30 also requires a persisted matching binding; this opt-in
+// helper obtains it through the real store, leaving absent names unbound.
 func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*AgentLoop, func()) {
 	t.Helper()
 	cfg := &config.Config{
@@ -203,7 +204,7 @@ func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*A
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: home, Skills: grantedSkills}},
+			List: []config.AgentConfig{persistSkillGrantFixture(t, home, config.AgentConfig{ID: testDefaultAgentID, Home: home, Skills: grantedSkills})},
 		},
 	}
 	msgBus := bus.NewMessageBus()

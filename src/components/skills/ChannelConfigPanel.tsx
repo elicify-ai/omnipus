@@ -19,6 +19,7 @@ import {
   fetchChannelConfig,
   configureChannel,
   enableChannel,
+  fetchChannelOutbound,
   fetchChannelRouting,
   setChannelRouting,
   fetchAgents,
@@ -26,13 +27,20 @@ import {
   isWorker,
   isApiError,
 } from '@/lib/api'
-import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
+import { getChannelFields, splitIdListText, type ChannelField } from '@/lib/channel-fields'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { ChannelOutboundSection } from '@/components/connectors/ChannelOutboundSection'
 import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
 import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
+import type { ChannelConfigureResponse, ChannelRejectedSenders } from '@/lib/api/generated/openapi-types'
+import {
+  availabilityText,
+  describeConfigureOutcome,
+  type ConfigureOutcomeView,
+} from './channelConfigureOutcome'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
 // (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
@@ -74,6 +82,12 @@ interface ChannelConfigPanelProps {
   enabled?: boolean
   /** A failed channels readback is unknown, not a confirmed disabled state. */
   enabledStateUnknown?: boolean
+  /**
+   * ChannelEntry.rejected_senders from the parent's live channels query
+   * (channels spec FR-061): present only when the running adapter ignored at
+   * least one message from a sender not on its allowed list.
+   */
+  rejectedSenders?: ChannelRejectedSenders
 }
 
 // #326: Map raw snake_case API field keys to human-readable labels using the
@@ -322,7 +336,7 @@ function ChannelFieldRow({
         <Input
           id={`field-${field.key}`}
           type={field.type === 'number' ? 'number' : 'text'}
-          value={String(getValue(field.key) ?? '')}
+          value={field.type === 'list' ? listFieldText(getValue(field.key)) : String(getValue(field.key) ?? '')}
           onChange={(e) =>
             setValue(
               field.key,
@@ -388,6 +402,13 @@ function validateRequired(
   return errors
 }
 
+// listFieldText shows a 'list' field's value in its text box: a saved list
+// reads "a, b"; text the user is typing (or an older saved string) shows as is.
+function listFieldText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).join(', ')
+  return String(value ?? '')
+}
+
 // focusFirstInvalidField moves keyboard/AT focus to the first field with a
 // validation error after a blocked Save — otherwise the error is set but
 // nothing tells a keyboard or screen-reader user where to go. `errors` keys
@@ -409,6 +430,7 @@ export function ChannelConfigPanel({
   nativeAvailable,
   enabled,
   enabledStateUnknown = false,
+  rejectedSenders,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -416,6 +438,9 @@ export function ChannelConfigPanel({
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
+  // 'list' fields the user has typed into since the panel opened. Their text
+  // is split into ids on submit (U7); an untouched value travels as loaded.
+  const editedListKeysRef = useRef(new Set<string>())
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -557,6 +582,7 @@ export function ChannelConfigPanel({
       setFormValues({})
       setHasStoredSecret({})
       isDirtyRef.current = false
+      editedListKeysRef.current.clear()
       setGChatAuthMethod('webhook')
     }
   }, [open])
@@ -601,6 +627,15 @@ export function ChannelConfigPanel({
     const editable: Record<string, unknown> = { ...(currentConfig as Record<string, unknown>) }
     delete editable.identity
     delete editable.workspace_id
+    // Channels spec FR-023 / S-34: "Starting messages" is saved only through
+    // its own route (the section below), and Configure rejects `outbound` with
+    // 400. Echoing it back would also let a form opened before a revocation
+    // restore the old grant. The apply_* keys are a Configure response's
+    // outcome, never settings.
+    delete editable.outbound
+    delete editable.apply_outcome
+    delete editable.apply_reason
+    delete editable.apply_note
 
     // SECURITY / UX: redactable (password/textarea) fields never hydrate the
     // raw "[configured]" sentinel into the form (see CONFIGURED_SENTINEL) — a
@@ -645,12 +680,14 @@ export function ChannelConfigPanel({
       }
       return configureChannel(channelId, buildSubmitPayload())
     },
-    onSuccess: () => {
+    onSuccess: (response: ChannelConfigureResponse) => {
       isDirtyRef.current = false
       setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      addToast({ message: 'Configuration saved', variant: 'success' })
+      // A first save creates the connection; Starting messages unlocks on re-read.
+      queryClient.invalidateQueries({ queryKey: ['channel-outbound', channelId] })
+      showConfigureOutcome(channelId, describeConfigureOutcome(response, 'save'))
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === 'Please fill in the required fields') return
@@ -667,14 +704,22 @@ export function ChannelConfigPanel({
         focusFirstInvalidField(errors)
         throw new Error('Please fill in the required fields')
       }
-      await configureChannel(targetId, buildSubmitPayload())
+      const response = await configureChannel(targetId, buildSubmitPayload())
+      // T-6c: the save outcome is shown first; enable runs only after
+      // `applied` or `no_reload_needed`.
+      const outcome = describeConfigureOutcome(response, 'save-and-enable')
+      if (panelSessionRef.current === panelSession) showConfigureOutcome(targetId, outcome)
+      if (!outcome.mayEnable) return { enabled: false }
       if (panelSessionRef.current === panelSession) setConfiguredForEnable(targetId)
       await enableChannel(targetId)
+      return { enabled: true }
     },
-    onSuccess: (_, { channelId: targetId, panelSession }) => {
+    onSuccess: ({ enabled: didEnable }, { channelId: targetId, panelSession }) => {
       if (panelSessionRef.current !== panelSession) return
       isDirtyRef.current = false
       setFieldErrors({})
+      // Saved but not enabled: the outcome toast already told the operator why.
+      if (!didEnable) return
       // Keep WhatsApp's viewer open; enabled is not proof of a QR or linked phone.
       const hasPairingFlow = targetId.split('.')[0] === WHATSAPP_CHANNEL_ID
       addToast({
@@ -700,12 +745,29 @@ export function ChannelConfigPanel({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['channels'] }),
         queryClient.invalidateQueries({ queryKey: ['channel-config', targetId] }),
+        queryClient.invalidateQueries({ queryKey: ['channel-outbound', targetId] }),
       ])
     },
   })
 
+  // T-6c: show a Configure outcome. For `failed` the panel then re-reads the
+  // connection's availability and, only when that read succeeds, adds the
+  // observed state; it never claims the old settings are still running.
+  function showConfigureOutcome(targetId: string, outcome: ConfigureOutcomeView) {
+    for (const toast of outcome.toasts) addToast(toast)
+    if (!outcome.readAvailability) return
+    fetchChannelOutbound(targetId).then(
+      (read) => addToast({ message: availabilityText(read.availability), variant: 'default' }),
+      () => {
+        // T-6c appends the state only "when that read succeeds"; the failed
+        // outcome's error toast is already shown and stands on its own.
+      },
+    )
+  }
+
   function setValue(key: string, value: unknown) {
     markDirty()
+    if (fields.some((f) => f.key === key && f.type === 'list')) editedListKeysRef.current.add(key)
     // Support nested keys like "group_trigger.mention_only"
     setFormValues((prev) => setNested(prev, key, value))
     // Clear this field's validation error as soon as the user edits it.
@@ -773,6 +835,21 @@ export function ChannelConfigPanel({
     for (const [key, value] of Object.entries(formValues)) {
       if (redactableKeys.has(key) && (value === '' || value === undefined || value === null)) continue
       payload[key] = value
+    }
+    // U7: a 'list' field the user typed into is submitted as its ids
+    // (string[], the Configure contract's allow_from), never as the typed
+    // text; clearing it submits [] (allow all). A saved list the user did not
+    // touch is already an array and travels unchanged. An untouched legacy
+    // value that is not a list (an old saved string) is left out entirely,
+    // so Save never writes it back (CHECK F7); the server keeps it as stored.
+    for (const field of fields) {
+      if (field.type !== 'list') continue
+      const value = getNested(formValues, field.key)
+      if (editedListKeysRef.current.has(field.key)) {
+        if (typeof value === 'string') payload[field.key] = splitIdListText(channelId, value)
+      } else if (!Array.isArray(value)) {
+        delete payload[field.key]
+      }
     }
 
     if (!isGoogleChat) return payload
@@ -855,6 +932,21 @@ export function ChannelConfigPanel({
             ? 'Link your WhatsApp account by scanning the QR code with your phone.'
             : `Enter your ${channelName} credentials to connect the bot.`}
         </p>
+
+        {/* Channels spec FR-061 / S-53: one line from the roster entry's
+            rejected_senders (present only when count >= 1). Each canonical id
+            is its own text span so it can be selected and copied whole. */}
+        {rejectedSenders && (
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-[var(--space-4)] pt-[var(--space-2)]">
+            {`Ignored ${rejectedSenders.count} messages from senders not on the allowed list. Latest: `}
+            {rejectedSenders.recent.map((id, i) => (
+              <span key={`${i}-${id}`}>
+                {i > 0 && ', '}
+                <span className="select-all text-[var(--color-secondary)]">{id}</span>
+              </span>
+            ))}
+          </p>
+        )}
 
         {isLoading ? (
           <div className="px-[var(--space-4)] pt-[var(--space-4)] space-y-[var(--space-3)]">
@@ -1145,6 +1237,11 @@ export function ChannelConfigPanel({
                 Save
               </Button>
             </div>
+
+            {/* Channels spec FR-026: "Starting messages" has its own Save and
+                route; the buttons above never save it. Webchat has no
+                outbound setting. */}
+            {!isWebchat && <ChannelOutboundSection channelId={channelId} channelName={channelName} />}
           </div>
         )}
       </SheetContent>

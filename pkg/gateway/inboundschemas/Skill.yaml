@@ -10,8 +10,18 @@ required:
   - version
   - verified
   - status
+  - has_local_changes
 additionalProperties: false
 properties:
+  has_local_changes:
+    type: boolean
+    description: >
+      true when any of: (a) the newest version's kind is not install or
+      install_replace (a restore of an install version counts as a change);
+      (b) the live folder's current content revision differs from the newest
+      version's revision (an outside change not yet recorded) — evaluated at
+      read time, never by writing history; (c) history is missing or
+      unreadable. Always false for built-ins.
   revision:
     $ref: './ConfigurationRevision.yaml'
   persistence_status:

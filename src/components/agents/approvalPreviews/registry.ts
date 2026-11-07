@@ -12,7 +12,16 @@ import {
   EnvironmentSetupApprovalPreview,
   environmentSetupApprovalTitle,
 } from './EnvironmentSetupApprovalPreview'
+import { AgentChangeApprovalPreview, redactAgentChangeArgs } from './AgentChangeApprovalPreview'
 import type { ToolApprovalPreviewEntry } from './types'
+
+// tool-parity r17 FR-160: one additive summary for both agent writers; the
+// raw Arguments block stays beside it (17.3) with env values masked.
+const agentChangePreview: ToolApprovalPreviewEntry = {
+  mode: 'additive',
+  Body: AgentChangeApprovalPreview,
+  redactArgs: redactAgentChangeArgs,
+}
 
 export const TOOL_APPROVAL_PREVIEWS: Record<string, ToolApprovalPreviewEntry> = {
   bash: {
@@ -39,4 +48,6 @@ export const TOOL_APPROVAL_PREVIEWS: Record<string, ToolApprovalPreviewEntry> = 
     Body: EnvironmentSetupApprovalPreview,
     title: environmentSetupApprovalTitle,
   },
+  create_agent: agentChangePreview,
+  update_agent: agentChangePreview,
 }

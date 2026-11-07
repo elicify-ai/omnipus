@@ -216,6 +216,14 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, args map[string]any) 
 		Questions:           questions,
 		Status:              askuser.StatusPending,
 	}
+	// #1449 C-I6, FR-050: the question's group reference and origin label
+	// are captured now, before the set is persisted and published, and are
+	// immutable after. Only work that answers exactly one group carries a
+	// reference (D23, D28).
+	if ref, label := ToolApprovalProvenance(ctx); ref != nil || label != "" {
+		set.RoomRef = ref
+		set.OriginLabel = label
+	}
 
 	if err := reg.CreatePending(set); err != nil {
 		switch {

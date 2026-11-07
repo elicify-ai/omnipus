@@ -96,7 +96,9 @@ async function settleRows() {
   await act(async () => { layout?.flushResize() })
 }
 
-// No source-alias/D1 assertion: the saved same-turn step is a distinct message.
+// S11b/S11c at d2b64f43d: adjacent saved/live sources of the same turn
+// form one row with an empty seam. Team-lead approved this one frozen-oracle
+// change on 2026-10-29; the per-observation no-blank/no-retype guards stay.
 // Both classes use the shared renderer that a running helper chat also uses.
 describe('F-FLICKER: opening an already-running conversation', () => {
   for (const withSavedStep of [false, true]) {
@@ -117,9 +119,19 @@ describe('F-FLICKER: opening an already-running conversation', () => {
         await sendFrames(socket, [liveToken(` t${index}`, 101 + index)])
         await settleRows()
       }
-      const finalText = `${PREFIX} t0 t1 t2`
+      const finalText = withSavedStep ? 'PARTIAL saved stepPARTIAL one t0 t1 t2' : `${PREFIX} t0 t1 t2`
       await waitFor(() => expect(within(liveRows(region)[0]).getAllByText(finalText, { exact: true }),
         'the running renderer eventually contains the exact authored text once').toHaveLength(1))
+      if (withSavedStep) {
+        const current = useChatStore.getState().sessionsById[MAIN_ID]
+        const segment = current.messageOrder.map(id => current.messagesById[id]).filter(row => row.turnId === 'turn-1')
+        expect(segment.map(row => [row.id, row.content]), 'S11b/c: one complete row at the earliest known text-source key').toEqual([['history-4', finalText]])
+        expect(segment[0].historyParts?.map(part => part.sourceId), 'saved and live sources each occur once in the combined row').toEqual(['history-4', LIVE_ID])
+        expect(liveRows(region)[0].querySelector('[data-message-id]'), 'the real running renderer uses that same display key').toHaveAttribute('data-message-id', 'history-4')
+        const rendered = liveRows(region)[0].textContent ?? ''
+        expect(rendered.split('PARTIAL saved step')).toHaveLength(2)
+        expect(rendered.split(`${PREFIX} t0 t1 t2`)).toHaveLength(2)
+      }
       expect(useChatStore.getState().isStreaming, 'instrument: this is still an active reply, not finalized history').toBe(true)
       expect(shown.length, 'instrument: at least one shown DOM observation was captured').toBeGreaterThan(0)
       // Check EVERY visible observation, not just the final settled DOM. A

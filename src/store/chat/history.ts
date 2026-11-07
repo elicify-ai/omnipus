@@ -1,4 +1,5 @@
 import { fetchSessionMessages } from '@/lib/api/sessions'
+import { advanceHistoryEntryGenerations, releaseHistoryEntryReads } from '@/lib/historyEntryReads'
 import type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing } from './types'
 import type { SessionHistoryPage, SessionHistoryQuery } from '@/lib/api/history-types'
 import type { ChatStore, ChatMessage } from './types'
@@ -6,8 +7,9 @@ import { queryClient } from '@/lib/queryClient'
 import { useConnectionStore } from '@/store/connection'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { isPendingTailMessage } from './cursor'
-import { emptyHistoryState, historyRowsPatch, mergeHistoryEntry, retainedPending } from './history-state'
-import { applySavedToolOwnership, savedToolCallOwners, savedToolOwnerPatch, applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick } from './history-merge'
+import { emptyHistoryState, historyRowsPatch, retainedPending } from './history-state'
+import { applySavedToolOwnership, savedToolCallOwners, savedToolOwnerPatch, applyHistoryPageToBucket, HistoryPageDeferredError, reachedClosedClear, releaseHistoryProtection, rememberHistoryReadFacts, settleHistorySpans, beginHistoryReadTick, bindHistoryEntries, lastBoundOccurrence } from './history-merge'
+import { foldTurnSegments, rekeyBucketIndexes, rekeyToolOwners } from './history-fold'
 export { emptyHistoryState } from './history-state'
 export type { HistorySlice, HistorySliceContext, HistoryActionKind, HistoryPageSizing, SessionHistoryState, SessionHistoryRange, HistoryRequestState } from './types'
 
@@ -58,6 +60,8 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
           if (!valid()) return
           validateReadDomain(page, query, kind)
           withBucket(sid, b => applyHistoryPageToBucket(b, page, kind, owner.baseline, owner.readTick))
+          // #1452 D2 A2.4: an authoritative commit voids older full-content reads.
+          advanceHistoryEntryGenerations(sid, page.entries.map(entry => entry.historyPosition))
         }
         if (!valid()) return
         failed.get(sid)?.delete(kind)
@@ -114,28 +118,37 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
     if (!valid()) return
     const ordered = old.filter(position => seen.has(position))
     if (ordered.join() !== staged.map(entry => entry.historyPosition).join()) throw new Error('Contradictory refresh order.')
-    withBucket(sid, b => {
-      const rows = staged.map(entry => {
-        const current = b.messagesById[entry.id]
-        return mergeHistoryEntry(entry, current, owner.baseline[entry.id])
-      })
+    commitRefresh(sid, ordered, staged, contexts, recordedTokens, owner, old.length)
+    advanceHistoryEntryGenerations(sid, ordered)
+  }
+  function commitRefresh(sid: string, ordered: string[], staged: SessionHistoryPage['entries'], contexts: SessionHistoryPage['page_info']['context'][], recordedTokens: number | undefined, owner: ReadOwner, oldLength: number): void {
+    withBucket(sid, original => {
+      // #1452 D1 S6: the same part-aware binding as a page commit, so a
+      // combined live row is neither split nor doubled by the refresh; S11
+      // folds each turn segment and releases an expired part on its own.
+      const bound = bindHistoryEntries(original, staged, owner.baseline)
+      const fold = foldTurnSegments(bound, original)
+      const positioned = fold.rows
+      const b = rekeyBucketIndexes(original, fold, positioned)
+      const rows = lastBoundOccurrence(positioned)
       const rowIds = new Set(rows.map(row => row.id))
       const confirmed = new Set(rows.flatMap(row => row.clientMessageId ? [row.clientMessageId] : []))
       const needed = retainedPending(b).filter(row => !rowIds.has(row.id) && !confirmed.has(row.clientMessageId ?? row.id))
       const pending = needed.filter(isPendingTailMessage)
       const liveOrder = [...new Set([...(b.historyLiveOrder ?? []), ...needed.map(row => row.id)])].filter(id => !rowIds.has(id) && !confirmed.has(b.messagesById[id]?.clientMessageId ?? id)).slice(-100)
-      const toolOwners = savedToolCallOwners(staged, rows)
+      const toolOwners = rekeyToolOwners(savedToolCallOwners(staged, bound), fold)
       const live = applySavedToolOwnership(liveOrder.flatMap(id => b.messagesById[id] ? [b.messagesById[id]] : []), toolOwners)
       // Refreshed saved rows re-settle their spans exactly as a page commit
       // does, or a reconstructed helper row would lose its span (I3).
       rememberHistoryReadFacts(sid, rows, contexts, owner.readTick)
       const spans = settleHistorySpans(sid, applySavedToolOwnership([...rows, ...pending], toolOwners), live, b.pendingSpanUpdatesBySpanId)
       const patch = historyRowsPatch(b, [...spans.rows, ...live], ordered)
-      patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners)
+      patch.toolCallOwnerMessageId = savedToolOwnerPatch(patch.toolCallOwnerMessageId, toolOwners, patch.messagesById)
+      patch.historySourceAliases = Object.fromEntries(positioned.flatMap(row => patch.messagesById?.[row.id] ? [[row.historyPosition!, row.id]] : []))
       return { ...patch, messageOrder: [...new Set(spans.rows.map(row => row.id))], historyLiveOrder: liveOrder,
         spanBySpanId: { ...patch.spanBySpanId, ...spans.index },
         sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, recordedTokens),
-        historyNotice: ordered.length < old.length ? (ordered.length ? 'Some loaded messages have expired.' : 'These loaded messages have expired.') : undefined,
+        historyNotice: ordered.length < oldLength ? (ordered.length ? 'Some loaded messages have expired.' : 'These loaded messages have expired.') : undefined,
         history: { ...patch.history!, serverState: { status: 'available' }, historyLoaded: true,
           olderBoundary: ordered[0] ?? null, newerBoundary: ordered.at(-1) ?? null,
           ...(ordered.length ? {} : { hasEarlier: null, hasLater: null }) } }
@@ -178,16 +191,18 @@ export function createHistorySlice(context: HistorySliceContext): HistorySlice {
       const query = failed.get(sid)?.get(kind)
       return query ? request(sid, kind, query) : kind === 'latest' ? request(sid, 'latest', { limit: 40, min_rows: 20 }) : Promise.resolve()
     },
+    expandHistoryText: (sid, position) => withBucket(sid, b => ({ historyExpandedText: { ...b.historyExpandedText, [position]: true } })),
     enterHistoryReading: sid => withBucket(sid, b => b.history.viewMode === 'historical' || !b.messageOrder.length ? {} : { history: { ...b.history, viewMode: 'historical' } }),
     releaseSessionHistory: sid => {
       abortHistoryReads(sid)
+      releaseHistoryEntryReads(sid)
       releaseHistoryProtection(sid)
       queryClient.removeQueries({ queryKey: ['messages', sid] })
       queryClient.removeQueries({ queryKey: ['session-detail', sid] })
       withBucket(sid, b => {
         const pending = retainedPending(b)
         const clean = historyRowsPatch(b, pending, [])
-        return { ...clean, historyNotice: undefined, historyNeedsSnapshot: true, history: { ...emptyHistoryState(), viewGeneration: b.history.viewGeneration + 1 } }
+        return { ...clean, historyNotice: undefined, historyNeedsSnapshot: true, historyExpandedText: undefined, history: { ...emptyHistoryState(), viewGeneration: b.history.viewGeneration + 1 } }
       })
     },
   }

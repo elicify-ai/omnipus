@@ -231,7 +231,7 @@ func TestReply_ConnectorSourceReturnsThroughSourceOwnerAuthoredByGuest(t *testin
 	if out.Channel != "telegram.a" || out.ChatID != "chat-1" || out.ReplyToMessageID != "m9" || out.Content != "the answer" {
 		t.Fatalf("destination not taken from the capture: %+v", out)
 	}
-	if out.AgentID != addrReceiver || out.OwnershipChecked {
+	if out.AgentID != addrReceiver || out.Operation != "" {
 		t.Fatalf("author must be the guest and must not claim an ownership decision: %+v", out)
 	}
 	if out.Return == nil || out.Return.OwnerAgentID != "ann" || out.Return.OwnerWorkspaceID != addrWS || out.Return.RequestID != "q1" {

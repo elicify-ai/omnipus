@@ -17,14 +17,12 @@ import (
 // writes through a properly-guarded path (refusing locked core agents).
 func AllTools(d *Deps) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (6: includes ADR-090 configuration and tool readback)
+		// Agent management (5: get_agent is the single reader, r17 §7.12)
 		NewAgentCreateTool(d),
 		NewAgentGetTool(d),
-		NewAgentGetToolsTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentPermissionsTool(d),
 		NewAgentDeleteTool(d),
-		NewAgentReadMetadataTool(d),
 
 		// Workspace management (5)
 		NewWorkspaceCreateTool(d),
@@ -47,12 +45,12 @@ func AllTools(d *Deps) []tools.Tool {
 		NewChannelTestTool(d),
 		NewChannelConnectTool(d),
 
-		// Skill management (4: install and search retired)
-		NewSkillRemoveTool(d),
+		// Skill management (3: install, search, create_skill and remove_skill retired)
 		NewSkillListTool(d),
-		// Skill authoring / self-improvement (Spec-6 U2): consent-gated +
-		// versioned writes. Editing a built-in produces a user override.
-		NewSkillCreateTool(d),
+		// get_skill: the one reader of one installed skill (skills spec r15 §5.2).
+		NewGetSkillTool(d),
+		// edit_skill (r15 §5.1): copy, delete_file, delete and restore, all
+		// through skills.ApplyChange.
 		NewSkillEditTool(d),
 
 		// MCP server management (3)

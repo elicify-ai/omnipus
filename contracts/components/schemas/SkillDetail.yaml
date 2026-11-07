@@ -1,0 +1,139 @@
+title: SkillDetail
+description: >
+  Tool-only: the complete result envelope of the get_skill agent tool (skills
+  spec §5.2). Not served by any REST route; it exists so the selectable
+  `fields` names are generated and compared, not typed twice.
+type: object
+additionalProperties: false
+required:
+  - id
+  - revision
+properties:
+  id:
+    type: string
+    description: The skill slug as it is on disk.
+  revision:
+    type: string
+    nullable: true
+    description: Content revision; null only for a deleted skill.
+  state:
+    type: string
+    enum: [installed, deleted]
+  name:
+    type: string
+  description:
+    type: string
+  shelf:
+    type: string
+    enum: [builtin, registry]
+  folder:
+    type: string
+  files:
+    type: object
+    additionalProperties: false
+    required: [items, total]
+    properties:
+      items:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [path, size, exec]
+          properties:
+            path:
+              type: string
+            size:
+              type: integer
+              format: int64
+            exec:
+              type: boolean
+      total:
+        type: integer
+  metadata:
+    type: object
+    additionalProperties:
+      type: string
+  compatibility:
+    type: string
+    nullable: true
+  allowed_tools:
+    type: array
+    items:
+      type: string
+  needs:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [program, status]
+      properties:
+        program:
+          type: string
+        status:
+          type: string
+          enum: [present, missing]
+        path:
+          type: string
+  last_change:
+    type: object
+    additionalProperties: false
+    properties:
+      at:
+        type: string
+      actor:
+        type: string
+      tool:
+        type: string
+      paths:
+        type: array
+        items:
+          type: string
+      shipped_with:
+        type: string
+      unknown:
+        type: boolean
+  has_local_changes:
+    type: boolean
+  versions:
+    type: object
+    additionalProperties: false
+    required: [items, total, next_before]
+    properties:
+      items:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [id, kind, actor, at, paths, paths_total]
+          properties:
+            id:
+              type: string
+            kind:
+              type: string
+            actor:
+              type: string
+            tool:
+              type: string
+            at:
+              type: string
+            paths:
+              type: array
+              items:
+                type: string
+            paths_total:
+              type: integer
+      total:
+        type: integer
+      next_before:
+        type: string
+        nullable: true
+  instructions:
+    type: string
+  absent_fields:
+    type: array
+    items:
+      type: string
+  truncated_fields:
+    type: array
+    items:
+      type: string

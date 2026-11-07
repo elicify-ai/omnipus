@@ -144,7 +144,7 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		// enforces the two stay in sync). Once the real tool implementations
 		// register themselves via GeneralBuiltinMetadata/AllTools, this union
 		// is idempotent (same names, no duplicate entries in a set).
-		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
+		for _, name := range []string{"create_plan", "execute_plan", "update_plan", "run_task", "inspect_session"} {
 			out[name] = struct{}{}
 		}
 		// ADR-068 D15.3 (FR-070/FR-071) — the knowledge-base tool names (six

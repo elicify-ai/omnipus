@@ -50,6 +50,9 @@ type chatHistoryIndexTree struct {
 	dependencies map[historyDependencyKey]struct{}
 	// Only successfully projected occurrences at this cut, not a session map.
 	positions map[HistoryPosition]uint64
+	// fullProjection turns display shortening off for this one read: set only
+	// by the single-occurrence full-content reader (A2.2), never by a page.
+	fullProjection bool
 }
 
 func historyEncodeFrame(v historyFrame) ([]byte, error) {

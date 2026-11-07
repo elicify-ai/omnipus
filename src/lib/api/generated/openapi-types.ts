@@ -385,9 +385,29 @@ export interface paths {
         };
         /**
          * Get a bounded session-history page
-         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; bytes alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. No lifetime read/rebuild, 503/preparing state or full-history fallback.
+         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)"). No lifetime read/rebuild, 503/preparing state or full-history fallback.
          */
         get: operations["getSessionMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{id}/messages/{history_position}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one saved history occurrence in full
+         * @description Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server's current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 "session not found", 400 "invalid history position", 404 "history position not found", 410 "history entry expired". This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410.
+         */
+        get: operations["getSessionHistoryEntry"];
         put?: never;
         post?: never;
         delete?: never;
@@ -747,7 +767,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a pending tool approval (FR-011, FR-082)
-         * @description Approve, deny, or cancel a pending tool call approval.
+         * @description Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
          */
         post: operations["postToolApproval"];
         delete?: never;
@@ -1097,6 +1117,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/settings/third-party-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the Settings -> Third-party agents section (program path and standard parameters per CLI)
+         * @description Returns the saved program path and standard parameters for each external CLI (claude-code, codex, opencode); all three rows are always present ("" when nothing is saved), each with a live detection result that is never stored. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         */
+        get: operations["getThirdPartyAgentSettings"];
+        /**
+         * Replace the Settings -> Third-party agents section
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         */
+        put: operations["updateThirdPartyAgentSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels": {
         parameters: {
             query?: never;
@@ -1195,9 +1239,33 @@ export interface paths {
         get?: never;
         /**
          * Configure a channel
-         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. `outbound`, `workspace_id` and `identity` cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). `apply_outcome`, `apply_reason` and `apply_note` are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in `apply_outcome` (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
          */
         put: operations["configureChannel"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{id}/outbound": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a connection's outbound (start messages) setting
+         * @description Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+         */
+        get: operations["getChannelOutbound"];
+        /**
+         * Set a connection's outbound (start messages) setting
+         * @description Replaces the connection's outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+         */
+        put: operations["setChannelOutbound"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1923,6 +1991,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/{name}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy an installed or built-in skill to a new user-owned skill
+         * @description Creates a new user-owned skill from the named skill; the copy's frontmatter name is rewritten to new_id. The copy starts ungranted.
+         */
+        post: operations["copySkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/{name}": {
         parameters: {
             query?: never;
@@ -1935,7 +2023,7 @@ export interface paths {
         post?: never;
         /**
          * Delete an installed skill
-         * @description Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+         * @description Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller's expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
          */
         delete: operations["deleteSkill"];
         options?: never;
@@ -1974,11 +2062,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Upload files for a session
-         * @description Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-         *     Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-         *     session_id may be supplied as a query parameter or as a form field before the file parts.
-         *     Returns HTTP 201 on success.
+         * Upload files for a session or into a workspace library
+         * @description Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
+         *
+         *     Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace's media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/<id>/media/ (returned as a media://workspace/<id>/<uuid> ref) and the Library file under the workspace's .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
          */
         post: operations["uploadFiles"];
         delete?: never;
@@ -2764,7 +2851,7 @@ export interface paths {
         put?: never;
         /**
          * Move a file or directory, optionally across two workspaces
-         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. Chat copies (#1449 D26): a move inside one workspace keeps a file's chat-copy association (the media entry's library_path follows the file). A move to another workspace drops it: the moved file becomes an ordinary file there and its chat copy stays in the original workspace.
          */
         post: operations["moveLibraryEntry"];
         delete?: never;
@@ -2784,7 +2871,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a file or directory, optionally across two workspaces
-         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. A copy is a new file with no chat-copy association (#1449 D26): deleting the copy removes only the copy.
          */
         post: operations["copyLibraryEntry"];
         delete?: never;
@@ -2810,6 +2897,8 @@ export interface paths {
         /**
          * Delete a file or directory from a workspace's work tree
          * @description Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace's work tree; 404 if nothing exists at path.
+         *
+         *     Chat copies (#1449 D26, FR-086): deleting a file that has an associated chat copy (LibraryEntry.chat_copy; the media entry whose library_path names this file, in the same workspace) also deletes that chat copy, bytes and media entry. Deleting a directory does so for every associated file inside it. Retention owners (session reference counts, group retention) never block an explicit deletion, and nothing recreates a deleted copy. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. 204 when both are removed; 500 ErrorResponse "could not delete <name> completely" when either removal failed (the Library file is then still present). Every chat that showed the file then shows it as unavailable. Deleting a group never deletes files (D19).
          */
         delete: operations["deleteLibraryEntry"];
         options?: never;
@@ -2932,7 +3021,7 @@ export interface paths {
         put?: never;
         /**
          * Rename or move a file or directory within one workspace
-         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to".
+         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to". A rename keeps a file's chat-copy association (#1449 D26): the media entry's library_path follows the file.
          */
         post: operations["renameLibraryEntry"];
         delete?: never;
@@ -4165,7 +4254,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
              * @example csrf_missing
              */
             code?: string;
@@ -4174,7 +4263,7 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. */
+            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file). */
             details?: {
                 [key: string]: unknown;
             };
@@ -4913,10 +5002,12 @@ export interface components {
              */
             role?: "user" | "assistant" | "system";
             /**
-             * @description Raw markdown/text content of the message.
+             * @description Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
              * @example I can help you with that!
              */
             content?: string;
+            /** @description Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content. */
+            readonly content_original_size_bytes?: number;
             /**
              * @description Compaction summary text (present only on type=compaction entries).
              * @example Compacted 120 messages.
@@ -5083,7 +5174,10 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
-            /** @description Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006). */
+            /**
+             * @description Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+             *     `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
+             */
             result?: {
                 [key: string]: unknown;
             };
@@ -5181,6 +5275,11 @@ export interface components {
              * @description RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
              */
             readonly last_refcount_seen_at?: string;
+            /**
+             * @description Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+             * @example .library/shot.png
+             */
+            readonly library_path?: string;
             /**
              * @description Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
              * @example available
@@ -5332,6 +5431,11 @@ export interface components {
              * @enum {string}
              */
             preview_profile?: "workspace" | "mail_restricted";
+            /**
+             * @description True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+             * @example true
+             */
+            readonly chat_copy?: boolean;
             /**
              * @description The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
              * @example false
@@ -8621,6 +8725,7 @@ export interface components {
             changed_fields?: string[];
             error_stage?: string;
             message?: string;
+            /** @description Per-field editability for this agent. For custom subagent_3p agents the executor descriptors are executor.env_overrides, executor.env_overrides_remove and executor.cli_args (editable; other agents get the reason "Only external-CLI workers have a runtime environment."), executor.cli (never: "Locked after create; create a new agent to switch CLIs."), executor.effective_cli_path (never: "Set in Settings -> Third-party agents.") and executor.kind (never: "Derived from the agent type."). */
             editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
             /**
              * @description Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -8706,8 +8811,11 @@ export interface components {
              */
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
-            rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
+            /** @description Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing. */
+            skill_grants?: {
+                [key: string]: string;
+            };
             /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
@@ -8715,6 +8823,13 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            /**
+             * @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            readonly stale_skill_grants?: string[];
             /**
              * Format: date-time
              * @description ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -8777,33 +8892,6 @@ export interface components {
              * @example 4096
              */
             max_tokens?: number;
-        };
-        /**
-         * AgentRateLimits
-         * @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-         */
-        AgentRateLimits: {
-            /**
-             * @description When true, global rate limits are used and per-agent overrides are ignored.
-             * @example true
-             */
-            use_global_defaults?: boolean;
-            /**
-             * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-             * @example 100
-             */
-            max_llm_calls_per_hour?: number;
-            /**
-             * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-             * @example 60
-             */
-            max_tool_calls_per_minute?: number;
-            /**
-             * Format: double
-             * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-             * @example 5
-             */
-            max_cost_per_day?: number;
         };
         /**
          * AgentStats
@@ -9075,7 +9163,7 @@ export interface components {
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind and cli_path are rejected). The program for the chosen CLI is set by a person in Settings -> Third-party agents; creating an agent for a CLI with no usable Settings path succeeds and the echo carries executor.program_warning. There is no soul: a third-party agent has no SOUL.md (soul is rejected as an unknown field).
          *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent3p: {
@@ -9108,36 +9196,7 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
-            /**
-             * @description Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
-             * @example You are a focused research assistant...
-             */
-            soul: string;
-            executor: components["schemas"]["ExecutorConfig"];
+            executor: components["schemas"]["ExecutorConfigCreate"];
             /**
              * @description The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
              * @example 50
@@ -9226,7 +9285,7 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            executor?: components["schemas"]["ExecutorConfig"];
+            executor?: components["schemas"]["ExecutorConfigUpdate"];
             /**
              * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
              * @example true
@@ -9266,7 +9325,7 @@ export interface components {
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
-         * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+         * @description Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
          *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -9283,14 +9342,42 @@ export interface components {
             kind?: "native" | "external-cli" | "remote-a2a";
             cli?: components["schemas"]["ExternalCli"];
             /**
-             * @description Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-             * @example /usr/local/bin/claude
+             * @description Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+             * @example /opt/homebrew/bin/claude
              */
-            cli_path?: string;
+            readonly effective_cli_path?: string;
             /**
-             * @description Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+             * @example --max-turns 40
+             */
+            readonly effective_preset_args?: string;
+            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
+            readonly program_warning?: string;
+            /**
+             * @description Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
              * @example {
-             *       "ANTHROPIC_API_KEY": "...",
+             *       "ANTHROPIC_API_KEY": "••••••",
+             *       "DEBUG": "••••••"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /**
+         * ExecutorConfigCreate
+         * @description Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+         */
+        ExecutorConfigCreate: {
+            cli: components["schemas"]["ExternalCli"];
+            /**
+             * @description Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+             * @example {
              *       "DEBUG": "1"
              *     }
              */
@@ -9298,10 +9385,217 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+             * @description Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
              * @example --max-turns 5
              */
             cli_args?: string;
+        };
+        /**
+         * ExecutorConfigUpdate
+         * @description Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
+         */
+        ExecutorConfigUpdate: {
+            /**
+             * @description MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
+             * @example {
+             *       "DEBUG": "1"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+             * @example [
+             *       "DEBUG"
+             *     ]
+             */
+            env_overrides_remove?: string[];
+            /**
+             * @description Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /**
+         * AgentDetail
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+         */
+        AgentDetail: {
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            id: string;
+            /** @example Researcher */
+            name?: string;
+            description?: string;
+            /**
+             * @description Agent type, as in Agent.type.
+             * @enum {string}
+             */
+            type?: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+            /** @description As Agent.locked — identity is fixed on built-ins. */
+            locked?: boolean;
+            /** @description The stored primary model slug ("" when the agent inherits the default). */
+            model?: string;
+            /** @description The stored primary provider key ("" when not pinned). */
+            provider?: string;
+            /** @description The stored fallback entries, as stored. */
+            fallback_models?: components["schemas"]["FallbackModel"][];
+            model_params?: components["schemas"]["AgentModelParams"];
+            /** @description The agent's own stored tool-iteration limit; null when it rides the global limit. */
+            max_tool_iterations?: number | null;
+            /** @description The stored per-agent context-window override; null when none. */
+            context_window_override?: number | null;
+            memory_enabled?: boolean;
+            voice?: string | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
+            skills?: string[];
+            /** @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale. */
+            stale_skill_grants?: string[];
+            /** @description Per-tool effective policy and the agent's own stored override. */
+            tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included. */
+            stored_overrides?: {
+                [key: string]: "allow" | "ask" | "deny";
+            };
+            /** @description The agent's explicitly assigned connector (MCP server) bindings. */
+            connectors?: components["schemas"]["AgentMCPBinding"][];
+            /** @description SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul). */
+            soul?: string;
+            /** @description AGENT.md content written beside the record ("" when none). */
+            agent_md?: string;
+            revision: components["schemas"]["ConfigurationRevision"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
+            executor?: components["schemas"]["ExecutorConfig"];
+            /** @description True when a run of this agent would start now (no program_warning applies). */
+            runnable?: boolean;
+            /** @description Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start. */
+            program_warning?: string;
+            /** @description True when the agent has a main chat. */
+            has_main_chat?: boolean;
+            /** @description Result metadata, never selectable: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". Absent or empty when nothing was cut. */
+            truncated_fields?: string[];
+            /** @description Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none. */
+            absent_fields?: string[];
+            /** @description The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null. */
+            model_chain?: components["schemas"]["AgentModelChainEntry"][];
+        };
+        /**
+         * AgentModelChainEntry
+         * @description One entry of an agent's EFFECTIVE model chain as reported by get_agent (AgentDetail.model_chain): the primary first, then each fallback in order. Derived through the real resolver (ResolveModelPairCfg and the agent's fallback selection), never guessed: a value that is not known is null.
+         */
+        AgentModelChainEntry: {
+            /**
+             * @description "primary", or "fallback_<n>" counting from 1 in chain order.
+             * @example fallback_1
+             */
+            position: string;
+            /**
+             * @description The model slug this entry routes to (the resolved default when the agent inherits its primary).
+             * @example deepseek/deepseek-v4.1-flash
+             */
+            model: string;
+            /**
+             * @description The resolved provider key; null when it cannot be resolved.
+             * @example openrouter
+             */
+            provider: string | null;
+            /**
+             * @description True when the provider is configured on this install.
+             * @example true
+             */
+            provider_configured: boolean;
+            /**
+             * @description True when the provider offers the model; null when not known.
+             * @example true
+             */
+            model_offered: boolean | null;
+            /**
+             * @description The resolved model's image-input capability; null when not known.
+             * @example false
+             */
+            accepts_images: boolean | null;
+            /** @description Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise. */
+            warning?: string;
+        };
+        /**
+         * AgentToolPermission
+         * @description One tool's permission for an agent, as reported by get_agent (AgentDetail.tool_permissions): the effective policy after the global ceiling and the agent's own override (strictest wins), plus the agent's stored override when it has one.
+         */
+        AgentToolPermission: {
+            /**
+             * @description The tool name.
+             * @example web_search
+             */
+            tool: string;
+            /**
+             * @description The policy that applies to this agent's calls of the tool.
+             * @example ask
+             * @enum {string}
+             */
+            effective: "allow" | "ask" | "deny";
+            /**
+             * @description The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+             * @example null
+             * @enum {string|null}
+             */
+            override: "allow" | "ask" | "deny" | null;
+            /**
+             * @description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+             * @example Search the web
+             */
+            description?: string;
+        };
+        /**
+         * AgentPreview
+         * @description Result of the get_agent tool with new_agent_type: a preview of what a new agent of that type would get. The agent does not exist, so there is no id and no revision. absent_fields and truncated_fields are result metadata.
+         */
+        AgentPreview: {
+            /**
+             * @description The agent type being previewed.
+             * @enum {string}
+             */
+            preview_of: "Main" | "Subagent" | "subagent_3p";
+            /** @description Per-tool effective policy a new agent of this type would get. */
+            tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description Connector (MCP server) bindings a new agent of this type would get. */
+            connectors?: components["schemas"]["AgentMCPBinding"][];
+            /** @description Result metadata: requested properties the preview does not carry. */
+            absent_fields?: string[];
+            /** @description Result metadata: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". */
+            truncated_fields?: string[];
+        };
+        /**
+         * AgentExecutorSettingsResult
+         * @description Executor-settings block of a create_agent or update_agent tool result, present when executor settings were supplied. Never carries an environment value: only names.
+         */
+        AgentExecutorSettingsResult: {
+            /** @description Environment names by outcome. */
+            env?: {
+                /** @description Names that were not stored before and are now set. */
+                added: string[];
+                /** @description Names whose stored value was replaced. */
+                replaced: string[];
+                /** @description Names removed through env_overrides_remove. */
+                removed: string[];
+                /** @description Names listed in env_overrides_remove that were not stored (reported, not refused). */
+                absent_removed: string[];
+            };
+            cli_args?: {
+                /** @description The stored cli_args after tokenisation, in order. */
+                argv: string[];
+                /** @description Tokens the safety filter will drop at run time, with its reason. */
+                dropped_at_run: {
+                    flag: string;
+                    reason: string;
+                }[];
+            };
+            /** @description create_agent only. True when a run would start now; false when the Settings program path for the agent's CLI is missing or fails its checks (program_warning then carries the text). */
+            runnable?: boolean;
+            /** @description The exact text a run of this agent would be refused with right now (see ExecutorConfig.program_warning). Absent when a run would start. */
+            program_warning?: string;
         };
         /** @description Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration. */
         ExecutorDefaults: {
@@ -9651,6 +9945,14 @@ export interface components {
              * @example 2026-10-14T09:30:00Z
              */
             last_dropped_at?: string;
+            /**
+             * @description The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example reply_only
+             * @enum {string}
+             */
+            outbound_policy?: "reply_only" | "agent_may_start";
+            /** @description Senders the running connection ignored because they are not on its allowed list. Present only when at least one message was ignored (FR-061). */
+            rejected_senders?: components["schemas"]["ChannelRejectedSenders"];
         };
         /**
          * RetentionConfig
@@ -11020,6 +11322,11 @@ export interface components {
              * @example 5242880
              */
             max_bytes: number;
+            /**
+             * @description Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+             * @example 30000
+             */
+            max_patches?: number;
         };
         /**
          * ContextWindowNotice
@@ -11317,6 +11624,8 @@ export interface components {
         };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
+            /** @description true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins. */
+            has_local_changes: boolean;
             revision: components["schemas"]["ConfigurationRevision"];
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
@@ -12671,6 +12980,203 @@ export interface components {
              * @example channel "telegram" is configured
              */
             message: string;
+        };
+        /**
+         * ChannelOutbound
+         * @description Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+         */
+        ChannelOutbound: {
+            /**
+             * @description reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+             * @example reply_only
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+             * @example [
+             *       "telegram:-1001234567890"
+             *     ]
+             */
+            targets: string[];
+        };
+        /**
+         * ChannelAvailability
+         * @description Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+         */
+        ChannelAvailability: {
+            /**
+             * @description running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+             * @example running
+             * @enum {string}
+             */
+            state: "running" | "not_running" | "not_loaded";
+            /**
+             * @description Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+             * @example not started
+             */
+            reason?: string;
+        };
+        /**
+         * ChannelOutboundRead
+         * @description Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+         */
+        ChannelOutboundRead: {
+            /** @description The connection's outbound setting. When config.json has none, this is {policy: reply_only, targets: []}. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+             * @example absent
+             */
+            revision: string;
+            /** @description Whether the connection is running right now. */
+            availability: components["schemas"]["ChannelAvailability"];
+            /**
+             * @description True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+             * @example true
+             */
+            start_supported: boolean;
+        };
+        /**
+         * ChannelOutboundUpdateRequest
+         * @description Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+         */
+        ChannelOutboundUpdateRequest: {
+            /**
+             * @description reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example agent_may_start
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+             * @example [
+             *       "-1001234567890"
+             *     ]
+             */
+            targets: string[];
+            /**
+             * @description The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+             * @example absent
+             */
+            expected_revision: string;
+        };
+        /**
+         * ChannelOutboundWriteResponse
+         * @description Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+         */
+        ChannelOutboundWriteResponse: {
+            /** @description The saved setting, in canonical form. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The new channel revision token (FR-088) over the live configuration.
+             * @example r1-3f9a
+             */
+            revision: string;
+            /** @description Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log." */
+            warning?: string;
+        };
+        /**
+         * ChannelOutboundRejection
+         * @description Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+         *     Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+         */
+        ChannelOutboundRejection: {
+            /**
+             * @description Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+             * @example some targets are not valid ids
+             */
+            error: string;
+            /**
+             * @description Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+             * @example invalid_targets
+             * @enum {string}
+             */
+            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch";
+            /** @description Per-target errors: the first 10 invalid entries in request order. */
+            target_errors?: {
+                /**
+                 * @description 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+                 * @example 0
+                 */
+                index: number;
+                /**
+                 * @description A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+                 * @example @alice
+                 */
+                target: string;
+                /**
+                 * @description Why this entry was refused.
+                 * @example username_not_allowed
+                 * @enum {string}
+                 */
+                code: "invalid_id" | "wildcard_not_allowed" | "username_not_allowed" | "wrong_platform" | "not_found" | "unsupported_channel_kind" | "cannot_message_people" | "lookup_unavailable";
+                /**
+                 * @description Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+                 * @example a message cannot be sent to a name; use the numeric id
+                 */
+                reason?: string;
+            }[];
+            /**
+             * @description Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+             * @example 3
+             */
+            omitted_count?: number;
+        };
+        /**
+         * ChannelConfigureError
+         * @description 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+         */
+        ChannelConfigureError: {
+            /**
+             * @description The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+             * @example could not save config
+             */
+            error: string;
+            /**
+             * @description could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+             * @example could_not_save
+             * @enum {string}
+             */
+            code: "could_not_save" | "credential_saved_not_saved" | "saved_not_refreshed";
+            /** @description Short reason, never a secret. */
+            detail?: string;
+        };
+        /**
+         * ChannelConfigureResponse
+         * @description 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+         */
+        ChannelConfigureResponse: {
+            /**
+             * @description applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+             * @example applied
+             * @enum {string}
+             */
+            apply_outcome: "applied" | "applied_not_running" | "unconfirmed" | "failed" | "no_reload_needed";
+            /** @description Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret. */
+            apply_reason?: string;
+            /** @description Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran." */
+            apply_note?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ChannelRejectedSenders
+         * @description Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+         */
+        ChannelRejectedSenders: {
+            /**
+             * @description How many messages were ignored since the adapter started.
+             * @example 2
+             */
+            count: number;
+            /**
+             * @description Canonical sender ids of the latest ignored senders, most recent first.
+             * @example [
+             *       "discord:9"
+             *     ]
+             */
+            recent: string[];
         };
         /**
          * ChannelRouting
@@ -14298,11 +14804,11 @@ export interface components {
                  */
                 occurrence_ms: number;
                 /**
-                 * @description The matched run's status.
+                 * @description The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
                  * @example done
                  * @enum {string}
                  */
-                status: "in_progress" | "done" | "failed" | "skipped";
+                status: "in_progress" | "done" | "failed" | "skipped" | "missed";
                 /**
                  * @description The matched run's ID (ULID).
                  * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
@@ -14413,11 +14919,11 @@ export interface components {
              */
             occurrence_ms: number | null;
             /**
-             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
              * @example done
              * @enum {string}
              */
-            status: "in_progress" | "done" | "failed" | "skipped";
+            status: "in_progress" | "done" | "failed" | "skipped" | "missed";
             /**
              * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
              * @example Found 3 anomalies in the gateway logs.
@@ -14463,7 +14969,7 @@ export interface components {
          */
         ProviderUpdateRequest: {
             /**
-             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
              * @example openai-compatible
              * @enum {string}
              */
@@ -14475,7 +14981,7 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+             * @description Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
@@ -14536,6 +15042,8 @@ export interface components {
          * @description Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
          */
         SkillInstallRequest: {
+            /** @description Required true to replace an installed skill whose has_local_changes is true. Absent means false. */
+            replace_local_changes?: boolean;
             revision?: components["schemas"]["ConfigurationRevision"];
             /**
              * @description Slug of the skill to install from the ClawHub registry.
@@ -14550,6 +15058,79 @@ export interface components {
              */
             version?: string;
         } & (unknown | unknown);
+        /**
+         * SkillCopyRequest
+         * @description Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+         */
+        SkillCopyRequest: {
+            /**
+             * @description Slug of the new skill (letters, digits and single hyphens).
+             * @example plan-copy
+             */
+            new_id: string;
+        };
+        /**
+         * SkillDetail
+         * @description Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+         */
+        SkillDetail: {
+            /** @description The skill slug as it is on disk. */
+            id: string;
+            /** @description Content revision; null only for a deleted skill. */
+            revision: string | null;
+            /** @enum {string} */
+            state?: "installed" | "deleted";
+            name?: string;
+            description?: string;
+            /** @enum {string} */
+            shelf?: "builtin" | "registry";
+            folder?: string;
+            files?: {
+                items: {
+                    path: string;
+                    /** Format: int64 */
+                    size: number;
+                    exec: boolean;
+                }[];
+                total: number;
+            };
+            metadata?: {
+                [key: string]: string;
+            };
+            compatibility?: string | null;
+            allowed_tools?: string[];
+            needs?: {
+                program: string;
+                /** @enum {string} */
+                status: "present" | "missing";
+                path?: string;
+            }[];
+            last_change?: {
+                at?: string;
+                actor?: string;
+                tool?: string;
+                paths?: string[];
+                shipped_with?: string;
+                unknown?: boolean;
+            };
+            has_local_changes?: boolean;
+            versions?: {
+                items: {
+                    id: string;
+                    kind: string;
+                    actor: string;
+                    tool?: string;
+                    at: string;
+                    paths: string[];
+                    paths_total: number;
+                }[];
+                total: number;
+                next_before: string | null;
+            };
+            instructions?: string;
+            absent_fields?: string[];
+            truncated_fields?: string[];
+        };
         /**
          * SkillSearchResult
          * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
@@ -14622,7 +15203,7 @@ export interface components {
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
+             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
              * @example allow_once
              * @enum {string}
              */
@@ -14726,6 +15307,8 @@ export interface components {
             username?: string;
             /** @description Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses. */
             password?: string;
+            /** @description Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved. */
+            allow_from?: string[];
         } & {
             [key: string]: unknown;
         };
@@ -14749,16 +15332,77 @@ export interface components {
              */
             installed: boolean;
             /**
-             * @description Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
-             * @example /usr/local/bin/claude
+             * @description Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+             * @example /opt/homebrew/Cellar/claude/1.2.3/bin/claude
              */
             path?: string | null;
+            /**
+             * @description The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+             * @example /opt/homebrew/bin/claude
+             */
+            link_path?: string | null;
             /**
              * @description How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
              * @example path
              * @enum {string|null}
              */
             source?: "path" | "well-known" | null;
+        };
+        /**
+         * CliPreset
+         * @description One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+         */
+        CliPreset: {
+            /**
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @example /opt/homebrew/bin/claude
+             */
+            path: string;
+            /**
+             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+             * @example --max-turns 40
+             */
+            preset_args: string;
+        };
+        /**
+         * CliPresetView
+         * @description One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+         */
+        CliPresetView: {
+            /**
+             * @description The saved program path exactly as entered; "" when nothing is saved.
+             * @example /opt/homebrew/bin/claude
+             */
+            path: string;
+            /**
+             * @description The saved standard parameters exactly as typed; "" when nothing is saved.
+             * @example --max-turns 40
+             */
+            preset_args: string;
+            detected: components["schemas"]["CliDetectEntry"];
+        };
+        /**
+         * ThirdPartyAgentSettings
+         * @description Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole Settings -> Third-party agents section in one call: a CLI key absent from `clis` is saved as {path: "", preset_args: ""}. Every row is validated before anything is written (order claude-code, codex, opencode; path before preset_args); the first failing row and field is returned and nothing is written, valid rows included. No revision and no 409: the last save wins. Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+         */
+        ThirdPartyAgentSettings: {
+            /** @description One row per external CLI, keyed by the agent `cli` enum values (ExternalCliTool). Only these three keys are accepted. */
+            clis: {
+                "claude-code"?: components["schemas"]["CliPreset"];
+                codex?: components["schemas"]["CliPreset"];
+                opencode?: components["schemas"]["CliPreset"];
+            };
+        };
+        /**
+         * ThirdPartyAgentSettingsView
+         * @description Response of GET and PUT /api/v1/settings/third-party-agents: the saved Settings -> Third-party agents section. All three CLI keys are always present; a CLI with nothing saved has path "" and preset_args "". Each row's `detected` is host detection read live on every request and never stored; the server maps detection key "claude" to "claude-code", so the screen never maps keys itself.
+         */
+        ThirdPartyAgentSettingsView: {
+            clis: {
+                "claude-code": components["schemas"]["CliPresetView"];
+                codex: components["schemas"]["CliPresetView"];
+                opencode: components["schemas"]["CliPresetView"];
+            };
         };
         /**
          * CliValidateRequest
@@ -18055,7 +18699,7 @@ export interface components {
         };
         /**
          * Room
-         * @description A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+         * @description A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
          */
         Room: {
             id: string;
@@ -18088,7 +18732,38 @@ export interface components {
             allocated_cost_unpriced: boolean;
             /** @description Derived: true while any member state is awaiting_approval or waiting_on_user. */
             needs_attention: boolean;
+            invitation_context_status?: components["schemas"]["RoomInvitationStatus"];
+            invitation_context?: components["schemas"]["RoomInvitationContext"];
         };
+        /**
+         * RoomInvitationContext
+         * @description The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+         */
+        RoomInvitationContext: {
+            status: components["schemas"]["RoomInvitationStatus"];
+            /** @description The summary text. Present only when status is ready. */
+            text?: string;
+            /** @description The starting agent, whose model wrote the summary. */
+            author_agent_id: string;
+            /**
+             * Format: date-time
+             * @description When the summary became ready.
+             */
+            generated_at?: string;
+            /**
+             * Format: int64
+             * @description Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+             */
+            cost_micro_usd?: number;
+            /** @description True when the summary call ran but reported no price. */
+            cost_unpriced?: boolean;
+        };
+        /**
+         * RoomInvitationStatus
+         * @description State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+         * @enum {string}
+         */
+        RoomInvitationStatus: "generating" | "ready" | "unavailable";
         /**
          * RoomCreateRequest
          * @description Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is never created through this route. Semantic rules enforced by the handler with inbound validation on and off: a squad needs a name; at least two distinct agents, all members of the workspace.
@@ -18117,7 +18792,10 @@ export interface components {
          */
         RoomMessageRequest: {
             client_message_id: string;
+            /** @description The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422. */
             text: string;
+            /** @description Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit. */
+            media?: string[];
             /** @description Agent ids picked in the @-picker, or the reserved value `all`. */
             mentions: string[];
         };
@@ -18210,6 +18888,23 @@ export interface components {
             message?: string;
         };
         /**
+         * HistoryResultPreview
+         * @description Read-time display marker for a saved tool result whose JSON encoding exceeds 51,200 bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). Emitted only by the session-history readers (REST messages page, bounded session detail and the history-origin replay page of a snapshot) in place of the result value; the saved archive, the model context and the live tool frames are unchanged.
+         *     Distinct from ToolResultRef (`_ref`, live offload store fetched through /sessions/{session_id}/tool-results/{ref}), TruncatedResult (`_truncated`, not retrievable) and the browser-only `_truncated_client`. The full value is addressed by the enclosing entry's history_position plus ToolCall.id / ToolCallResultFrame.call_id and is read through getSessionHistoryEntry (GET /sessions/{id}/messages/{history_position}).
+         *     `_history_preview` is a reserved key: an object carrying it must match this schema, and an ordinary tool result never carries it. Byte rule, enforced at the real server and browser boundaries rather than by this schema: the UTF-8 length of `preview` is at most 4,096 bytes. `maxLength` below is only the character-count upper bound JSON Schema can express.
+         */
+        HistoryResultPreview: {
+            /**
+             * @description Discriminator distinguishing this marker from ToolResultRef and TruncatedResult.
+             * @enum {boolean}
+             */
+            _history_preview: true;
+            /** @description Exact JSON-encoded size in bytes of the full (unshortened) result. */
+            original_size_bytes: number;
+            /** @description The first at most 4,096 bytes of the full result's JSON encoding, cut back to a UTF-8 character boundary. maxLength is a character-count bound only; the 4,096-byte rule is checked separately at the server and browser boundaries. */
+            preview: string;
+        };
+        /**
          * AgentAddress
          * @description A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
          */
@@ -18242,6 +18937,8 @@ export interface components {
             position: string;
             /** @description Original recorded entry ID when nonempty and valid; otherwise omitted. */
             entry_id?: string;
+            /** @description Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d). */
+            turn_id?: string;
         };
         /**
          * SubagentStartFrame
@@ -18526,7 +19223,7 @@ export interface components {
         };
         /**
          * SessionHistoryPageInfo
-         * @description Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows. No optional absence is serialized as null.
+         * @description Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
          */
         SessionHistoryPageInfo: {
             /**
@@ -18549,16 +19246,21 @@ export interface components {
             soft_byte_budget: number;
             /**
              * Format: int64
+             * @description Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB), on the same meter as projected_bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group, selection stops with stop_reason byte_ceiling if the page with that group would exceed it, even below min_rows. The first group is always returned whole, so projected_bytes <= byte_ceiling holds unless source_group_count is 1. A page selection limit, not a heap or absolute response-size guarantee; not an operator setting.
+             */
+            byte_ceiling: number;
+            /**
+             * Format: int64
              * @description Larger of prepared public REST and historical WS encodings at this cut/context. Excludes diagnostic accounting fields themselves, transport headers and separate live controls/projection. Required projection failure is an error, never an estimate.
              */
             projected_bytes: number;
             /** @description True iff projected bytes exceed the soft budget; requires budget_override. */
             byte_budget_exceeded: boolean;
             /**
-             * @description Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; bytes alone may not cut below min_rows or split a whole group.
+             * @description Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is the one byte stop allowed below min_rows, and it is reported when the next group would exceed both the soft budget and the ceiling. No byte stop splits a whole group.
              * @enum {string}
              */
-            stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget";
+            stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget" | "byte_ceiling";
             /**
              * @description Present iff the soft budget was exceeded to keep the floor or an atomic group.
              * @enum {string}
@@ -18629,6 +19331,25 @@ export interface components {
             agent_id?: string;
         };
         /**
+         * MediaPart
+         * @description One media attachment within a MediaFrame. Each part maps to a single file stored in the media registry and accessible via /api/v1/media/{ref}.
+         */
+        MediaPart: {
+            /**
+             * @description Media category.
+             * @enum {string}
+             */
+            type: "image" | "audio" | "video" | "file";
+            /** @description Relative URL of the form /api/v1/media/{ref}. The SPA prefixes this with the gateway origin to construct the full URL for <img>, <video>, etc. */
+            url: string;
+            /** @description Original filename as stored in the media registry. */
+            filename: string;
+            /** @description MIME type of the file (e.g., "image/png"). */
+            content_type: string;
+            /** @description Optional human-readable caption for display below the media. */
+            caption?: string;
+        };
+        /**
          * RoomDeliveryState
          * @description State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
          */
@@ -18656,7 +19377,10 @@ export interface components {
             /** @description Echo of RoomMessageRequest.client_message_id for a person's entry. */
             client_message_id?: string;
             author: components["schemas"]["RoomEntryAuthor"];
+            /** @description The message text. New messages and agent answers are refused above the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes, lowered by session_messaging.steer_body), stated on RoomMessageRequest.text. A stored entry keeps this wider maximum (TD-8): an entry written under an earlier, larger operator setting still opens and shows in full (S-152). May be empty when the entry carries attachments. */
             text: string;
+            /** @description Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26). */
+            attachments?: components["schemas"]["MediaPart"][];
             /** @description Resolved addressee agent ids. Never null. */
             addressees: string[];
             /** @description True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11). */
@@ -19490,6 +20214,68 @@ export interface operations {
             };
         };
     };
+    getSessionHistoryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Addressed session ID; access refusal precedes position validation or lookup. */
+                id: string;
+                /** @description Opaque same-session history position of the occurrence, exactly as a history page, session detail or snapshot replay page carried it. The full tool result of a HistoryResultPreview is addressed by this position plus ToolCall.id. */
+                history_position: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The full public projection of that one occurrence, with history_position set. Never a HistoryResultPreview marker in any tool result and never content_original_size_bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description ErrorResponse.error is exactly "invalid session ID" for a malformed session ID (checked before any session lookup), or exactly "invalid history position" for a malformed, blank, badly encoded, wrong-version or non-47-character position (checked only after the session refusals below). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description ErrorResponse.error is exactly "session not found" for a missing session store, session metadata that does not exist, or a main session the caller is not eligible to read, checked before any position work (also when the position is malformed). Otherwise exactly "history position not found" for an unknown or foreign well-formed position; there is no foreign lookup, and a foreign session's expired position is also unknown here. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description ErrorResponse.error is exactly "history entry expired": a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly "Session history is unavailable. Retry after the operator restores its index."; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getToolResult: {
         parameters: {
             query?: never;
@@ -19625,7 +20411,15 @@ export interface operations {
                     "application/json": components["schemas"]["Agent"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -19636,7 +20430,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -19827,7 +20621,15 @@ export interface operations {
                     "application/json": components["schemas"]["AgentToolsResponse"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -19838,7 +20640,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -20195,7 +20997,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolApprovalResponse"];
                 };
             };
-            /** @description Malformed body or unknown action. */
+            /** @description Malformed body or unknown action, or action allow for an always-ask tool ("set_channel_outbound always asks for approval; it can be set to ask or deny, not allow"; nothing recorded). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20284,7 +21086,7 @@ export interface operations {
                     "application/json": components["schemas"]["GlobalToolPolicies"];
                 };
             };
-            /** @description Invalid policy values. */
+            /** @description Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 row 15). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21077,6 +21879,63 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
         };
     };
+    getThirdPartyAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved section. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThirdPartyAgentSettingsView"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+        };
+    };
+    updateThirdPartyAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThirdPartyAgentSettings"];
+            };
+        };
+        responses: {
+            /** @description The saved section after the update. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThirdPartyAgentSettingsView"];
+                };
+            };
+            /** @description A row failed validation, or the body does not match the schema. Nothing was written. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+        };
+    };
     listChannels: {
         parameters: {
             query?: never;
@@ -21368,18 +22227,16 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated channel configuration (credentials redacted). */
+            /** @description Updated channel configuration (credentials redacted) plus apply_outcome, and apply_reason / apply_note where T-6 says. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ChannelConfigureResponse"];
                 };
             };
-            /** @description Invalid JSON body. */
+            /** @description Invalid JSON body, or a field that cannot be set here. Texts: "outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound"; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -21398,6 +22255,147 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelConfigureError"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    getChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The outbound setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRead"];
+                };
+            };
+            /** @description Malformed channel id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel type. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelOutboundUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved and in force. warning is present only when the file was written but the rest of the running configuration could not be refreshed (the saved list is in force anyway, T-6b). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundWriteResponse"];
+                };
+            };
+            /** @description invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description platform_cannot_start ("starting messages is not supported yet on <Platform>") or platform_cannot_message_people ("this platform can only answer, not start a direct message"). Nothing was saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description "could not save the setting; nothing was changed" — the failure happened before the file was written (no credential is involved on this route). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     testChannel: {
@@ -23015,8 +24013,73 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller's expected revision and the skill changed since it was read). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    copySkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source skill slug. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Copy created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication or after publication (partial save). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     deleteSkill: {
@@ -23034,17 +24097,37 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Skill removed. */
-            204: {
+            /** @description Skill deleted. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["404NotFound"];
             409: components["responses"]["409Conflict"];
+            /** @description Storage failure, before publication or after publication (partial deletion). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     getActivity: {
@@ -23081,10 +24164,12 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
                  * @example 550e8400-e29b-41d4-a716-446655440000
                  */
                 session_id?: string;
+                /** @description Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id. */
+                workspace_id?: string;
             };
             header?: never;
             path?: never;
@@ -23095,6 +24180,8 @@ export interface operations {
                 "multipart/form-data": {
                     /** @description Session ID (alternative to query parameter). */
                     session_id?: string;
+                    /** @description Workspace ID (alternative to the query parameter); must precede the file parts. */
+                    workspace_id?: string;
                     /** @description One or more files to upload. */
                     files?: string[];
                 };
@@ -23114,6 +24201,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The workspace media library is unavailable (workspace_id given). Nothing was stored and no session path was used instead. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -27903,7 +28999,6 @@ export type AgentRole = components["schemas"]["AgentRole"];
 export type AgentColor = components["schemas"]["AgentColor"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
-export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
@@ -27917,6 +29012,13 @@ export type FallbackModel = components["schemas"]["FallbackModel"];
 export type FallbackModelPair = components["schemas"]["FallbackModelPair"];
 export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
+export type ExecutorConfigCreate = components["schemas"]["ExecutorConfigCreate"];
+export type ExecutorConfigUpdate = components["schemas"]["ExecutorConfigUpdate"];
+export type AgentDetail = components["schemas"]["AgentDetail"];
+export type AgentModelChainEntry = components["schemas"]["AgentModelChainEntry"];
+export type AgentToolPermission = components["schemas"]["AgentToolPermission"];
+export type AgentPreview = components["schemas"]["AgentPreview"];
+export type AgentExecutorSettingsResult = components["schemas"]["AgentExecutorSettingsResult"];
 export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
 export type ExecutorCommandPreviewRequest = components["schemas"]["ExecutorCommandPreviewRequest"];
 export type ExecutorCommandPreviewResponse = components["schemas"]["ExecutorCommandPreviewResponse"];
@@ -28028,6 +29130,15 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
+export type ChannelOutbound = components["schemas"]["ChannelOutbound"];
+export type ChannelAvailability = components["schemas"]["ChannelAvailability"];
+export type ChannelOutboundRead = components["schemas"]["ChannelOutboundRead"];
+export type ChannelOutboundUpdateRequest = components["schemas"]["ChannelOutboundUpdateRequest"];
+export type ChannelOutboundWriteResponse = components["schemas"]["ChannelOutboundWriteResponse"];
+export type ChannelOutboundRejection = components["schemas"]["ChannelOutboundRejection"];
+export type ChannelConfigureError = components["schemas"]["ChannelConfigureError"];
+export type ChannelConfigureResponse = components["schemas"]["ChannelConfigureResponse"];
+export type ChannelRejectedSenders = components["schemas"]["ChannelRejectedSenders"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
 export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
@@ -28090,6 +29201,8 @@ export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SkillCopyRequest = components["schemas"]["SkillCopyRequest"];
+export type SkillDetail = components["schemas"]["SkillDetail"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
 export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
@@ -28100,6 +29213,10 @@ export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];
 export type CliDetectEntry = components["schemas"]["CliDetectEntry"];
+export type CliPreset = components["schemas"]["CliPreset"];
+export type CliPresetView = components["schemas"]["CliPresetView"];
+export type ThirdPartyAgentSettings = components["schemas"]["ThirdPartyAgentSettings"];
+export type ThirdPartyAgentSettingsView = components["schemas"]["ThirdPartyAgentSettingsView"];
 export type CliValidateRequest = components["schemas"]["CliValidateRequest"];
 export type CliValidateResponse = components["schemas"]["CliValidateResponse"];
 export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];
@@ -28189,6 +29306,8 @@ export type SecretRequestState = components["schemas"]["SecretRequestState"];
 export type SecretNameEntry = components["schemas"]["SecretNameEntry"];
 export type SecretOptionsUpdateRequest = components["schemas"]["SecretOptionsUpdateRequest"];
 export type Room = components["schemas"]["Room"];
+export type RoomInvitationContext = components["schemas"]["RoomInvitationContext"];
+export type RoomInvitationStatus = components["schemas"]["RoomInvitationStatus"];
 export type RoomCreateRequest = components["schemas"]["RoomCreateRequest"];
 export type RoomMembersUpdateRequest = components["schemas"]["RoomMembersUpdateRequest"];
 export type RoomMessageRequest = components["schemas"]["RoomMessageRequest"];

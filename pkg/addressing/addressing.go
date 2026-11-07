@@ -132,6 +132,11 @@ type Capture struct {
 	// held for a stopped receiver is delivered from here when the receiver runs
 	// again; the transcript entry alone does not reach the model.
 	Text string `json:"text,omitempty"`
+	// Media are the request's own files as workspace media references
+	// (#1449 FR-019), written in the same capture as Text: the admission
+	// wake, a restart-time rewake and held delivery all hand the model the
+	// same files.
+	Media []string `json:"media,omitempty"`
 	// Held is set when the request was admitted while the receiver was stopped.
 	// Only a held request moves its sender's row on when it is finally delivered.
 	Held bool `json:"held,omitempty"`

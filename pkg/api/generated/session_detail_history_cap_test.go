@@ -64,7 +64,7 @@ func sessionDetailCapFixture(count int) map[string]any {
 		"messages":      messages, "has_earlier": false, "has_later": false,
 		"page_info": map[string]any{
 			"mode": "latest", "limit": 100, "min_rows": 20, "row_count": count, "source_group_count": groups,
-			"soft_byte_budget": 4194304, "projected_bytes": 0, "byte_budget_exceeded": false,
+			"soft_byte_budget": 4194304, "byte_ceiling": 8388608, "projected_bytes": 0, "byte_budget_exceeded": false,
 			"stop_reason": "end", "retention_generation": "schema-only-retained",
 			"first_position": positions[0], "last_position": positions[len(positions)-1],
 			"context": map[string]any{"spans": []any{}, "duplicate_ids": []any{}},

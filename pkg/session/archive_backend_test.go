@@ -278,6 +278,26 @@ func TestArchiveBackend_RoutingKeyResolvesToOwningSession(t *testing.T) {
 	require.Len(t, b.GetHistory(routing), 1, "reads through the routing key resolve to the same store")
 }
 
+// A compound key that merely contains ":session:" in a non-canonical position
+// must NOT be parsed as a session key. Only the strict grammar
+// "agent:<agent>:session:<id>" names a session; everything else is left as-is.
+// This is the port of the strict parser discipline from steering.go.
+func TestArchiveBackend_CompoundKeyDoesNotResolveToSession(t *testing.T) {
+	b := newTestBackend(t)
+	// This key has ":session:" but is not "agent:<agent>:session:<id>".
+	const compound = "agent:mia:chat:telegram:peer:session:S"
+	require.NoError(t, b.appendMessage(compound, userMsg("hello")))
+
+	// Must NOT create a directory named "S".
+	_, err := os.Stat(filepath.Join(b.baseDir, "S"))
+	require.True(t, errors.Is(err, os.ErrNotExist), "compound key must not resolve to session S")
+
+	// The archive must live under the literal key (treated as a plain session id).
+	require.FileExists(t, filepath.Join(b.baseDir, compound, "transcript.jsonl"),
+		"compound key is used literally, not stripped")
+	require.Len(t, b.GetHistory(compound), 1)
+}
+
 // Deleting a session removes its model content too (no private data survives the
 // chat's deletion) — the owning-session keying makes this natural.
 func TestUnifiedStore_DeleteSessionRemovesModelArchive(t *testing.T) {

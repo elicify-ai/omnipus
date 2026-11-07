@@ -5,28 +5,18 @@ import (
 	"testing"
 )
 
-// M3: create_skill / edit_skill Descriptions used to tell the model that the
-// write "additionally prompts for operator approval" depending on policy.
-// Ava's shipped defaults Allow these tools; confirmation is the one
-// conversational user reply already obtained (ADR-090 §5.2). An Ask ceiling
-// is real execution policy, not a second confirmation ritual.
-
+// r15 §5.4/§10.1: ordinary execution approval, no extra skill ritual.
 func TestSkillAuthoringDescriptions_DoNotAdvertiseSecondApprovalRitual(t *testing.T) {
-	create := NewSkillCreateTool(nil).Description()
-	edit := NewSkillEditTool(nil).Description()
-	for name, desc := range map[string]string{"create_skill": create, "edit_skill": edit} {
-		lower := strings.ToLower(desc)
-		if strings.Contains(lower, "additionally prompts for operator approval") {
-			t.Errorf("%s Description still advertises a second operator-approval prompt:\n%s", name, desc)
+	desc := NewSkillEditTool(nil).Description()
+	lower := strings.ToLower(desc)
+	for _, forbidden := range []string{"additionally prompts for operator approval", "request for permission to proceed", "approval token"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("edit_skill invents a second ritual %q: %s", forbidden, desc)
 		}
-		if strings.Contains(lower, "request for permission to proceed") {
-			t.Errorf("%s Description must not invent a permission-to-proceed gate:\n%s", name, desc)
-		}
-		if !strings.Contains(lower, "not a substitute") && !strings.Contains(lower, "not a confirmation") {
-			t.Errorf("%s Description must distinguish execution Ask from proposal confirmation:\n%s", name, desc)
-		}
-		if strings.Contains(lower, "approval token") {
-			t.Errorf("%s Description must not introduce an approval token:\n%s", name, desc)
+	}
+	for _, required := range []string{"copy", "delete_file", "delete", "restore", "write_file"} {
+		if !strings.Contains(lower, required) {
+			t.Errorf("edit_skill must explain supported r15 operation %q: %s", required, desc)
 		}
 	}
 }

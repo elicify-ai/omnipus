@@ -320,7 +320,6 @@ function ToolApprovalCard({
     [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
   )
 
-  const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
@@ -362,9 +361,12 @@ function ToolApprovalCard({
   const resolvedAgentName = actingAgentName || cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
+  // The card shows only the entry's redacted copy (summary and raw dump alike).
+  const shownArgs = previewEntry?.redactArgs ? previewEntry.redactArgs(args) : args
+  const argsJson = JSON.stringify(shownArgs, null, 2)
   const previewCtx: ToolApprovalPreviewContext = {
     toolName,
-    args,
+    args: shownArgs,
     agentId,
     agentName: resolvedAgentName,
     sessionId,
@@ -688,12 +690,17 @@ function ToolApprovalCard({
  * (`approvalChatId`) is the active session. Approvals for other chats stay
  * queued and are announced by the "waiting in another chat" banner.
  */
-export function ToolApprovalPanel() {
+export function ToolApprovalPanel({ roomId }: { roomId?: string } = {}) {
   const queue = useToolApprovalStore((s) => s.queue)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const visible: PendingToolApproval[] = activeSessionId
-    ? queue.filter((a) => approvalChatId(a) === activeSessionId)
-    : []
+  // #1449 FR-048/FR-051 (D8, D23): on a group page only the cards that carry
+  // THIS group's reference; the same card also shows in the agent's own
+  // chat, and one decision (by approval id) resolves both.
+  const visible: PendingToolApproval[] = roomId
+    ? queue.filter((a) => a.roomRef?.room_id === roomId)
+    : activeSessionId
+      ? queue.filter((a) => approvalChatId(a) === activeSessionId)
+      : []
   const first = visible[0]
   if (!first) return null
   return (
@@ -714,10 +721,10 @@ export function ToolApprovalPanel() {
 }
 
 /** Docked mount above the composer (next to the question and secret cards). */
-export function ToolApprovalThreadTail() {
+export function ToolApprovalThreadTail({ roomId }: { roomId?: string } = {}) {
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--space-3)]" data-testid="tool-approval-thread-tail">
-      <ToolApprovalPanel />
+      <ToolApprovalPanel roomId={roomId} />
     </div>
   )
 }
