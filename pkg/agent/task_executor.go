@@ -68,6 +68,10 @@ type TaskExecutor struct {
 	agentLoop *AgentLoop
 	store     *task.Store
 	launcher  steer.SessionLauncher
+	// runNowAdmissionHook is the test-only seam at the run-now
+	// reservation→admission edge (task_executor_run_now.go); nil in
+	// production. Guarded by mu.
+	runNowAdmissionHook func(ctx context.Context, taskID string) error
 	// mainResolver answers which (workspace, agent) pairs own a visible main
 	// (session-core U6, D-U6.1); nil leaves every run ISOLATED.
 	mainResolver MainSessionResolver
@@ -1232,6 +1236,11 @@ func (te *TaskExecutor) StartTaskNowAs(ctx context.Context, taskID string, initi
 	if t.AgentID == "" {
 		return "", fmt.Errorf("task_executor: StartTaskNow: task %q has no agent assigned", taskID)
 	}
+	// T10 FR-16: a schedule-bearing task is routed through the trigger-aware
+	// run-now operation before anything is written (task_executor_run_now.go).
+	if t.Trigger.HasSchedule() && t.EffectiveSurface() != task.SurfaceHeartbeat {
+		return te.startScheduledTaskNow(ctx, taskID, initiator)
+	}
 
 	// S1 UAT follow-up (see this function's own doc comment and
 	// requirePlanExecuting's): no bypass here, unlike ExecuteTask's
@@ -1492,7 +1501,8 @@ func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string, oc
 // TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire.
 //
 // The caller-supplied context is intentionally IGNORED as the dispatch
-// parent (hence "_", not "ctx"). handleTaskRunNow's only production caller
+// parent (the run-now admission below reads only its cancellation).
+// handleTaskRunNow's only production caller
 // invokes this with r.Context(), and executeTask derives the goroutine's
 // context as a direct child of its own ctx argument via context.WithCancel —
 // net/http cancels a request's context the instant the handler returns
@@ -1521,7 +1531,15 @@ func (te *TaskExecutor) SpawnTriggeredRun(ctx context.Context, taskID string, oc
 // without this check, a Run-now racing AgentLoop.Close/TaskExecutor.Drain
 // could dispatch a goroutine Drain's bounded wg.Wait can only wait out, not
 // prevent from starting in the first place.
-func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occurrenceMs *int64) error {
+//
+// T10 FR-16/FR-17: the request first goes through the trigger-aware run-now
+// reservation (task_executor_run_now.go). An armed occurrence — named
+// explicitly or, with no occurrence, the task's armed one — is consumed
+// through admitRunNow; ctx is used there ONLY to refuse a request cancelled
+// before admission, never as the run's parent. A queued automatic delivery,
+// a future instant that is not the armed one, and a de-armed live schedule
+// are refused. Everything else takes the path below unchanged.
+func (te *TaskExecutor) StartOccurrenceRun(ctx context.Context, taskID string, occurrenceMs *int64) error {
 	// Same wg-before-draining order as ExecuteTask/StartTaskNow (fix-wave
 	// finding #1): reserve the slot first so a dispatch that passes the gate
 	// concurrently with Drain's Store(true) is still visible to its wg.Wait.
@@ -1529,12 +1547,25 @@ func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occ
 		return ErrExecutorDraining
 	}
 	defer te.wg.Done()
+	r, err := te.reserveRunNow(taskID, occurrenceMs)
+	if err != nil {
+		return err
+	}
+	if r.route == runNowConsume {
+		_, err := te.admitRunNow(ctx, r, nil)
+		return err
+	}
+	occurrenceMs = nil
+	if r.route == runNowHistorical {
+		instant := r.instant
+		occurrenceMs = &instant
+	}
 	if _, err := te.store.SpawnReset(taskID); err != nil {
 		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
 	}
 	// Calendar "Run now" (handleTaskRunNow, POST /api/v1/tasks/{id}/runs) —
-	// RunKindManual. The run is detached from the request (Background, the
-	// caller's ctx is `_` above) and, by #1263 R5 (founder 2026-10-13,
+	// RunKindManual. The run is detached from the request (Background, never
+	// the caller's ctx) and, by #1263 R5 (founder 2026-10-13,
 	// supersedes D-08/FR-057's attended exception), unattended like every
 	// other task run: an Ask call Auto, a rule or a grant does not settle is
 	// refused at once, never raised as an approval.

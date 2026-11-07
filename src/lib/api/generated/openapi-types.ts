@@ -2233,7 +2233,7 @@ export interface paths {
         head?: never;
         /**
          * Update a task
-         * @description Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to `in_progress` / Run is a status PATCH; there is no separate /start endpoint.
+         * @description Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to `in_progress` / Run is a status PATCH; there is no separate /start endpoint. A task with a schedule (a `once` or `recurring` trigger) refuses a status change to `next` or `in_progress` with 400 before any write; it is started early only through Run now (POST /tasks/{id}/runs), T10 FR-16.
          */
         patch: operations["updateTask"];
         trace?: never;
@@ -2333,7 +2333,7 @@ export interface paths {
         put?: never;
         /**
          * Start a task run now ("Run now")
-         * @description Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With `occurrence_ms`, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+         * @description Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With `occurrence_ms`, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs. For a task with a schedule (T10 FR-16/FR-17) the request follows one eligibility table: while an automatic run is queued it is refused; `occurrence_ms` equal to the armed occurrence (or no `occurrence_ms` while one is armed) runs that occurrence now and it does not run again at its time; a past `occurrence_ms` re-runs as before; any other future instant is refused; with nothing armed and no future occurrence the task runs as an ordinary run, and a future schedule that is not armed is refused as out of sync.
          */
         post: operations["runTaskNow"];
         delete?: never;
@@ -2393,7 +2393,7 @@ export interface paths {
         put?: never;
         /**
          * Restart a stopped standalone task
-         * @description Restarts a standalone (non-plan-member) task previously stopped by the user (`status: failed`, `cancel_reason: stopped_by_user`) — the Play route (ADR-052 FR-026). Resets `attempt_count` to 0, clears `cancel_reason`, and transitions the task to `next` so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not `failed`, or `failed` for a reason other than `stopped_by_user`).
+         * @description Restarts a standalone (non-plan-member) task previously stopped by the user (`status: failed`, `cancel_reason: stopped_by_user`) — the Play route (ADR-052 FR-026). Resets `attempt_count` to 0, clears `cancel_reason`, and transitions the task to `next` so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not `failed`, or `failed` for a reason other than `stopped_by_user`). Also rejected 409, before any write, when the task has a schedule (a `once` or `recurring` trigger): such a task is started early only through Run now (POST /tasks/{id}/runs), T10 FR-16.
          */
         post: operations["restartTask"];
         delete?: never;
@@ -24500,15 +24500,18 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Invalid task ID or request body. */
+            /** @description Invalid task ID or request body, or `occurrence_ms` is a future instant that is not the task's armed occurrence. */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
             429: components["responses"]["429TooManyRequests"];
             /** @description Task executor unavailable (gateway degraded). */
             503: {

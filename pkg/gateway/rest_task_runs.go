@@ -134,18 +134,15 @@ func (a *restAPI) handleTaskRunNow(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
-	// D1 (operator decision 2026-07-20, TaskRunStatusField.tsx): Run-now is
-	// NEVER allowed for a FUTURE occurrence — running it early would still
-	// materialize a run now AND the scheduler would fire the same occurrence
-	// again at its real instant (the scheduler is RRULE/Task.status-driven
-	// and has no awareness of TaskRuns), double-executing it. The React
-	// gate (`occurrence.ms > now`) only protects the calendar UI; a direct
-	// POST must be rejected at the API boundary too. Task-level Run-now
-	// (occurrence_ms omitted) and a past/current occurrence (<= now) are
-	// unaffected — mirrors the client's own `occurrenceMs! > now` threshold
-	// (strictly greater-than, so "now" itself is still allowed).
-	if req.OccurrenceMs != nil && *req.OccurrenceMs > time.Now().UnixMilli() {
-		jsonErr(w, http.StatusBadRequest, "cannot Run-now a future occurrence; it will run at its scheduled time")
+	// D1 (operator decision 2026-07-20), amended by T10 FR-16/FR-17 for
+	// exactly one case: the ARMED occurrence may be run now, because the
+	// executor consumes it so the scheduler never fires it again. Any other
+	// future instant (E3) is refused here at the API boundary, before the
+	// executor is reached; the executor re-applies the same table (E0–E4)
+	// under the task's ordering lock, so this read-only early refusal can
+	// never let through what the table refuses.
+	if req.OccurrenceMs != nil && *req.OccurrenceMs > time.Now().UnixMilli() && !a.isArmedOccurrence(id, *req.OccurrenceMs) {
+		jsonErr(w, http.StatusBadRequest, agent.ErrRunNowNotArmed.Error())
 		return
 	}
 
@@ -156,11 +153,59 @@ func (a *restAPI) handleTaskRunNow(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	if err := a.taskExecutor.StartOccurrenceRun(r.Context(), id, req.OccurrenceMs); err != nil {
-		slog.Error("rest: run now: start occurrence run failed", "task_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not start run")
+		status, msg := runNowRefusal(err)
+		if status >= http.StatusInternalServerError {
+			slog.Error("rest: run now: start occurrence run failed", "task_id", id, "error", err)
+		} else {
+			slog.Info("rest: run now refused", "task_id", id, "status", status, "error", err)
+		}
+		jsonErr(w, status, msg)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// isArmedOccurrence reports whether occurrenceMs is task id's currently armed
+// occurrence, read from the live scheduler registration (false when no
+// scheduler is wired).
+func (a *restAPI) isArmedOccurrence(id string, occurrenceMs int64) bool {
+	s := agent.GetTaskTriggerScheduler(a.agentLoop)
+	if s == nil {
+		return false
+	}
+	armed, ok := s.ArmedOccurrenceMS(id)
+	return ok && armed == occurrenceMs
+}
+
+// runNowRefusal maps a run-now error to its HTTP status and the plain
+// sentence the client shows. A future instant that is not the armed one (E3)
+// is 400, as at the API boundary above; the other eligibility refusals (E0,
+// de-armed E4, a schedule change during start) and an already-running task
+// are 409 with the executor's own sentence; anything else keeps the generic
+// 500.
+func runNowRefusal(err error) (int, string) {
+	if errors.Is(err, agent.ErrRunNowNotArmed) {
+		return http.StatusBadRequest, agent.ErrRunNowNotArmed.Error()
+	}
+	for _, refusal := range []error{
+		agent.ErrRunNowDeliveryQueued,
+		agent.ErrRunNowScheduleOutOfSync,
+		agent.ErrRunNowScheduleChanged,
+		agent.ErrRunNowAlreadyRunning,
+	} {
+		if errors.Is(err, refusal) {
+			return http.StatusConflict, refusal.Error()
+		}
+	}
+	switch {
+	case errors.Is(err, task.ErrAlreadyRunning):
+		return http.StatusConflict, agent.ErrRunNowAlreadyRunning.Error()
+	case errors.Is(err, agent.ErrPlanNotExecuting):
+		return http.StatusConflict, "this task belongs to a plan that is not running, so it cannot be started now"
+	case errors.Is(err, agent.ErrExecutorDraining):
+		return http.StatusServiceUnavailable, "Omnipus is shutting down, so the run was not started"
+	}
+	return http.StatusInternalServerError, "could not start run"
 }
 
 // toWireTaskRun converts an internal task.TaskRun (pkg/task/run_store.go) to
@@ -391,6 +436,14 @@ func (a *restAPI) handleTaskRestart(w http.ResponseWriter, id string) {
 	if t.PlanID != "" {
 		jsonErr(w, http.StatusConflict,
 			"task is a plan member; restart the plan instead via POST /plans/{id}/restart")
+		return
+	}
+	// T10 FR-16 (chief decision C2, 2026-11-07): a restart moves the task to
+	// `next`, where the ordinary drain would run it outside the run-now
+	// contract and leave its armed occurrence to fire again. A task with a
+	// schedule is therefore refused before any write and pointed at Run now.
+	if t.Trigger.HasSchedule() {
+		jsonErr(w, http.StatusConflict, scheduledTaskStartRefusal(id))
 		return
 	}
 	// Gate delegated to task.ValidateStandaloneRestart (pkg/task/store.go) —

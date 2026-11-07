@@ -1330,6 +1330,7 @@ func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
 	changed := !reflect.DeepEqual(su.t.Trigger, newTrigger)
 	if changed {
 		su.t.LastDeliveredAtMs = nil
+		su.t.ConsumedOccurrenceMs = nil
 	}
 	su.t.Trigger = newTrigger
 	if changed && su.t.Status == StatusNext &&
@@ -1889,6 +1890,17 @@ func (s *Store) SpawnResetForOccurrence(id string, occurrenceMs *int64) (*Task, 
 		}
 		return nil, ErrAlreadyRunning
 	}
+	s.resetForFreshRunLocked(t)
+	if err := s.write(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// resetForFreshRunLocked clears the previous run's session/result/artifacts/
+// timestamps and moves t to `next` (or `blocked`, see below). The caller holds
+// the per-task lock and writes t afterwards.
+func (s *Store) resetForFreshRunLocked(t *Task) {
 	t.Status = StatusNext
 	t.Result = ""
 	t.Artifacts = nil
@@ -1906,6 +1918,37 @@ func (s *Store) SpawnResetForOccurrence(id string, occurrenceMs *int64) (*Task, 
 	// for a task with no blocked_by (or every blocker already `done`).
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+}
+
+// ConsumeOccurrenceForRun is the run-now commitment write (T10 spec r6
+// FR-17(b)): ONE write records occurrenceMs — the scheduled instant of the
+// armed occurrence a run-now consumes — as both the consumption marker
+// (ConsumedOccurrenceMs) and the scheduler-delivery marker (LastDeliveredAtMs,
+// the occurrence is delivered by this run), and resets the task for a fresh
+// run exactly as SpawnReset does. The successful write IS the commitment: a
+// failed write changes nothing. A task already in_progress is refused with
+// ErrAlreadyRunning and nothing is written. The caller holds the task's
+// coordination lock and has identity-checked the occurrence against the
+// current registration.
+func (s *Store) ConsumeOccurrenceForRun(id string, occurrenceMs int64) (*Task, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	mu := s.lock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	t, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status == StatusInProgress {
+		return nil, ErrAlreadyRunning
+	}
+	consumed, delivered := occurrenceMs, occurrenceMs
+	t.ConsumedOccurrenceMs = &consumed
+	t.LastDeliveredAtMs = &delivered
+	s.resetForFreshRunLocked(t)
 	if err := s.write(t); err != nil {
 		return nil, err
 	}

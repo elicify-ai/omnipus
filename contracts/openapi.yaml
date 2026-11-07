@@ -8124,7 +8124,10 @@ paths:
       description: >
         Partially updates task fields (PATCH semantics — only provided fields
         change). Dragging a card to `in_progress` / Run is a status PATCH; there
-        is no separate /start endpoint.
+        is no separate /start endpoint. A task with a schedule (a `once` or
+        `recurring` trigger) refuses a status change to `next` or
+        `in_progress` with 400 before any write; it is started early only
+        through Run now (POST /tasks/{id}/runs), T10 FR-16.
       tags:
       - Tasks
       security:
@@ -8376,6 +8379,14 @@ paths:
         Idempotent per (task, occurrence_ms) against a concurrent scheduler
         fire. Returns 202 — the run executes asynchronously; observe progress
         via the task_run_status WS frame or GET /tasks/{id}/runs.
+        For a task with a schedule (T10 FR-16/FR-17) the request follows one
+        eligibility table: while an automatic run is queued it is refused;
+        `occurrence_ms` equal to the armed occurrence (or no `occurrence_ms`
+        while one is armed) runs that occurrence now and it does not run again
+        at its time; a past `occurrence_ms` re-runs as before; any other future
+        instant is refused; with nothing armed and no future occurrence the
+        task runs as an ordinary run, and a future schedule that is not armed
+        is refused as out of sync.
       tags:
       - Tasks
       security:
@@ -8397,7 +8408,15 @@ paths:
         '202':
           description: Run accepted and dispatched asynchronously.
         '400':
-          description: Invalid task ID or request body.
+          description: >
+            Invalid task ID or request body, or `occurrence_ms` is a future
+            instant that is not the task's armed occurrence.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/409Conflict'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
@@ -8492,6 +8511,9 @@ paths:
         (restart the plan instead, via POST /plans/{id}/restart, which
         re-runs its non-done members) or is not in a restartable state (not
         `failed`, or `failed` for a reason other than `stopped_by_user`).
+        Also rejected 409, before any write, when the task has a schedule
+        (a `once` or `recurring` trigger): such a task is started early only
+        through Run now (POST /tasks/{id}/runs), T10 FR-16.
       tags:
       - Tasks
       security:

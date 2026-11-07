@@ -15833,7 +15833,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "patch",
     path: "/tasks/:id",
     alias: "updateTask",
-    description: `Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to &#x60;in_progress&#x60; / Run is a status PATCH; there is no separate /start endpoint.
+    description: `Partially updates task fields (PATCH semantics — only provided fields change). Dragging a card to &#x60;in_progress&#x60; / Run is a status PATCH; there is no separate /start endpoint. A task with a schedule (a &#x60;once&#x60; or &#x60;recurring&#x60; trigger) refuses a status change to &#x60;next&#x60; or &#x60;in_progress&#x60; with 400 before any write; it is started early only through Run now (POST /tasks/{id}/runs), T10 FR-16.
 `,
     requestFormat: "json",
     parameters: [
@@ -15979,7 +15979,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/tasks/:id/restart",
     alias: "restartTask",
-    description: `Restarts a standalone (non-plan-member) task previously stopped by the user (&#x60;status: failed&#x60;, &#x60;cancel_reason: stopped_by_user&#x60;) — the Play route (ADR-052 FR-026). Resets &#x60;attempt_count&#x60; to 0, clears &#x60;cancel_reason&#x60;, and transitions the task to &#x60;next&#x60; so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not &#x60;failed&#x60;, or &#x60;failed&#x60; for a reason other than &#x60;stopped_by_user&#x60;).
+    description: `Restarts a standalone (non-plan-member) task previously stopped by the user (&#x60;status: failed&#x60;, &#x60;cancel_reason: stopped_by_user&#x60;) — the Play route (ADR-052 FR-026). Resets &#x60;attempt_count&#x60; to 0, clears &#x60;cancel_reason&#x60;, and transitions the task to &#x60;next&#x60; so the goal loop picks it up again. Rejected 409 when the task belongs to a plan (restart the plan instead, via POST /plans/{id}/restart, which re-runs its non-done members) or is not in a restartable state (not &#x60;failed&#x60;, or &#x60;failed&#x60; for a reason other than &#x60;stopped_by_user&#x60;). Also rejected 409, before any write, when the task has a schedule (a &#x60;once&#x60; or &#x60;recurring&#x60; trigger): such a task is started early only through Run now (POST /tasks/{id}/runs), T10 FR-16.
 `,
     requestFormat: "json",
     parameters: [
@@ -16045,7 +16045,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/tasks/:id/runs",
     alias: "runTaskNow",
-    description: `Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With &#x60;occurrence_ms&#x60;, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs.
+    description: `Opens a new run for the task and dispatches it immediately (ADR-050 RD7 / task-run-history-spec §3.4). With &#x60;occurrence_ms&#x60;, runs that specific recurring occurrence (materialize-on-demand); without it, re-runs a normal/once task as a fresh run (prior runs are preserved). Idempotent per (task, occurrence_ms) against a concurrent scheduler fire. Returns 202 — the run executes asynchronously; observe progress via the task_run_status WS frame or GET /tasks/{id}/runs. For a task with a schedule (T10 FR-16/FR-17) the request follows one eligibility table: while an automatic run is queued it is refused; &#x60;occurrence_ms&#x60; equal to the armed occurrence (or no &#x60;occurrence_ms&#x60; while one is armed) runs that occurrence now and it does not run again at its time; a past &#x60;occurrence_ms&#x60; re-runs as before; any other future instant is refused; with nothing armed and no future occurrence the task runs as an ordinary run, and a future schedule that is not armed is refused as out of sync.
 `,
     requestFormat: "json",
     parameters: [
@@ -16067,8 +16067,9 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     errors: [
       {
         status: 400,
-        description: `Invalid task ID or request body.`,
-        schema: z.void(),
+        description: `Invalid task ID or request body, or &#x60;occurrence_ms&#x60; is a future instant that is not the task&#x27;s armed occurrence.
+`,
+        schema: ErrorResponse,
       },
       {
         status: 401,
@@ -16078,6 +16079,11 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
       },
       {

@@ -106,7 +106,7 @@ func (s *TaskTriggerScheduler) reconcileFresh(t *task.Task, boot bool) error {
 		return nil
 	}
 
-	sched, err := desiredSchedule(t.Trigger, nowMs)
+	sched, err := desiredSchedule(t.Trigger, scheduleAnchorMs(t, nowMs))
 	if err != nil {
 		s.OnTaskDeleted(t.ID)
 		if errors.Is(err, errNoFutureOccurrence) {

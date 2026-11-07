@@ -1400,7 +1400,8 @@ func (tp *taskPatch) applyRunFields() {
 	}
 }
 
-// capturePriorStatus records the status before the update and refuses re-running a repeating task via PATCH.
+// capturePriorStatus records the status before the update and refuses starting a scheduled task, or re-running a
+// repeating one, via PATCH.
 func (tp *taskPatch) capturePriorStatus() bool {
 	// Capture the pre-update status to detect the in_progress transition below.
 
@@ -1410,6 +1411,9 @@ func (tp *taskPatch) capturePriorStatus() bool {
 		// to distinguish "was already in_progress" from "just moved to in_progress".
 		if existing, gErr := tp.a.taskStore.Get(tp.id); gErr == nil {
 			tp.preUpdateStatus = existing.Status
+			if tp.refusesScheduledActivation(existing) {
+				return true
+			}
 			// ADR-050 RD7, task-run-history-spec.md §3.4 ("the ADR-049
 			// fresh-run reset is superseded by this in the same change...do
 			// not keep both paths"): a "Run now" on a done/failed REPEATING
@@ -1447,6 +1451,45 @@ func (tp *taskPatch) capturePriorStatus() bool {
 		}
 	}
 	return false
+}
+
+// refusesScheduledActivation refuses, before any write, a status change to
+// `next` or `in_progress` on a schedule-bearing task (T10 spec r6 FR-16,
+// R5-M03): both would start it outside the run-now contract — `in_progress`
+// at once, `next` through the ordinary drain — and leave its armed occurrence
+// to fire again. Such a task is started early only through Run now.
+//
+// When the same request sets the trigger, the trigger it sets decides: an
+// `in_progress` start with a schedule is refused the same way, while `next`
+// is left to T8's scheduling-state rule (r17 TK-30 state 3: a changed future
+// trigger stores `inbox`, so nothing is activated). Ordinary tasks, heartbeat
+// tasks and unchanged statuses are untouched. It reports true with the 400
+// already written.
+func (tp *taskPatch) refusesScheduledActivation(existing *task.Task) bool {
+	if tp.patch.Status == nil || *tp.patch.Status == existing.Status ||
+		existing.EffectiveSurface() == task.SurfaceHeartbeat {
+		return false
+	}
+	switch status := *tp.patch.Status; {
+	case status != task.StatusNext && status != task.StatusInProgress:
+		return false
+	case tp.patch.Trigger != nil:
+		if status == task.StatusNext || !(*tp.patch.Trigger).HasSchedule() {
+			return false
+		}
+	case !existing.Trigger.HasSchedule():
+		return false
+	}
+	jsonErr(tp.w, http.StatusBadRequest, scheduledTaskStartRefusal(tp.id))
+	return true
+}
+
+// scheduledTaskStartRefusal is the plain sentence every non-run-now start
+// route returns for a task with a schedule (T10 FR-16): it names the reason
+// and the one route that starts such a task early.
+func scheduledTaskStartRefusal(id string) string {
+	return "this task runs on a schedule, so it cannot be started by changing its status or restarting it; " +
+		"use Run now (POST /api/v1/tasks/" + id + "/runs) to run its next scheduled occurrence now"
 }
 
 // applyUpdate writes the patch to the task store, retrying once without a status reset on detach.

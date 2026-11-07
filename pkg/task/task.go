@@ -177,6 +177,13 @@ func (tr *Trigger) IsRepeating() bool {
 	return tr != nil && tr.Type == TriggerRecurring
 }
 
+// HasSchedule reports whether tr carries a time schedule (a `once` or
+// `recurring` trigger). Such a task is started early only through the run-now
+// route (T10 FR-16), never through a status change. nil-safe.
+func (tr *Trigger) HasSchedule() bool {
+	return tr != nil && (tr.Type == TriggerOnce || tr.Type == TriggerRecurring)
+}
+
 // TodoStatus is the tri-state status of a checklist Todo.
 type TodoStatus string
 
@@ -399,6 +406,16 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// (OnceDelivered). Internal engine field: on no wire schema, never read or
 	// written by REST or a tool.
 	LastDeliveredAtMs *int64 `json:"last_delivered_at_ms,omitempty"`
+	// ConsumedOccurrenceMs is the run-now consumption marker (T10 spec r6
+	// FR-16/FR-17): the SCHEDULED instant of the armed occurrence a person or
+	// agent ran early — never the wall-clock time of that run. It is written
+	// only at run-now dispatch admission (Store.ConsumeOccurrenceForRun), under
+	// the task's coordination lock, and every next-occurrence computation of
+	// the trigger scheduler arms only boundaries strictly after
+	// max(now, marker). Cleared by the same write that changes the trigger
+	// (an identical re-save keeps it). Internal engine field: on no wire
+	// schema, never written by REST or a tool.
+	ConsumedOccurrenceMs *int64 `json:"consumed_occurrence_ms,omitempty"`
 	// Due is an optional RFC 3339 UTC deadline (separate from Trigger).
 	Due     string  `json:"due,omitempty"`
 	Surface Surface `json:"surface,omitempty"`

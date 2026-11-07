@@ -60,7 +60,7 @@ func (s *TaskTriggerScheduler) restoreStoredJobs() error {
 			// An offline trigger/owner edit must not bless a stale job with the
 			// current generation. Leaving generation empty makes OnTaskUpserted
 			// replace it. Invalid/exhausted triggers are also retired there.
-			sched, mapErr := triggerToCronSchedule(t.Trigger, nowMs)
+			sched, mapErr := triggerToCronSchedule(t.Trigger, scheduleAnchorMs(t, nowMs))
 			if mapErr == nil {
 				spec := s.jobSpecFor(t, sched)
 				for _, job := range jobs {

@@ -414,6 +414,10 @@ func (s *TaskTriggerScheduler) markBootOwedFires() map[string]cron.BootReplay {
 		if task.IsTerminal(t.Status) && !interrupted {
 			continue // the run finished and saved its outcome; nothing is owed
 		}
+		if t.ConsumedOccurrenceMs != nil && t.Trigger.Config.AtMs != nil &&
+			*t.ConsumedOccurrenceMs >= *t.Trigger.Config.AtMs {
+			continue // a run-now consumed this occurrence (T10 FR-16): never replayed
+		}
 		sched, err := triggerToCronSchedule(t.Trigger, nowMs)
 		if err != nil {
 			continue // invalid now: Reconcile retires it
@@ -1020,7 +1024,7 @@ func (s *TaskTriggerScheduler) runScheduledFire(ctx context.Context, job *cron.C
 // On series exhaustion (COUNT/UNTIL) this retires silently.
 func (s *TaskTriggerScheduler) rearmRrule(t *task.Task, fireGen, firingJobID string) {
 	nowMs := s.now().UnixMilli()
-	sched, err := triggerToCronSchedule(t.Trigger, nowMs)
+	sched, err := triggerToCronSchedule(t.Trigger, scheduleAnchorMs(t, nowMs))
 	if err != nil {
 		if errors.Is(err, errRruleExhausted) {
 			slog.Info("task_trigger: rrule series exhausted at re-arm, retiring", "task_id", t.ID)
@@ -1147,7 +1151,7 @@ func (s *TaskTriggerScheduler) sweepRearm(taskID string, nowMs int64) {
 		return
 	}
 	fireGen := triggerGeneration(t.Trigger)
-	sched, err := triggerToCronSchedule(t.Trigger, nowMs)
+	sched, err := triggerToCronSchedule(t.Trigger, scheduleAnchorMs(t, nowMs))
 	if err != nil {
 		if !errors.Is(err, errRruleExhausted) {
 			slog.Error("task_trigger: recovery sweep: cannot compute next occurrence",

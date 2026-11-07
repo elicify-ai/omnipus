@@ -90,7 +90,9 @@ func (t *TaskRunTool) Description() string {
 		"judge, retry with steering up to the attempt limit). Returns immediately with the run's " +
 		"session_id — it does not wait for the task to finish; poll the task or inspect the session " +
 		"for the outcome. The task must already have an assigned agent (assign one first). A done " +
-		"task cannot be re-run; a failed one can. A blocked task is rejected — it becomes runnable on " +
+		"task cannot be re-run; a failed one can. A task with a schedule (once or recurring) runs its " +
+		"next scheduled occurrence now instead, which then does not run again at its time — also when " +
+		"its last run is done. A blocked task is rejected — it becomes runnable on " +
 		"its own once its blockers complete. Calling this on an already-running task is a safe no-op " +
 		"returning the existing session. May fail if the global dispatch cap is exhausted — retry " +
 		"shortly. A task belonging to a plan is rejected: call execute_plan on the plan, which drives " +
@@ -153,11 +155,16 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			taskID, existing.PlanID))
 	}
 
+	// T10 FR-16: a schedule-bearing task is routed to the trigger-aware
+	// run-now operation BEFORE the `done` gate and without any status write
+	// here (a recurring series whose last run is done still advances).
+	scheduled := existing.Trigger.HasSchedule() && existing.EffectiveSurface() != task.SurfaceHeartbeat
+
 	// `done` is the one genuinely frozen task status; `failed` is
 	// deliberately re-runnable (mirrors the board's "Play" affordance on a
 	// failed standalone task, and the store's own permissive transition
 	// policy — task.Task's `failed` is NOT terminal, unlike a Plan's).
-	if existing.Status == task.StatusDone {
+	if existing.Status == task.StatusDone && !scheduled {
 		return ErrorResult(fmt.Sprintf("task %q is already done; a completed task cannot be re-run via run_task", taskID))
 	}
 	// `blocked` is a derived side-state (an unmet blocked_by dependency) —
@@ -192,6 +199,10 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if t.startTaskNow == nil {
 		slog.Error("run_task: no StartTaskNow dispatcher installed — denying by default", "task_id", taskID)
 		return ErrorResult("run_task failed: task executor not wired — denying by default")
+	}
+
+	if scheduled {
+		return t.runScheduled(ctx, existing)
 	}
 
 	// Already in flight: startTaskNow's own idempotency guard (a live
@@ -246,4 +257,23 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 
 	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":%q,"session_id":%q}`,
 		taskID, task.StatusInProgress, sessionID))
+}
+
+// runScheduled starts a schedule-bearing task through the executor's
+// trigger-aware run-now operation (T10 FR-16): the executor decides the route
+// (consume the armed occurrence, or ordinary dispatch when none is armed) and
+// performs every write itself, so this tool writes no status first. An
+// already-running task is reported as such, like an ordinary one.
+func (t *TaskRunTool) runScheduled(ctx context.Context, existing *task.Task) *ToolResult {
+	if existing.Status == task.StatusInProgress {
+		return NewToolResult(fmt.Sprintf(
+			`{"task_id":%q,"status":%q,"session_id":%q,"note":"already running"}`,
+			existing.ID, task.StatusInProgress, existing.SessionID))
+	}
+	sessionID, err := t.startTaskNow(ctx, existing.ID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("run_task failed: could not run scheduled task: %v", err))
+	}
+	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":%q,"session_id":%q}`,
+		existing.ID, task.StatusInProgress, sessionID))
 }

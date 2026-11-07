@@ -179,8 +179,25 @@ const singleAttemptJSON = `"max_attempts":1`
 // own new callers, but shared by all of them (see the 7-reviewer gate report
 // for the recurring-task scheduler fix, C1a/C1b/FIX-2's proof tests, for the
 // analysis; fixed once here in the shared helper rather than per test).
+//
+// T10 FR-16 (R5-M03) refuses the `next` and `in_progress` status routes for a
+// task with a schedule, so such a task reaches its run through the one route
+// that starts it early — POST /tasks/{id}/runs — and then waits for that
+// run's terminal status exactly as the status route does below.
 func advanceTaskToDone(t *testing.T, api *restAPI, id string) {
 	t.Helper()
+	if stored, err := api.taskStore.Get(id); err == nil && stored.Trigger.HasSchedule() {
+		w := httptest.NewRecorder()
+		api.HandleTasks(w, httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+id+"/runs", strings.NewReader(`{}`)))
+		require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+		require.Eventually(t, func() bool {
+			s := getTaskStatus(t, api, id)
+			return s == gen.TaskStatusDone || s == gen.TaskStatusFailed
+		}, 10*time.Second, 20*time.Millisecond,
+			"the run started through Run now must reach a terminal state before advanceTaskToDone forces status=done")
+		require.Equal(t, http.StatusOK, patchTask(t, api, id, `{"status":"done"}`).Code)
+		return
+	}
 	require.Equal(t, http.StatusOK, patchTask(t, api, id, `{"status":"next","description":"x"}`).Code)
 
 	wIP := patchTask(t, api, id, `{"status":"in_progress"}`)
