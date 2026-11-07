@@ -1,6 +1,7 @@
 package coreagent_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
@@ -45,4 +46,24 @@ func TestResearcherPrompt_NoLeafWording_DelegateListedAsTool(t *testing.T) {
 	assert.Contains(t, prompt, "tool:delegate",
 		"the prompt's tool list must include tool:delegate (the tool:<name> convention) now that Researcher keeps delegate: allow — "+
 			"a bare 'delegate' substring is not accepted as evidence, it would match the existing 'delegation-only' prose")
+
+	// The whole-prompt match above also hits the graph-permission sentence
+	// ("Use tool:delegate only when ..."), so it cannot prove list membership.
+	// Parse the "Standard tools include ..." sentence itself and check its items.
+	const marker = "Standard tools include "
+	start := strings.Index(prompt, marker)
+	require.GreaterOrEqual(t, start, 0, "the prompt must carry a %q sentence listing its tools", marker)
+	sentence := prompt[start+len(marker):]
+	end := strings.Index(sentence, ".")
+	require.GreaterOrEqual(t, end, 0, "the Standard tools sentence must end with a period")
+	var items []string
+	for _, item := range strings.Split(sentence[:end], ",") {
+		items = append(items, strings.TrimPrefix(strings.TrimSpace(item), "and "))
+	}
+	assert.Contains(t, items, "tool:delegate",
+		"tool:delegate must be an item of the Standard tools list itself, independent of the graph-permission sentence (founder 2026-11-07 04:00Z)")
+	assert.Contains(t, items, "tool:message_parent",
+		"control: the parse yields real list items (Researcher returns its bundle through tool:message_parent)")
+	assert.NotContains(t, items, "tool:bash",
+		"control: Researcher holds no bash (notool:bash)")
 }

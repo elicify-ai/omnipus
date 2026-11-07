@@ -84,14 +84,44 @@ func TestResearcherDelegate_FreshSeedRidesCeilingAllow_NonEdgeTargetRefusedByGra
 	assert.Equal(t, coreagent.FreshSelfDelegationMaxDepth, *rows[0].Depth,
 		"fresh self-edge depth is the ADR-090 FR-006 pin of 3, or the lower live ceiling")
 
-	edges := make([]graphEdge, 0, len(rows))
-	for _, r := range rows {
+	// Build the checked graph from the REAL production seed path, not from the
+	// researcher self-row alone: every roster agent's self-row
+	// (workspace.SelfEdgeSeedRows, as pkg/gateway/rest_workspace_delegation.go::
+	// defaultWorkspaceDelegationEdges calls it) plus the cross-agent targets of
+	// every agent's canonical policy (pkg/coreagent/seed.go::SeedDelegationEdges,
+	// replayed by seedEdgesFromConfig in worker_delegation_test.go — the same
+	// derivation defaultWorkspaceDelegationEdges performs). That function is
+	// unexported and lives in pkg/gateway, which imports pkg/agent, so a
+	// pkg/agent test cannot call it without an import cycle. A seed change that
+	// adds researcher→worker therefore adds an edge here and the refusal below
+	// disappears.
+	rosterIDs := make([]string, 0, len(cfg.Agents.List))
+	workerOnRoster := false
+	for i := range cfg.Agents.List {
+		rosterIDs = append(rosterIDs, cfg.Agents.List[i].ID)
+		workerOnRoster = workerOnRoster || cfg.Agents.List[i].ID == "worker"
+	}
+	require.True(t, workerOnRoster, "precondition: worker is on the fresh roster, so its refusal is the no-edge one")
+	allRows := workspace.SelfEdgeSeedRows(rosterIDs, nil, cfg.SelfEdgeExcludeAgentIDSet(), ceiling)
+	edges := make([]graphEdge, 0, len(allRows))
+	for _, r := range allRows {
 		modes := make([]string, 0, len(r.Modes))
 		for _, m := range r.Modes {
 			modes = append(modes, string(m))
 		}
 		edges = append(edges, graphEdge{FromAgent: r.FromAgent, ToAgent: r.ToAgent, Modes: modes, Depth: r.Depth})
 	}
+	edges = append(edges, seedEdgesFromConfig(cfg)...)
+
+	// The canonical fresh seed gives researcher exactly one outgoing edge: itself.
+	var researcherTargets []string
+	for _, e := range edges {
+		if e.FromAgent == "researcher" {
+			researcherTargets = append(researcherTargets, e.ToAgent)
+		}
+	}
+	require.Equal(t, []string{"researcher"}, researcherTargets,
+		"the canonical fresh seed must give researcher exactly its self-edge — no researcher→worker edge")
 	seedWorkspaceGraph(t, testWS, true, edges)
 
 	// The production delegate gate (registerSharedTools wires the background
