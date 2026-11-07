@@ -89,7 +89,8 @@ All of Part 1 — the core **and** the pop-up clean-up (R-RM-1: 328 call sites, 
 
 ```
  WP-0 contracts (backend-lead edits contracts/ and regenerates)
-   │   all §7 shapes, atomically with generated artifacts, before any Go/TS code
+   │   all §7 shapes, atomically with generated artifacts, before any feature code;
+   │   carries only the mechanical call-site fixes the push needs to compile (§7)
    ├─> WP-1 backend: router, source map, recipients, preferences, retention,
    │        revisions, delete/clear, locks (pkg/notifications, pkg/gateway, pkg/agent hooks)
    ├─> WP-2 backend: failure classification, per-attempt observation, incidents,
@@ -544,6 +545,10 @@ Rules:
 ## 7. Wire contract changes (Hard Constraint #8)
 
 > Shapes decided here (architect owns contract shapes); `backend-lead` writes the YAML under `contracts/`, regenerates with `scripts/gen-contracts.sh`, and commits spec + generated artifacts atomically **before any Go/TS code** (WP-0). Field names below are the wire names. No YAML in this spec. **No schema here is a discriminated union**: every lifecycle variant is its own strict frame type, so the ADR-034 inline-union rule is not needed.
+
+**Hand-kept inline copies (Team B review, 2026-11-06).** `contracts/asyncapi.yaml` holds its own inline copies of schemas that also exist as component files, and the generators read those copies. WP-0 changes both, or the generated types go stale. Besides the two `ProviderFallback` shapes named in §7.4: `ProviderRetryFrame`, `LLMError`, `ReplayErrorFrame`, `ReplayErrorPayload` and `NotificationFrame` (the frame message references this copy, not the component file). WP-0 also searches the file for "in sync by hand", so a copy not listed here is not missed.
+
+**WP-0 must compile at its own push (Team B review, 2026-11-06).** The regenerated types break existing code: `src/store/notifications.ts`, `src/store/chat/slices/replay-and-status-frames.ts` (`case 'notification'`), `src/lib/llm-error.ts` (`provider_message` becomes `message_assembled`), `src/lib/ws.ts`, `pkg/gateway/schedules.go::toNotification` and `pkg/gateway/websocket_forward.go`. WP-0 carries the smallest mechanical fix at those sites, with no behaviour change. The real behaviour stays with WP-1 to WP-4 and their owners; this is the one exception to the file-area table in §1.4.
 
 ### 7.1 Changed: `Notification` (`contracts/components/schemas/Notification.yaml`) and `NotificationList`
 
@@ -2811,7 +2816,7 @@ No user-visible effect, so no page: the router refactor, file locking, the recip
 - **Development**: a local fake OpenAI-compatible server for tests (refuse, 401 echo, 402, 429, 503, mid-stream drop, stall); real OpenRouter only in UAT.
 
 ### Browser (SPA) ↔ gateway
-- **Data in/out**: REST (notifications, preferences, outage report), WS frames (`notification`, `notification_deleted`, `notification_cleared`, `system_line`, `provider_retry`, `provider_fallback`, `error`).
+- **Data in/out**: REST (notifications, preferences, outage report), WS frames (`notification_created`, `notification_changed`, `notification_deleted`, `notification_cleared`, `system_line`, `provider_retry`, `provider_fallback`, `error`).
 - **On failure**: SPA keeps live state; snapshots reconcile by revision and tombstones (§8.4); outage reports are retried with the same report id until accepted, rejected (400) or 24 h old (§14.4).
 - **Development**: real gateway in integration/E2E tests.
 
