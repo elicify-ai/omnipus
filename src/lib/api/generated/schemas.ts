@@ -730,6 +730,8 @@ type LibraryEntry = {
   mount?: LibraryEntryMount | undefined;
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
+  is_view?: boolean | undefined;
+  view?: LibraryEntryView | undefined;
   preview_profile?: ("workspace" | "mail_restricted") | undefined;
   chat_copy?: boolean | undefined;
   preview_scripts_allowed?: boolean | undefined;
@@ -738,6 +740,13 @@ type LibraryEntryMount = {
   name: string;
   host_path: string;
   broad: boolean;
+};
+type LibraryEntryView = {
+  name: string;
+  label: string;
+  collection_id: string;
+  kind?: string | undefined;
+  source?: string | undefined;
 };
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
@@ -6568,6 +6577,13 @@ export const LibraryEntryMount: z.ZodType<LibraryEntryMount> = z.object({
   host_path: z.string().min(1),
   broad: z.boolean(),
 });
+export const LibraryEntryView: z.ZodType<LibraryEntryView> = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  collection_id: z.string().min(1),
+  kind: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+});
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -6579,6 +6595,8 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   mount: LibraryEntryMount.optional(),
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
+  is_view: z.boolean().optional(),
+  view: LibraryEntryView.optional(),
   preview_profile: z.enum(["workspace", "mail_restricted"]).optional(),
   chat_copy: z.boolean().optional(),
   preview_scripts_allowed: z.boolean().optional(),
@@ -11183,6 +11201,11 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         name: "include_hidden",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "include_views",
         type: "Query",
         schema: z.boolean().optional().default(false),
       },
