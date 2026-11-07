@@ -14826,6 +14826,12 @@ export interface components {
                 has_result: boolean;
             }[];
             /**
+             * Format: int64
+             * @description The instant (Unix epoch milliseconds) of the occurrence the task's live scheduler registration currently owns — its armed next run, future or overdue-but-not-yet-collected. Read at request time from the scheduler registration, never derived from the recurrence rule or run history, so two tasks with identical recurrence can differ here (one armed, one de-armed). Absent when the task has no live registration, or when its registration holds no next run (for example a fire already collected and queued, or a de-armed registration). Read-only. The Calendar offers "Run now" for a future occurrence only when it equals this value (T10 schedules spec r6, FR-16 / US-9 E1).
+             * @example 1784620800000
+             */
+            armed_occurrence_ms?: number | null;
+            /**
              * @description True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
              * @example false
              */

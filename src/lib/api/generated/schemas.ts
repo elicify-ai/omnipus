@@ -2712,6 +2712,7 @@ type TaskOccurrenceSet = {
         has_result: boolean;
       }>
     | undefined;
+  armed_occurrence_ms?: (number | null) | undefined;
   truncated: boolean;
 };
 type DayBucket = {
@@ -6240,6 +6241,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
       })
     )
     .optional(),
+  armed_occurrence_ms: z.number().int().nullish(),
   truncated: z.boolean(),
 });
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z

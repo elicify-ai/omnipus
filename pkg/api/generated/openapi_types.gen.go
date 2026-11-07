@@ -27436,6 +27436,9 @@ type TaskCreateRequestTriggerType string
 
 // TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavor that can recur (`rrule` via rrule-go). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
 type TaskOccurrenceSet struct {
+	// ArmedOccurrenceMs The instant (Unix epoch milliseconds) of the occurrence the task's live scheduler registration currently owns — its armed next run, future or overdue-but-not-yet-collected. Read at request time from the scheduler registration, never derived from the recurrence rule or run history, so two tasks with identical recurrence can differ here (one armed, one de-armed). Absent when the task has no live registration, or when its registration holds no next run (for example a fire already collected and queued, or a de-armed registration). Read-only. The Calendar offers "Run now" for a future occurrence only when it equals this value (T10 schedules spec r6, FR-16 / US-9 E1).
+	ArmedOccurrenceMs *int64 `json:"armed_occurrence_ms,omitempty"`
+
 	// DayBuckets Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6).
 	DayBuckets []struct {
 		// Count Number of occurrences of the task on this day.
