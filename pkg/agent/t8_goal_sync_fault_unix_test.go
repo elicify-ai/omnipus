@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ import (
 func TestT8GoalSync_WriteFailureDoesNotStrandSchedule(t *testing.T) {
 	f := t8ReadLoop(t)
 	clock := newTriggerFakeClock()
-	sched := NewTaskTriggerScheduler(filepath.Join(f.home, "tasks_triggers", "jobs.json"), f.ts, f.al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(f.home, "tasks_triggers", "jobs.json")), f.ts, f.al.taskExecutor)
 	sched.SetClock(clock)
 	require.NoError(t, sched.Start())
 	t.Cleanup(sched.Stop)

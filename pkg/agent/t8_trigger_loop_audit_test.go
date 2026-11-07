@@ -13,6 +13,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,7 @@ func TestT8Trigger_CreateAllowHasNoAdditionalApproval(t *testing.T) {
 	f := t8ReadLoop(t)
 	al := f.al
 	clock := newTriggerFakeClock()
-	sched := NewTaskTriggerScheduler(filepath.Join(f.home, "tasks_triggers", "jobs.json"), al.taskStore, al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(f.home, "tasks_triggers", "jobs.json")), al.taskStore, al.taskExecutor)
 	sched.SetClock(clock)
 	require.NoError(t, sched.Start())
 	al.SetTaskTriggerScheduler(sched)

@@ -296,10 +296,24 @@ type setupAndStartServicesState struct {
 	bootSweepCfg    config.PlanningConfig
 	providerCatalog *catalog.Catalog
 	api             *restAPI
-	// taskTrigger is created and prepared (boot classification) before
-	// startSchedulers starts any task producer; startSchedulers then starts
-	// it. nil when the agent loop has no task store.
-	taskTrigger *agent.TaskTriggerScheduler
+	// bootObserver, when set (tests only), sees each scheduler boot stage of
+	// startSchedulers in order (T10 FR-03, S-B.4).
+	bootObserver func(stage string, cs *cron.CronService)
+}
+
+// SetSchedulerBootObserverForTest installs fn to observe the scheduler boot
+// stages of startSchedulers: checked_load, clear_running, task_reconciled,
+// heartbeat_reconciled, loop_reconciled, activate and first_collection (the
+// engine's first due-collection). nil removes it. For tests only.
+func (stg *setupAndStartServicesState) SetSchedulerBootObserverForTest(fn func(stage string, cs *cron.CronService)) {
+	stg.bootObserver = fn
+}
+
+// observeBoot reports one scheduler boot stage to the test observer, if any.
+func (stg *setupAndStartServicesState) observeBoot(stage string, cs *cron.CronService) {
+	if stg.bootObserver != nil {
+		stg.bootObserver(stage, cs)
+	}
 }
 
 func setupAndStartServices(
@@ -342,21 +356,19 @@ func setupAndStartServices(
 	}
 
 	// Boot recovery of interrupted task work, all of it BEFORE any task
-	// producer of this process (drain, cron engines, trigger engine, plan
-	// engine, REST listener) starts, so every in_progress claim it sees is the
-	// dead process's and none of this process's runs can be failed by it
-	// (6b review I2, re-review N1):
+	// producer of this process (drain, timer engine, plan engine, REST
+	// listener) starts, so every in_progress claim it sees is the dead
+	// process's and none of this process's runs can be failed by it (6b
+	// review I2, re-review N1):
 	//   1. hold the goal transitions it makes: the goal outcome recorder and
 	//      its session stores are wired later (wireInteractiveServices,
 	//      setupPlans); buildRESTAPI replays them once they are (re-review N2);
 	//   2. reconcile tasks the dead process left in_progress;
-	//   3. classify the trigger scheduler's interrupted fires. startSchedulers
-	//      starts its engine later, with the decisions made here.
+	//   3. startSchedulers classifies the trigger scheduler's interrupted
+	//      fires right after the shared engine's checked load, before the
+	//      engine or any other task producer starts.
 	tools.HoldTaskGoalEndedUntilReplay()
 	agent.ReconcileInterruptedTasks(agent.GetTaskStore(stg.agentLoop))
-	if err := stg.prepareTaskTrigger(); err != nil {
-		return nil, err
-	}
 
 	// The task executor's session plane (launcher, lifecycle store, main
 	// resolver) is wired only after the schedulers start (setupPlans,
@@ -401,26 +413,6 @@ func setupAndStartServices(
 	return stg.startBackgroundServices()
 }
 
-// prepareTaskTrigger creates the task trigger scheduler and classifies the
-// dead process's interrupted fires (PrepareAfterPhysicalBoot). It MUST run
-// before startSchedulers, which starts the first task producers (cron engine,
-// queued-task drain) and only then starts this scheduler with the decisions
-// made here (re-review N1). No-op when the agent loop has no task store.
-func (stg *setupAndStartServicesState) prepareTaskTrigger() error {
-	tStore := agent.GetTaskStore(stg.agentLoop)
-	if tStore == nil {
-		return nil
-	}
-	stg.taskTrigger = agent.NewTaskTriggerScheduler(
-		filepath.Join(stg.homePath, "tasks_triggers", "jobs.json"),
-		tStore, agent.GetTaskExecutor(stg.agentLoop),
-	)
-	if err := stg.taskTrigger.PrepareAfterPhysicalBoot(); err != nil {
-		return fmt.Errorf("error preparing task trigger scheduler: %w", err)
-	}
-	return nil
-}
-
 // afterStartSchedulersHookForTest, when set, runs inside setupAndStartServices
 // right after startSchedulers returns and before setupMediaAndChannels: the
 // window in which the schedulers run and the task executor's session plane is
@@ -438,8 +430,11 @@ func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
 	afterStartSchedulersHookForTest.Store(&fn)
 }
 
-// startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
-// The task trigger scheduler is not created here: prepareTaskTrigger must have run first.
+// startSchedulers constructs and starts the gateway's scheduling and drain
+// services on the one shared timer engine, in the T10 FR-03 boot order:
+// checked load, task boot classification, crash-flag clear, the task, heartbeat
+// and loop reconciliations, then engine activation and the task recovery
+// sweep. Nothing is collected or dispatched before activation.
 func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error) {
 	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
 
@@ -457,12 +452,46 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	if stg.err != nil {
 		return nil, true, fmt.Errorf("error setting up cron service: %w", stg.err)
 	}
-	// T10 FR-03 boot order on the one shared engine: checked load and
-	// crash-flag clear first, then the boot reconciliations, then activation.
-	// Nothing is collected or dispatched before every reconciliation ran; a
-	// failed load aborts here with the original error and no write.
-	if stg.err = stg.runningServices.CronService.RestoreAfterPhysicalBoot(); stg.err != nil {
+	cs := stg.runningServices.CronService
+	// T10 FR-03 boot order on the one shared engine. A failed checked load
+	// aborts here with the original error, the file untouched, and no
+	// reconciliation, collection or dispatch.
+	if stg.err = cs.LoadAfterPhysicalBoot(); stg.err != nil {
 		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
+	}
+	stg.observeBoot("checked_load", cs)
+
+	// The task kind's boot classification reads the dead process's Running
+	// flags, so it runs between the load and the crash-flag clear, while no
+	// task producer of this process has started (6b re-review N1).
+	var taskTrigger *agent.TaskTriggerScheduler
+	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
+		taskTrigger = agent.NewTaskTriggerScheduler(cs, tStore, agent.GetTaskExecutor(stg.agentLoop))
+		if err := taskTrigger.PrepareOnLoadedEngine(); err != nil {
+			return nil, true, fmt.Errorf("error preparing task trigger scheduler: %w", err)
+		}
+	}
+	replay := func(*cron.CronJob) cron.BootReplay { return cron.BootReplayRun }
+	if taskTrigger != nil {
+		replay = taskTrigger.BootReplayDecision()
+	}
+	if stg.err = cs.ClearRunningAfterPhysicalBoot(replay); stg.err != nil {
+		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
+	}
+	stg.observeBoot("clear_running", cs)
+
+	// Task time triggers (the `task` kind): the once-per-boot recomputation
+	// (r17 TK-30), so no overdue occurrence restored from the store is
+	// collected before it is recomputed. A one-time fire the dead process had
+	// started is owed its run once (founder decision 2026-10-29, Q1 A;
+	// #1484); a gateway reload never replays. Create, update and delete
+	// paths (re)register jobs via AgentLoop.NotifyTaskUpserted /
+	// NotifyTaskDeleted.
+	if taskTrigger != nil {
+		if err := taskTrigger.ReconcileAtBoot(); err != nil {
+			return nil, true, fmt.Errorf("error reconciling task triggers: %w", err)
+		}
+		stg.observeBoot("task_reconciled", cs)
 	}
 
 	// ADR-027 — heartbeat is workspace-scoped. Reconcile workspace member_configs
@@ -481,23 +510,36 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 			slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
 		}
 	}
+	stg.observeBoot("heartbeat_reconciled", cs)
 	fmt.Println("✓ Heartbeat running as workspace-scoped schedules")
 
 	// /loop runs as the `loop` kind on the shared engine (T10 FR-01). Its boot
 	// recovery (FR-05, #1491) must complete before activation: a recovery
 	// that cannot persist its outcome aborts the boot, naming the session,
 	// and nothing dispatches; the next boot retries from durable state.
-	loops := agent.NewLoopScheduler(stg.runningServices.CronService, stg.agentLoop)
+	loops := agent.NewLoopScheduler(cs, stg.agentLoop)
 	if recErr := loops.Reconcile(); recErr != nil {
 		return nil, true, fmt.Errorf("error recovering /loop schedules: %w", recErr)
 	}
+	stg.observeBoot("loop_reconciled", cs)
 	stg.runningServices.LoopScheduler = loops
 	stg.agentLoop.SetLoopScheduler(loops)
+	if taskTrigger != nil {
+		stg.runningServices.TaskTrigger = taskTrigger
+		stg.agentLoop.SetTaskTriggerScheduler(taskTrigger)
+	}
 
-	if stg.err = stg.runningServices.CronService.Activate(); stg.err != nil {
+	if stg.bootObserver != nil {
+		cs.SetFirstCollectionTestHook(func() { stg.observeBoot("first_collection", cs) })
+	}
+	if stg.err = cs.Activate(); stg.err != nil {
 		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
 	}
-	fmt.Println("✓ Cron service started (heartbeat and /loop jobs)")
+	stg.observeBoot("activate", cs)
+	if taskTrigger != nil {
+		taskTrigger.StartRecoverySweep()
+	}
+	fmt.Println("✓ Timer engine started (heartbeat, /loop and task trigger jobs)")
 
 	// Queued-task draining (dispatch of `next` tasks) is owned UNCONDITIONALLY by
 	// the dedicated TaskDrainService — never by the heartbeat path.
@@ -536,29 +578,6 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		fmt.Println("✓ New-mail watcher owned by: MailWatchService (badge state only)")
 	}
 
-	// Task time-trigger executor: fires once/every/recurring task triggers via a
-	// dedicated CronService instance (reusing the pkg/cron engine, NOT a second
-	// scheduler). Boot-reconciles existing tasks' triggers, then the create/
-	// update/delete REST + tool paths (re)register/remove jobs via
-	// AgentLoop.NotifyTaskUpserted / NotifyTaskDeleted.
-	if stg.taskTrigger != nil {
-		// Created and prepared by setupAndStartServices before any task
-		// producer started (re-review N1).
-		stg.runningServices.TaskTrigger = stg.taskTrigger
-		// Physical boot, not a same-process start: a one-time trigger whose
-		// run the dead prior process had started is owed that run here, once
-		// (founder decision 2026-10-29, Q1 A; the task-trigger half of
-		// #1484). Gateway reload restarts this scheduler with plain Start —
-		// reload must never replay.
-		if startErr := stg.runningServices.TaskTrigger.StartAfterPhysicalBoot(); startErr != nil {
-			return nil, true, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
-		}
-		stg.agentLoop.SetTaskTriggerScheduler(stg.runningServices.TaskTrigger)
-		if recErr := stg.runningServices.TaskTrigger.Reconcile(); recErr != nil {
-			slog.Error("gateway: task trigger boot reconcile failed", "error", recErr)
-		}
-		fmt.Println("✓ Task trigger scheduler started")
-	}
 	return nil, false, nil
 }
 

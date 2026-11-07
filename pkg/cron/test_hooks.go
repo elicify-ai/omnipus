@@ -1,5 +1,7 @@
 package cron
 
+import "context"
+
 // test_hooks.go — test-only barrier seams for the scheduler-ownership
 // fixtures of tool-parity spec r17 §13.1 tests 12d/12e/12f (scenarios 1.15,
 // 18.32, 18.34 and 18.40). Every hook is nil in production: an unset hook
@@ -22,6 +24,43 @@ type cronTestHooks struct {
 	// before anything is written (the real cron-save boundary: scenario 1.15
 	// and the collection-save failure of 18.40).
 	saveStore func() error
+	// beforeDispatch runs like dispatchEntry, with the lane context the run
+	// will receive: the job is collected and queued (JobDispatchInFlight)
+	// and has not started (T10 E0, S-H.15).
+	beforeDispatch func(ctx context.Context, jobID string)
+	// firstCollection runs once, just before Activate's first due-collection
+	// (T10 FR-03 boot observer, S-B.4).
+	firstCollection func()
+}
+
+// SetBeforeDispatchTestHook installs fn as the before-dispatch barrier (see
+// cronTestHooks.beforeDispatch); nil removes it. Test-only; production never
+// sets one.
+func (cs *CronService) SetBeforeDispatchTestHook(fn func(ctx context.Context, jobID string)) {
+	cs.mu.Lock()
+	cs.testHooks.beforeDispatch = fn
+	cs.mu.Unlock()
+}
+
+// SetFirstCollectionTestHook installs fn as the first-collection observer
+// (see cronTestHooks.firstCollection); nil removes it. Test-only; production
+// never sets one.
+func (cs *CronService) SetFirstCollectionTestHook(fn func()) {
+	cs.mu.Lock()
+	cs.testHooks.firstCollection = fn
+	cs.mu.Unlock()
+}
+
+func (cs *CronService) beforeDispatchHook() func(context.Context, string) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.testHooks.beforeDispatch
+}
+
+func (cs *CronService) firstCollectionHook() func() {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.testHooks.firstCollection
 }
 
 // SetDispatchEntryTestHook installs fn as the dispatch-entry barrier (see

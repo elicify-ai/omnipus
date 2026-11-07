@@ -5,11 +5,9 @@
 // Package agent — task time-trigger executor.
 //
 // TaskTriggerScheduler wires the unified pkg/task store's Trigger field to the
-// existing pkg/cron engine by maintaining a SECOND, dedicated CronService
-// instance (separate store file: <home>/tasks_triggers/jobs.json). A second
-// instance, rather than co-mingling task-trigger jobs in the schedules service,
-// keeps the two systems orthogonal: schedules are user-managed chat turns;
-// task triggers are engine-managed task re-fires.
+// one shared timer engine (T10 FR-01): its jobs are the `task` kind on the
+// engine's store (<home>/cron/jobs.json), next to the heartbeat and loop
+// kinds. Every mutation it makes touches only `task` jobs (FR-25).
 //
 // Reuse contract: this file imports pkg/cron directly and delegates ALL
 // scheduling state to it. There is NO second scheduler implementation here.
@@ -23,12 +21,19 @@
 // guard that protects a re-arm racing a concurrent edit (replaceJobLocked),
 // and the crash-recovery sweep (RunRecoverySweep) below.
 //
-// Boot wiring (done by the gateway, NOT this file):
+// Boot wiring on the shared engine (done by the gateway, NOT this file; T10
+// FR-03):
 //
-//	s := agent.NewTaskTriggerScheduler(storePath, taskStore, executor)
-//	s.StartAfterPhysicalBoot() // process boot: dead-process restore + owed once-fire replay
-//	s.Start()                  // same-process start (reload): restore, no replay
-//	s.Reconcile()              // register jobs for all existing triggered tasks
+//	cs.LoadAfterPhysicalBoot()  // checked load, dead Running flags kept
+//	s := agent.NewTaskTriggerScheduler(cs, taskStore, executor)
+//	s.PrepareOnLoadedEngine()   // bindings, owed and missed fires
+//	cs.ClearRunningAfterPhysicalBoot(s.BootReplayDecision())
+//	s.ReconcileAtBoot()         // once-per-boot recomputation
+//	cs.Activate()
+//	s.StartRecoverySweep()
+//
+// Start and StartAfterPhysicalBoot start the engine they were given; they
+// serve an engine that only this scheduler uses (tests).
 //
 // On task create/update: s.OnTaskUpserted(t)
 // On task delete:        s.OnTaskDeleted(taskID)
@@ -205,12 +210,13 @@ type TaskTriggerScheduler struct {
 	executor *TaskExecutor
 }
 
-// NewTaskTriggerScheduler creates a scheduler that uses a dedicated CronService
-// with its store at storePath. The executor's SpawnTriggeredRun is used as the
-// dispatch function unless overridden (test seam: replace dispatch before Start).
-func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *TaskExecutor) *TaskTriggerScheduler {
+// NewTaskTriggerScheduler creates a scheduler for the `task` kind on cs, the
+// shared engine (T10 FR-01), and registers itself as that kind's handler.
+// The executor's SpawnTriggeredRun is used as the dispatch function unless
+// overridden (test seam: replace dispatch before Start).
+func NewTaskTriggerScheduler(cs *cron.CronService, store *task.Store, executor *TaskExecutor) *TaskTriggerScheduler {
 	s := &TaskTriggerScheduler{
-		cs:           cron.NewCronService(storePath),
+		cs:           cs,
 		store:        store,
 		taskToJob:    make(map[string]trackedTrigger),
 		bootOwedFire: make(map[string]bool),
@@ -221,6 +227,10 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 		s.dispatch = executor.SpawnTriggeredRun
 		s.emitRunStatus = executor.emitRunStatus
 		s.executor = executor
+	}
+	if err := cs.RegisterKindHandler(cron.KindTask, s); err != nil {
+		// Unreachable: KindTask is registered and s is not nil.
+		panic(fmt.Sprintf("task_trigger: register task kind handler: %v", err))
 	}
 	return s
 }
@@ -235,7 +245,7 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 // replayed — a crashed one-time fire is replayed only by
 // StartAfterPhysicalBoot.
 func (s *TaskTriggerScheduler) Start() error {
-	if err := s.restoreStoredJobs(); err != nil {
+	if err := s.restoreStoredJobs(true); err != nil {
 		return err
 	}
 	// r15 boot order: checked restoration, then the once-per-boot
@@ -245,7 +255,6 @@ func (s *TaskTriggerScheduler) Start() error {
 	if err := s.reconcileAll(true); err != nil {
 		return err
 	}
-	s.cs.SetRunner(s)
 	if err := s.cs.Start(); err != nil {
 		return err
 	}
@@ -298,17 +307,53 @@ func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
 	if err := s.reconcileAll(true); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	decisions := s.bootReplay
-	s.mu.Unlock()
-	s.cs.SetRunner(s)
-	if err := s.cs.StartAfterPhysicalBootReplaying(func(job *cron.CronJob) cron.BootReplay {
-		return decisions[job.ID] // an absent job is declined
-	}); err != nil {
+	if err := s.cs.StartAfterPhysicalBootReplaying(s.BootReplayDecision()); err != nil {
 		return err
 	}
 	s.startSweep()
 	return nil
+}
+
+// PrepareOnLoadedEngine is PrepareAfterPhysicalBoot for the shared engine
+// during gateway physical boot (T10 FR-03): the gateway has already run the
+// engine's checked load (cron.CronService.LoadAfterPhysicalBoot), so the
+// dead process's Running flags are still in place and the store is not read
+// again. The same ordering rule applies: no task producer of this process
+// may have started yet.
+func (s *TaskTriggerScheduler) PrepareOnLoadedEngine() error {
+	return s.prepareAfterPhysicalBoot(false)
+}
+
+// BootReplayDecision is the engine's physical-boot replay decision for the
+// shared store: an interrupted one-time `task` job runs again only when the
+// prepare step owed it (every other task job is declined); an interrupted
+// one-time job of another kind keeps the engine's #1484 default and runs
+// again. It captures the decisions made when it is called, so call it after
+// the prepare step.
+func (s *TaskTriggerScheduler) BootReplayDecision() func(job *cron.CronJob) cron.BootReplay {
+	s.mu.Lock()
+	decisions := s.bootReplay
+	s.mu.Unlock()
+	return func(job *cron.CronJob) cron.BootReplay {
+		if job.Payload.Kind != cron.KindTask {
+			return cron.BootReplayRun
+		}
+		return decisions[job.ID] // an absent job is declined
+	}
+}
+
+// ReconcileAtBoot is the once-per-boot recomputation (r17 TK-30: an
+// occurrence already overdue at boot is not owned) that Start and
+// StartAfterPhysicalBoot run before engine activation; the gateway calls it
+// between the engine's crash-flag clear and its activation (T10 FR-03).
+func (s *TaskTriggerScheduler) ReconcileAtBoot() error {
+	return s.reconcileAll(true)
+}
+
+// StartRecoverySweep starts the crash-recovery sweep (Scheduler rule 6). The
+// gateway calls it once the shared engine is active (T10 FR-03).
+func (s *TaskTriggerScheduler) StartRecoverySweep() {
+	s.startSweep()
 }
 
 // PrepareAfterPhysicalBoot is the classification half of
@@ -326,13 +371,20 @@ func (s *TaskTriggerScheduler) StartAfterPhysicalBoot() error {
 // before startSchedulers; StartAfterPhysicalBoot later only starts the
 // engine with the decisions made here.
 func (s *TaskTriggerScheduler) PrepareAfterPhysicalBoot() error {
+	return s.prepareAfterPhysicalBoot(true)
+}
+
+// prepareAfterPhysicalBoot is PrepareAfterPhysicalBoot; load selects whether
+// the engine store is loaded first (false when the caller already ran the
+// checked load).
+func (s *TaskTriggerScheduler) prepareAfterPhysicalBoot(load bool) error {
 	s.mu.Lock()
 	prepared := s.bootPrepared
 	s.mu.Unlock()
 	if prepared {
 		return nil
 	}
-	if err := s.restoreStoredJobs(); err != nil {
+	if err := s.restoreStoredJobs(load); err != nil {
 		return err
 	}
 	decisions := s.markBootOwedFires()
@@ -384,7 +436,7 @@ func (s *TaskTriggerScheduler) markBootOwedFires() map[string]cron.BootReplay {
 	decisions := make(map[string]cron.BootReplay)
 	var owedTasks []string
 	for _, job := range s.cs.ListJobs(true) {
-		if !cron.InterruptedOneTimeFire(&job) {
+		if job.Payload.Kind != cron.KindTask || !cron.InterruptedOneTimeFire(&job) {
 			continue
 		}
 		id := job.Payload.Message
@@ -514,7 +566,7 @@ func (s *TaskTriggerScheduler) markMissedFires() {
 			continue
 		}
 		id := job.Payload.Message
-		if id == "" || job.Name != fmt.Sprintf("task:%s", id) {
+		if job.Payload.Kind != cron.KindTask || id == "" || job.Name != fmt.Sprintf("task:%s", id) {
 			continue // not a derived task-trigger job
 		}
 		t, err := s.store.Get(id)
@@ -816,7 +868,12 @@ func (s *TaskTriggerScheduler) reconcileAll(boot bool) error {
 	}
 	s.mu.Unlock()
 
+	// Only `task` jobs: the shared store also holds heartbeat and loop jobs,
+	// which this reconciliation never touches (T10 FR-25).
 	for _, job := range s.cs.ListJobs(true) {
+		if job.Payload.Kind != cron.KindTask {
+			continue
+		}
 		taskID := job.Payload.Message
 		if taskID == "" || !registeredTaskIDs[taskID] {
 			s.cs.RemoveJob(job.ID)

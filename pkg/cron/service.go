@@ -235,9 +235,13 @@ type CronService struct {
 	testHooks cronTestHooks
 	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
 	runWindowUsed bool
-	// bootRestored is set by RestoreAfterPhysicalBoot and cleared by Activate:
-	// the store is restored but the engine does not collect yet, so boot
-	// reconciliations run in between (T10 FR-03).
+	// bootLoaded is set by LoadAfterPhysicalBoot and cleared by
+	// ClearRunningAfterPhysicalBoot: the store is loaded with the dead
+	// process's Running flags still in place (T10 FR-03).
+	bootLoaded bool
+	// bootRestored is set by ClearRunningAfterPhysicalBoot and cleared by
+	// Activate: the store is restored but the engine does not collect yet, so
+	// boot reconciliations run in between (T10 FR-03).
 	bootRestored bool
 	stopChan     chan struct{}
 	// loopDone is closed by runLoop when it exits (#1450). Created per run
@@ -423,7 +427,7 @@ const (
 // replay decision per interrupted one-time job. A nil replay runs every
 // interrupted job (the #1484 default).
 func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) (started bool, err error) {
-	if physicalBoot && (cs.runWindowUsed || cs.bootRestored) {
+	if physicalBoot && (cs.runWindowUsed || cs.bootLoaded || cs.bootRestored) {
 		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
 	}
 	if cs.running {
@@ -443,6 +447,13 @@ func (cs *CronService) restoreUnsafe(physicalBoot bool, replay func(*CronJob) Bo
 	if err := cs.loadStore(); err != nil {
 		return fmt.Errorf("failed to load store: %w", err)
 	}
+	return cs.settleLoadedUnsafe(physicalBoot, replay)
+}
+
+// settleLoadedUnsafe is restoreUnsafe after the load: on a physical boot it
+// clears the dead process's Running flags (applying replay to interrupted
+// one-time jobs), then recomputes next runs and saves. The caller holds cs.mu.
+func (cs *CronService) settleLoadedUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) error {
 	var interrupted []int
 	if physicalBoot {
 		// The prior process has no live lane. Preserve all schedule/history data;
@@ -495,26 +506,60 @@ func (cs *CronService) openRunWindowUnsafe() {
 	cs.laneRuns = &sync.WaitGroup{}
 	cs.running = true
 	cs.runWindowUsed = true
+	cs.bootLoaded = false
 	cs.bootRestored = false
 }
 
-// RestoreAfterPhysicalBoot is the first half of the physical-boot start (T10
-// FR-03): the checked load, the crash-flag clear and the next-run recompute,
-// with nothing collected or dispatched. Boot reconciliations run next, then
-// Activate opens the run window. A failed load returns the original error
-// (wrapped) and writes nothing. Gateway physical boot is its sole production
-// caller; it requires a service instance never started before.
-func (cs *CronService) RestoreAfterPhysicalBoot() error {
+// LoadAfterPhysicalBoot is the first phase of the physical-boot start (T10
+// FR-03): the checked load, with the dead process's Running flags still in
+// place so a caller can classify its interrupted one-time fires. Nothing is
+// written (except the FR-14 drop of non-registered kinds), collected or
+// dispatched. A failed load returns the original error (wrapped) and leaves
+// the file byte-identical. ClearRunningAfterPhysicalBoot is the next phase.
+// Gateway physical boot is its sole production caller; it requires a service
+// instance never started before.
+func (cs *CronService) LoadAfterPhysicalBoot() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	if cs.runWindowUsed || cs.bootRestored || cs.running {
+	if cs.runWindowUsed || cs.bootLoaded || cs.bootRestored || cs.running {
 		return fmt.Errorf("cron: physical-boot restore requires an unused service instance")
 	}
-	if err := cs.restoreUnsafe(true, nil); err != nil {
+	if err := cs.loadStore(); err != nil {
+		return fmt.Errorf("failed to load store: %w", err)
+	}
+	cs.bootLoaded = true
+	return nil
+}
+
+// ClearRunningAfterPhysicalBoot is the second phase of the physical-boot
+// start: the crash-flag clear, the #1484 re-arm of interrupted one-time
+// fires and the next-run recompute, saved; nothing is collected or
+// dispatched. replay decides per interrupted one-time job (nil re-arms every
+// one, the #1484 default); it runs under the service lock and must not call
+// back into this CronService. Boot reconciliations run next, then Activate
+// opens the run window.
+func (cs *CronService) ClearRunningAfterPhysicalBoot(replay func(job *CronJob) BootReplay) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if !cs.bootLoaded || cs.bootRestored || cs.running {
+		return fmt.Errorf("cron: crash-flag clear requires a completed physical-boot load")
+	}
+	if err := cs.settleLoadedUnsafe(true, replay); err != nil {
 		return err
 	}
+	cs.bootLoaded = false
 	cs.bootRestored = true
 	return nil
+}
+
+// RestoreAfterPhysicalBoot runs both physical-boot restore phases
+// (LoadAfterPhysicalBoot, then ClearRunningAfterPhysicalBoot with the #1484
+// default of re-arming every interrupted one-time fire).
+func (cs *CronService) RestoreAfterPhysicalBoot() error {
+	if err := cs.LoadAfterPhysicalBoot(); err != nil {
+		return err
+	}
+	return cs.ClearRunningAfterPhysicalBoot(nil)
 }
 
 // Activate opens the run window of a service restored by
@@ -531,7 +576,15 @@ func (cs *CronService) Activate() error {
 	done := make(chan struct{})
 	cs.loopDone = done
 	cs.mu.Unlock()
-	go cs.runLoop(stop, done)
+	go func() {
+		// The first due-collection runs at activation, after every boot
+		// reconciliation, so a job already due is collected at once.
+		if hook := cs.firstCollectionHook(); hook != nil {
+			hook()
+		}
+		cs.checkJobs()
+		cs.runLoop(stop, done)
+	}()
 	return nil
 }
 
@@ -832,6 +885,9 @@ func (cs *CronService) dispatch(jobID string, win laneWindow) {
 		defer cs.laneDone(win.runs)
 		if hook := cs.dispatchEntryHook(); hook != nil {
 			hook(jobID)
+		}
+		if hook := cs.beforeDispatchHook(); hook != nil {
+			hook(laneCtx, jobID)
 		}
 		// Cleared on every exit: run finished, lane cancelled while queued,
 		// or a panic (deferred calls run while panicking, and the recover

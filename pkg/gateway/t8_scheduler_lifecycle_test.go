@@ -61,7 +61,7 @@ func TestTaskTrigger_ReloadKeepsLiveScheduler_ProductionPath(t *testing.T) {
 			// dependencies are the production loop's shared store and executor.
 			rs.TaskTrigger.Stop()
 			storePath := filepath.Join(home, "tasks_triggers", "jobs.json")
-			original := agent.NewTaskTriggerScheduler(storePath, agent.GetTaskStore(al), agent.GetTaskExecutor(al))
+			original := agent.NewTaskTriggerScheduler(cron.NewCronService(storePath), agent.GetTaskStore(al), agent.GetTaskExecutor(al))
 			clock := &t8GatewayClock{now: time.Now().Add(24 * time.Hour).Truncate(time.Second)}
 			original.SetClock(clock)
 			require.NoError(t, original.Start())
@@ -110,7 +110,7 @@ func TestTaskTrigger_BootRestorationPrecedesReconciliation(t *testing.T) {
 	at := time.Now().Add(48 * time.Hour).Truncate(time.Second).UnixMilli()
 	tk := &task.Task{Title: "valid recurring task", Status: task.StatusInbox, AgentID: "mia", WorkspaceID: "default", Trigger: &task.Trigger{Type: task.TriggerRecurring, Config: task.TriggerConfig{Rrule: &rule, DtstartMs: &at, Tz: &tz}}}
 	require.NoError(t, store.Create(tk))
-	path := filepath.Join(home, "tasks_triggers", "jobs.json")
+	path := filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json") // T10 FR-04: the shared store
 	seed := cron.NewCronService(path)
 	_, err := seed.AddJobFull(cron.JobSpec{Kind: cron.KindTask, Name: "task:" + tk.ID, Message: tk.ID, AgentID: tk.AgentID, Schedule: cron.CronSchedule{Kind: "at", AtMS: &at}})
 	require.NoError(t, err)
@@ -122,9 +122,11 @@ func TestTaskTrigger_BootRestorationPrecedesReconciliation(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	stage := &setupAndStartServicesState{ctx: context.Background(), cfg: cfg, agentLoop: al, msgBus: msgBus, homePath: home}
-	// 6b moved checked restoration into prepareTaskTrigger; its error is what
-	// setupAndStartServices returns to the boot caller.
-	err = stage.prepareTaskTrigger()
+	// T10 FR-03: the shared engine's checked load is the first step of
+	// startSchedulers; its error is what setupAndStartServices returns to the
+	// boot caller.
+	_, stop, err := stage.startSchedulers()
+	assert.True(t, stop, "a failed checked load must stop the boot")
 	var typeErr *json.UnmarshalTypeError
 	require.ErrorAs(t, err, &typeErr, "18.39 checked restoration error must reach the production boot caller")
 	assert.Equal(t, "string", typeErr.Value)

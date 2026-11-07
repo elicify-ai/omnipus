@@ -13,11 +13,16 @@ import (
 // loop starts. Reconcile can then recognize an unchanged, already-armed job
 // instead of adding a new one on every boot/reload. Only derived task-trigger
 // jobs are deduplicated; task records and other scheduler stores are untouched.
-func (s *TaskTriggerScheduler) restoreStoredJobs() error {
+//
+// load runs the engine's checked load first. The gateway passes false: on
+// the shared engine it has already run the checked load itself (T10 FR-03).
+func (s *TaskTriggerScheduler) restoreStoredJobs(load bool) error {
 	// NewCronService's constructor cannot return its load error. Check it here
 	// before any cleanup can overwrite an unreadable store.
-	if err := s.cs.Load(); err != nil {
-		return fmt.Errorf("task_trigger: restore jobs: %w", err)
+	if load {
+		if err := s.cs.Load(); err != nil {
+			return fmt.Errorf("task_trigger: restore jobs: %w", err)
+		}
 	}
 	tasks, unreadable, err := s.store.ListWithUnreadable(task.Filter{})
 	if err != nil {

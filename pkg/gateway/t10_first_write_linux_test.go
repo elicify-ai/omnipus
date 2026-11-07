@@ -102,7 +102,7 @@ func TestT10_ProducersPublishFinalKindExactlyOnce(t *testing.T) {
 				store := task.New(filepath.Join(t.TempDir(), "tasks"))
 				at := time.Now().Add(24 * time.Hour).UnixMilli()
 				require.NoError(t, store.Create(&task.Task{ID: "t10-first-task", Title: "first write", AgentID: "mia", WorkspaceID: "t10-w", Status: task.StatusInbox, Trigger: &task.Trigger{Type: task.TriggerOnce, Config: task.TriggerConfig{AtMs: &at}}}))
-				s := agent.NewTaskTriggerScheduler(path, store, nil)
+				s := agent.NewTaskTriggerScheduler(cs, store, nil)
 				create = func() { require.NoError(t, s.Reconcile()) }
 			}
 			count := t10WatchPublishes(t, path)

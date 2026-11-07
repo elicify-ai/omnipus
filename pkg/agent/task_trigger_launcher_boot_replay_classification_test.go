@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -108,7 +109,7 @@ func newU2bUnwiredLauncherProcess(t *testing.T, home string, clk *triggerFakeClo
 	require.Equal(t, "native-agent", persisted.AgentID)
 	require.Equal(t, "default", persisted.WorkspaceID)
 	require.Equal(t, "uat-person", persisted.Owner)
-	sched := NewTaskTriggerScheduler(filepath.Join(home, "tasks_triggers", "jobs.json"), al.taskStore, al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(home, "tasks_triggers", "jobs.json")), al.taskStore, al.taskExecutor)
 	sched.SetClock(clk)
 	al.SetTaskTriggerScheduler(sched)
 	p := &u2bLauncherProcess{

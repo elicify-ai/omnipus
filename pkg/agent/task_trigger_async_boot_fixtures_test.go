@@ -101,7 +101,7 @@ func newU2bAsyncProcess(t *testing.T, home string, clk *triggerFakeClock, worker
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), worker)
 	bindMetSoftTierJudge(t, al)
 	installTestSessionLauncher(t, al)
-	sched := NewTaskTriggerScheduler(filepath.Join(home, "tasks_triggers", "jobs.json"), al.taskStore, al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(home, "tasks_triggers", "jobs.json")), al.taskStore, al.taskExecutor)
 	sched.SetClock(clk)
 	al.SetTaskTriggerScheduler(sched)
 	p := &u2bAsyncProcess{home: home, loop: al, scheduler: sched, clock: clk}

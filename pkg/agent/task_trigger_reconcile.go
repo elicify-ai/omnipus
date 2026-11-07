@@ -164,7 +164,7 @@ func (s *TaskTriggerScheduler) keepsOccurrenceLocked(jobID string, nowMs int64, 
 func (s *TaskTriggerScheduler) dearmAllLocked(taskID string) {
 	delete(s.taskToJob, taskID)
 	for _, job := range s.cs.ListJobs(true) {
-		if job.Payload.Message == taskID {
+		if job.Payload.Kind == cron.KindTask && job.Payload.Message == taskID {
 			s.cs.RemoveJob(job.ID)
 		}
 	}

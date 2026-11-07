@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -100,7 +101,7 @@ func TestTaskTriggerBoot_CrashedOnceRun_RerunsOnceAtNextBoot(t *testing.T) {
 	// persisted true (executeJobByID persists when the run starts), and no
 	// outcome saved yet.
 	blocker := newCrashRunRecorder(store, clk)
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -137,7 +138,7 @@ func TestTaskTriggerBoot_CrashedOnceRun_RerunsOnceAtNextBoot(t *testing.T) {
 		t.Fatalf("write crash image: %v", err)
 	}
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil { // the fixed boot path
@@ -187,7 +188,7 @@ func TestTaskTriggerBoot_OnceDueWhileDown_NotReplayed(t *testing.T) {
 	storePath := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
 
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = (&dispatchRecorder{}).dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -204,7 +205,7 @@ func TestTaskTriggerBoot_OnceDueWhileDown_NotReplayed(t *testing.T) {
 	clk.Advance(2 * time.Minute) // the fire time passes while down
 
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil { // the fixed boot path
@@ -233,7 +234,7 @@ func TestTaskTriggerBoot_PlainStartIsNotABoot_NoReplay(t *testing.T) {
 	clk := newTriggerFakeClock()
 
 	blocker := newCrashRunRecorder(store, clk)
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -266,7 +267,7 @@ func TestTaskTriggerBoot_PlainStartIsNotABoot_NoReplay(t *testing.T) {
 	}
 	// Same-process restart semantics: plain Start, like gateway reload.
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.Start(); err != nil {

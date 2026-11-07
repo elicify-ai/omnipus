@@ -65,9 +65,8 @@ func TestTaskTriggerGatewayBootIdempotency(t *testing.T) {
 				ctx: context.Background(), cfg: cfg, agentLoop: al,
 				msgBus: msgBus, homePath: home,
 			}
-			// The production order: prepare (boot classification) before
-			// startSchedulers starts any task producer (re-review N1).
-			require.NoError(t, stage.prepareTaskTrigger())
+			// startSchedulers runs the task boot classification itself
+			// (T10 FR-03; re-review N1).
 			_, stop, err := stage.startSchedulers()
 			if stage.runningServices != nil {
 				defer stopAndCleanupServices(stage.runningServices, 5*time.Second, false)
@@ -77,7 +76,7 @@ func TestTaskTriggerGatewayBootIdempotency(t *testing.T) {
 			require.NotNil(t, stage.runningServices.TaskTrigger)
 			require.NotNil(t, agent.GetTaskStore(al))
 
-			data, err := os.ReadFile(filepath.Join(home, "tasks_triggers", "jobs.json"))
+			data, err := os.ReadFile(filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json")) // T10 FR-04: the shared store
 			require.NoError(t, err)
 			var stored cron.CronStore
 			require.NoError(t, json.Unmarshal(data, &stored))

@@ -38,7 +38,7 @@ func TestTaskTriggerRestart(t *testing.T) {
 		var dispatched []string
 		var occurrences []int64
 		for boot := 1; boot <= 3; boot++ {
-			sched = NewTaskTriggerScheduler(path, al.taskStore, al.taskExecutor)
+			sched = NewTaskTriggerScheduler(cron.NewCronService(path), al.taskStore, al.taskExecutor)
 			sched.SetClock(clk)
 			sched.cs.SetAdmissionRule(func() (int, bool) { return 1, true })
 			run := sched.dispatch
@@ -122,7 +122,7 @@ func TestTaskTriggerRestart(t *testing.T) {
 		slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 		defer slog.SetDefault(old)
 		for boot := 1; boot <= 2; boot++ {
-			sched := NewTaskTriggerScheduler(path, store, nil)
+			sched := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 			sched.SetClock(clk)
 			require.NoError(t, sched.Start())
 			reconcileErr := sched.Reconcile()

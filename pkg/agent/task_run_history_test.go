@@ -22,6 +22,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -434,7 +435,7 @@ func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *tes
 
 	clk := newTriggerFakeClock()
 	storePath := filepath.Join(t.TempDir(), "triggers", "jobs.json")
-	sched := NewTaskTriggerScheduler(storePath, al.taskStore, al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(storePath), al.taskStore, al.taskExecutor)
 	sched.SetClock(clk)
 	if err := sched.Start(); err != nil {
 		t.Fatalf("sched.Start: %v", err)

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -34,7 +35,7 @@ import (
 func crashOnceFireWithClaim(t *testing.T, store *task.Store, storePath string, clk *triggerFakeClock) *task.Task {
 	t.Helper()
 	blocker := newCrashRunRecorder(store, clk)
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -83,7 +84,7 @@ func TestTaskTriggerBoot_CrashedClaimedOnceFire_RerunsOnce(t *testing.T) {
 	tsk := crashOnceFireWithClaim(t, store, path, clk)
 
 	rec := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(path, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s2.dispatch = rec.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -134,7 +135,7 @@ func TestTaskTriggerBoot_ClaimedOnceFire_RerunsAfterStuckTaskReconcile(t *testin
 	}
 
 	rec := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(path, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s2.dispatch = rec.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -182,7 +183,7 @@ func TestTaskTriggerBoot_InterruptedRecurring_NotReplayedBeforeReconcile(t *test
 	path := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
 	blocker := newCrashRunRecorder(store, clk)
-	s1 := NewTaskTriggerScheduler(path, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -219,7 +220,7 @@ func TestTaskTriggerBoot_InterruptedRecurring_NotReplayedBeforeReconcile(t *test
 	ReconcileInterruptedTasks(store)
 
 	rec := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(path, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s2.dispatch = rec.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -252,7 +253,7 @@ func bootMinutelyAfterDowntime(t *testing.T, count int, downtime time.Duration) 
 	store := task.New(filepath.Join(dir, "tasks"))
 	path := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
-	s1 := NewTaskTriggerScheduler(path, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s1.dispatch = (&dispatchRecorder{}).dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -272,7 +273,7 @@ func bootMinutelyAfterDowntime(t *testing.T, count int, downtime time.Duration) 
 	clk.Advance(downtime)
 
 	rec := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(path, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s2.dispatch = rec.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {

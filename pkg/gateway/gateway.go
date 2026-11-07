@@ -166,7 +166,7 @@ type services struct {
 	// handles; shutdown cancels, then waits on done (bounded).
 	catalogRefreshCancel context.CancelFunc
 	catalogRefreshDone   <-chan struct{}
-	TaskTrigger          *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
+	TaskTrigger          *agent.TaskTriggerScheduler // fires once/every/recurring task triggers as the `task` kind on CronService (T10 FR-01)
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
 	// HeartbeatService was skipped whenever a per-agent heartbeat was active,

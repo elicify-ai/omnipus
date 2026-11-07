@@ -10,6 +10,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -70,7 +71,7 @@ func newU2bLauncherProcess(t *testing.T, home string, clk *triggerFakeClock, wor
 	al.taskExecutor.SetMainSessionResolver(&u6FakeMainResolver{elig: map[[2]string]string{
 		{"default", "native-agent"}: main.ID,
 	}})
-	sched := NewTaskTriggerScheduler(filepath.Join(home, "tasks_triggers", "jobs.json"), al.taskStore, al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(home, "tasks_triggers", "jobs.json")), al.taskStore, al.taskExecutor)
 	sched.SetClock(clk)
 	al.SetTaskTriggerScheduler(sched)
 	p := &u2bLauncherProcess{

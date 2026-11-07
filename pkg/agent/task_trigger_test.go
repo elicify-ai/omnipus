@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -152,7 +153,7 @@ func newTriggerSchedulerForTest(t *testing.T) (
 	store = task.New(filepath.Join(dir, "tasks"))
 	storePath := filepath.Join(dir, "triggers", "jobs.json")
 
-	sched = NewTaskTriggerScheduler(storePath, store, nil)
+	sched = NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	rec = &dispatchRecorder{}
 	sched.dispatch = rec.dispatch
 
@@ -395,7 +396,7 @@ func TestTriggerReconcile_RegistersExistingTasks(t *testing.T) {
 		t.Fatalf("store.Update t5 done: %v", err)
 	}
 
-	sched := NewTaskTriggerScheduler(storePath, store, nil)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	var count atomic.Int64
 	sched.dispatch = func(_ context.Context, _ string, _ *int64) error {
 		count.Add(1)

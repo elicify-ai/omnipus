@@ -30,7 +30,7 @@ import (
 func crashOnceFireBeforeClaim(t *testing.T, store *task.Store, storePath string, clk *triggerFakeClock) *task.Task {
 	t.Helper()
 	blocker := newCrashRunRecorder(nil, clk)
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -80,7 +80,7 @@ func TestTaskTriggerBoot_LiveClaimAfterPrepare_NotReset(t *testing.T) {
 	tsk := crashOnceFireBeforeClaim(t, store, path, clk)
 
 	rec := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(path, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s2.dispatch = rec.dispatch
 	s2.SetClock(clk)
 	if err := s2.PrepareAfterPhysicalBoot(); err != nil {
@@ -135,7 +135,7 @@ func TestTaskTriggerBoot_ClaimReleaseFailure_KeepsOwedFireForNextBoot(t *testing
 	}
 
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(path, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -166,7 +166,7 @@ func TestTaskTriggerBoot_ClaimReleaseFailure_KeepsOwedFireForNextBoot(t *testing
 		t.Fatalf("restore task store: %v", err)
 	}
 	rec3 := &dispatchRecorder{}
-	s3 := NewTaskTriggerScheduler(path, store, nil)
+	s3 := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 	s3.dispatch = rec3.dispatch
 	s3.SetClock(clk)
 	if err := s3.StartAfterPhysicalBoot(); err != nil {

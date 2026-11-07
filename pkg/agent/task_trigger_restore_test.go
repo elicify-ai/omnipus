@@ -30,7 +30,7 @@ func TestTaskTriggerRestoreSafety(t *testing.T) {
 		var sched *TaskTriggerScheduler
 		var firstID string
 		for boot := 1; boot <= 3; boot++ {
-			sched = NewTaskTriggerScheduler(path, store, nil)
+			sched = NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 			sched.SetClock(clk)
 			sched.dispatch = rec.dispatch
 			require.NoError(t, sched.Start())
@@ -68,7 +68,7 @@ func TestTaskTriggerRestoreSafety(t *testing.T) {
 				due := secondAligned(clk.Now().Add(time.Minute))
 				tk := makeRruleTask(t, store, "agent-before", "FREQ=DAILY", due, "UTC")
 				path := filepath.Join(home, "tasks_triggers", "jobs.json")
-				sched := NewTaskTriggerScheduler(path, store, nil)
+				sched := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 				sched.SetClock(clk)
 				require.NoError(t, sched.Start())
 				require.NoError(t, sched.Reconcile())
@@ -100,7 +100,7 @@ func TestTaskTriggerRestoreSafety(t *testing.T) {
 				}
 				_, err := store.Update(tk.ID, patch)
 				require.NoError(t, err)
-				restored := NewTaskTriggerScheduler(path, store, nil)
+				restored := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 				restored.SetClock(clk)
 				rec := &dispatchRecorder{}
 				restored.dispatch = rec.dispatch
@@ -147,7 +147,7 @@ func TestTaskTriggerRestoreSafety(t *testing.T) {
 		broken := bytes.Replace(valid, []byte(`"enabled": true`), []byte(`"enabled": "invalid"`), 1)
 		require.NotEqual(t, valid, broken, "instrument: deliberately damage an actual job field")
 		require.NoError(t, os.WriteFile(path, broken, 0o600))
-		sched := NewTaskTriggerScheduler(path, store, nil)
+		sched := NewTaskTriggerScheduler(cron.NewCronService(path), store, nil)
 		sched.SetClock(clk)
 		err = sched.Start()
 		defer sched.Stop()

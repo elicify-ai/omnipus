@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -79,7 +80,7 @@ func TestTaskTriggerBoot_MissedRecurringFire_RecordedNotReplayed(t *testing.T) {
 	storePath := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
 
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = (&dispatchRecorder{}).dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -98,7 +99,7 @@ func TestTaskTriggerBoot_MissedRecurringFire_RecordedNotReplayed(t *testing.T) {
 	clk.Advance(2 * time.Minute) // the occurrence passes while down
 
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -133,7 +134,7 @@ func TestTaskTriggerBoot_MissedRecurringFire_RecordedNotReplayed(t *testing.T) {
 	// A second boot must not duplicate the record: one record per missed
 	// instant.
 	clk.Advance(time.Minute)
-	s3 := NewTaskTriggerScheduler(storePath, store, nil)
+	s3 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s3.dispatch = (&dispatchRecorder{}).dispatch
 	s3.SetClock(clk)
 	if err := s3.StartAfterPhysicalBoot(); err != nil {
@@ -152,7 +153,7 @@ func TestTaskTriggerBoot_MissedOnceFire_RecordedNotReplayed(t *testing.T) {
 	storePath := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
 
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = (&dispatchRecorder{}).dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -169,7 +170,7 @@ func TestTaskTriggerBoot_MissedOnceFire_RecordedNotReplayed(t *testing.T) {
 	clk.Advance(2 * time.Minute) // the at-time passes while down
 
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -206,7 +207,7 @@ func TestTaskTriggerBoot_InterruptedRecurringFire_RunsIsNotMissed(t *testing.T) 
 
 	// Process 1: arm a recurring trigger and die while its fire is running.
 	blocker := newCrashRunRecorder(store, clk)
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = blocker.dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -242,7 +243,7 @@ func TestTaskTriggerBoot_InterruptedRecurringFire_RunsIsNotMissed(t *testing.T) 
 		t.Fatalf("write crash image: %v", err)
 	}
 	rec2 := &dispatchRecorder{}
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = rec2.dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {
@@ -269,7 +270,7 @@ func TestTaskTriggerBoot_OccurrenceWithExistingRun_NeverRelabelledMissed(t *test
 	storePath := filepath.Join(dir, "triggers", "jobs.json")
 	clk := newTriggerFakeClock()
 
-	s1 := NewTaskTriggerScheduler(storePath, store, nil)
+	s1 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s1.dispatch = (&dispatchRecorder{}).dispatch
 	s1.SetClock(clk)
 	if err := s1.Start(); err != nil {
@@ -292,7 +293,7 @@ func TestTaskTriggerBoot_OccurrenceWithExistingRun_NeverRelabelledMissed(t *test
 
 	clk.Advance(2 * time.Minute) // the armed instant is now in the past
 
-	s2 := NewTaskTriggerScheduler(storePath, store, nil)
+	s2 := NewTaskTriggerScheduler(cron.NewCronService(storePath), store, nil)
 	s2.dispatch = (&dispatchRecorder{}).dispatch
 	s2.SetClock(clk)
 	if err := s2.StartAfterPhysicalBoot(); err != nil {

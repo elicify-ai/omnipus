@@ -36,9 +36,11 @@ func heartbeatJobName(workspaceID, agentID string) string {
 }
 
 // isHeartbeatJob reports whether a cron job is a workspace-heartbeat job
-// owned by this reconciler.
+// owned by this reconciler. Only the payload kind decides ownership (T10
+// FR-25): on the shared store a job of another kind is never heartbeat-owned,
+// whatever its name.
 func isHeartbeatJob(j cron.CronJob) bool {
-	return j.Payload.Kind == heartbeatJobKind || strings.HasPrefix(j.Name, heartbeatJobNamePrefix)
+	return j.Payload.Kind == heartbeatJobKind
 }
 
 // desiredHeartbeat is the reconciler's target spec for one (workspace, agent)
@@ -252,7 +254,7 @@ func releaseHeartbeatJobsForWorkspace(cs *cron.CronService, workspaceID string) 
 	}
 	prefix := heartbeatJobNamePrefix + workspaceID + ":"
 	for _, j := range cs.ListJobs(true) {
-		if !strings.HasPrefix(j.Name, prefix) {
+		if !isHeartbeatJob(j) || !strings.HasPrefix(j.Name, prefix) {
 			continue
 		}
 		if !cs.RemoveJob(j.ID) {

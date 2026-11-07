@@ -86,9 +86,8 @@ func bootTimerServices(t *testing.T, provider providers.LLMProvider) (
 	stage = &setupAndStartServicesState{
 		ctx: context.Background(), cfg: cfg, agentLoop: al, msgBus: msgBus, homePath: home,
 	}
-	// The production order: prepare (boot classification) before
-	// startSchedulers starts any task producer (re-review N1).
-	require.NoError(t, stage.prepareTaskTrigger())
+	// startSchedulers runs the task boot classification itself, before any
+	// task producer starts (T10 FR-03; re-review N1).
 	_, stop, err := stage.startSchedulers()
 	if stage.runningServices != nil {
 		t.Cleanup(func() { stopAndCleanupServices(stage.runningServices, 5*time.Second, false) })
@@ -101,11 +100,16 @@ func bootTimerServices(t *testing.T, provider providers.LLMProvider) (
 	_, err = stage.runningServices.LoopScheduler.AddInterval("mia", timerTestLoopSessionID, int64(time.Hour/time.Millisecond))
 	require.NoError(t, err)
 
-	taskStore = filepath.Join(home, "tasks_triggers", "jobs.json")
-	// T10 FR-01/FR-04: /loop jobs live in the one shared store.
-	loopStore = filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json")
-	require.Len(t, readTimerStore(t, taskStore).Jobs, 1, "SETUP: the task trigger copy holds the task's job")
-	require.Len(t, readTimerStore(t, loopStore).Jobs, 1, "SETUP: the loop copy holds the loop job")
+	// T10 FR-01/FR-04: task and /loop jobs live in the one shared store, so a
+	// fire of either kind changes the store both paths name.
+	taskStore = filepath.Join(cfg.AgentHomeBasePath(), "cron", "jobs.json")
+	loopStore = taskStore
+	kinds := map[string]int{}
+	for _, j := range readTimerStore(t, taskStore).Jobs {
+		kinds[j.Payload.Kind]++
+	}
+	require.Equal(t, 1, kinds[cron.KindTask], "SETUP: the shared store holds the task's job")
+	require.Equal(t, 1, kinds[cron.KindLoop], "SETUP: the shared store holds the loop job")
 	return stage, al, cfg, taskStore, loopStore
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ import (
 // Characterization required by TDD 20: run the real overlap/skip path.
 func t10SkippedNoticeBaseline(t *testing.T) {
 	f := t10NoticeSetup(t, "parent-agent", "starter", false)
-	s := NewTaskTriggerScheduler(filepath.Join(t.TempDir(), "cron", "jobs.json"), f.al.taskStore, f.al.taskExecutor)
+	s := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(t.TempDir(), "cron", "jobs.json")), f.al.taskStore, f.al.taskExecutor)
 	clk := newTriggerFakeClock()
 	s.SetClock(clk)
 	require.NoError(t, s.Start())

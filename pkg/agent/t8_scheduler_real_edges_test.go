@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -21,7 +22,7 @@ func TestT8ScheduleSync_RealCronSaveFailureAfterAppend(t *testing.T) {
 	f := t8ReadLoop(t)
 	clock := newTriggerFakeClock()
 	path := filepath.Join(f.home, "tasks_triggers", "jobs.json")
-	sched := NewTaskTriggerScheduler(path, f.ts, f.al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(path), f.ts, f.al.taskExecutor)
 	sched.SetClock(clock)
 	require.NoError(t, sched.Start())
 	t.Cleanup(sched.Stop)

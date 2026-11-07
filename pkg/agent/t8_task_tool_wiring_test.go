@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -32,7 +33,7 @@ func t8NativeSchedulingFixture(t *testing.T) (*AgentLoop, *TaskTriggerScheduler,
 	clock.mu.Lock()
 	clock.t = clock.t.Truncate(time.Second)
 	clock.mu.Unlock()
-	sched := NewTaskTriggerScheduler(filepath.Join(config.OmnipusHomeDir(), "tasks_triggers", "jobs.json"), al.taskStore, al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(config.OmnipusHomeDir(), "tasks_triggers", "jobs.json")), al.taskStore, al.taskExecutor)
 	sched.SetClock(clock)
 	require.NoError(t, sched.Start())
 	al.SetTaskTriggerScheduler(sched)

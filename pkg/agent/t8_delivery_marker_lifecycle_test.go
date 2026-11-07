@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,7 +103,7 @@ func TestT8Boot_PastUndeliveredOnceVersusFutureControl(t *testing.T) {
 			} else {
 				clock.Advance(30 * time.Minute)
 			}
-			restarted := NewTaskTriggerScheduler(filepath.Join(config.OmnipusHomeDir(), "tasks_triggers", "jobs.json"), al.taskStore, al.taskExecutor)
+			restarted := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(config.OmnipusHomeDir(), "tasks_triggers", "jobs.json")), al.taskStore, al.taskExecutor)
 			restarted.SetClock(clock)
 			require.NoError(t, restarted.Start())
 			t.Cleanup(restarted.Stop)

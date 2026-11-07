@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -64,7 +65,7 @@ func t8ToolSchedFixture(t *testing.T) (*t8ReadFixture, *TaskTriggerScheduler, *t
 	t.Helper()
 	f := t8ReadLoop(t)
 	clock := newTriggerFakeClock()
-	sched := NewTaskTriggerScheduler(filepath.Join(f.home, "tasks_triggers", "jobs.json"), f.ts, f.al.taskExecutor)
+	sched := NewTaskTriggerScheduler(cron.NewCronService(filepath.Join(f.home, "tasks_triggers", "jobs.json")), f.ts, f.al.taskExecutor)
 	rec := &dispatchRecorder{}
 	sched.dispatch = rec.dispatch
 	sched.SetClock(clock)
