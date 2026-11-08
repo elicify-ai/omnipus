@@ -130,11 +130,12 @@ func (ac *agentCreateToolExecute) addExecutorResult(result map[string]any) {
 // reports the no-path text: no run can start without a Settings path.
 func executorProgramWarning(d *Deps, cli string) string {
 	if !liveConfigAvailable(d) {
-		return thirdpartycli.ProgramWarning(cli, "")
+		return thirdpartycli.ProgramWarning(cli, "", nil, nil)
 	}
 	cfg := d.GetCfg()
 	row := cfg.Sandbox.ThirdPartyCLI(cli)
-	return thirdpartycli.ProgramWarning(cli, row.Path, thirdpartycli.AgentWritableRoots(d.Home, cfg)...)
+	writable, rootsErr := thirdpartycli.AgentWritableRoots(d.Home, cfg)
+	return thirdpartycli.ProgramWarning(cli, row.Path, writable, rootsErr)
 }
 
 // sortedEnvNames returns the names of env in sorted order (never a value).

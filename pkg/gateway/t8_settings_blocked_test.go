@@ -22,8 +22,12 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 		f := t8SettingsAPI(t)
 		dir := t.TempDir()
 		marker := filepath.Join(dir, "was-executed")
+		// CHECK F4: an explicit link makes resolved-path power independent of
+		// whether this host's temporary directory happens to be a symlink.
+		target := filepath.Join(t.TempDir(), "codex-real")
+		require.NoError(t, os.WriteFile(target, []byte("#!/bin/sh\nprintf launched > '"+marker+"'\n"), 0o755))
 		bin := filepath.Join(dir, "codex")
-		require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nprintf launched > '"+marker+"'\n"), 0o755))
+		require.NoError(t, os.Symlink(target, bin))
 		t.Setenv("PATH", dir)
 		rows := t8SettingsRows(t, f.view(t))
 		for _, cli := range []string{"claude-code", "codex", "opencode"} {
@@ -33,8 +37,13 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 		}
 		detected, ok := t8SettingsRow(t, rows, "codex")["detected"].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, bin, detected["path"])
-		_, err := os.Stat(marker)
+		// CliDetectEntry.path is fully resolved, including the explicit link.
+		resolved, err := filepath.EvalSymlinks(target)
+		require.NoError(t, err)
+		require.NotEqual(t, bin, resolved, "instrument: link and target differ even with a canonical TMPDIR")
+		assert.Equal(t, bin, detected["link_path"])
+		assert.Equal(t, resolved, detected["path"])
+		_, err = os.Stat(marker)
 		require.ErrorIs(t, err, os.ErrNotExist, "detection must never exec a candidate")
 		var disk map[string]any
 		require.NoError(t, json.Unmarshal(f.disk(t), &disk))
@@ -144,18 +153,29 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 	})
 }
 
+// Resolve only the containing fixture root, never the deliberately dangling or
+// looping final link. A macOS TMPDIR alias must not add an unrelated link to D6.
+func t8CanonicalFixtureRoot(t *testing.T, dir string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755), "fixture: materialize the containing directory")
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err, "fixture: resolve the containing directory once")
+	return resolved
+}
+
 func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 	for _, tc := range []struct{ id, kind, check string }{
 		{"D6.1", "executable", ""}, {"D6.2 / 9.3", "relative", "not_absolute"}, {"D6.3 / 9.5", "directory", "not_regular_file"},
 		{"D6.4 / 9.5", "no-exec", "not_executable"}, {"D6.5 / 9.4", "workspace", "agent_writable_location"}, {"D6.6", "home", "agent_writable_location"},
-		{"D6.7 / 9.5", "file-world-write", "writable_by_others"}, {"D6.8 / 9.5", "parent-world-write", "writable_by_others"},
-		{"D6.9 / 9.6", "symlink", ""}, {"D6.10", "relative-target", ""}, {"D6.11 / 9.7", "link-world-write", "writable_by_others"},
+		// Founder Q13 A / Q2b supersedes only these permission-based refusals.
+		{"D6.7 / 9.5", "file-world-write", ""}, {"D6.8 / 9.5", "parent-world-write", ""},
+		{"D6.9 / 9.6", "symlink", ""}, {"D6.10", "relative-target", ""}, {"D6.11 / 9.7", "link-world-write", ""},
 		{"D6.12 / 9.8", "workspace-middle", "agent_writable_location"}, {"D6.13", "dangling", "not_found"}, {"D6.14", "loop", "not_found"},
 		{"D6.15", "group-write", ""}, {"D6.16", "empty", ""},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			f := t8SettingsAPI(t)
-			dir := t.TempDir()
+			dir := t8CanonicalFixtureRoot(t, t.TempDir())
 			entered := t8Program(t, dir, "program", 0o755)
 			at := entered
 			switch tc.kind {
@@ -174,11 +194,11 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 			case "group-write":
 				require.NoError(t, os.Chmod(dir, 0o775))
 			case "home":
-				entered = t8Program(t, f.api.homePath, "program", 0o755)
+				entered = t8Program(t, t8CanonicalFixtureRoot(t, f.api.homePath), "program", 0o755)
 				at = entered
 			case "workspace":
 				ws := seedLibraryWorkspace(t, f.api, "T8 writable workspace")
-				entered = t8Program(t, workDir(f.api, ws), "program", 0o755)
+				entered = t8Program(t, t8CanonicalFixtureRoot(t, workDir(f.api, ws)), "program", 0o755)
 				at = entered
 			case "symlink", "relative-target", "link-world-write", "workspace-middle", "dangling", "loop":
 				target := entered
@@ -195,8 +215,7 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 				}
 				if tc.kind == "workspace-middle" {
 					ws := seedLibraryWorkspace(t, f.api, "T8 middle link")
-					workspaceDir := workDir(f.api, ws)
-					require.NoError(t, os.MkdirAll(workspaceDir, 0o755), "fixture: materialize the workspace that owns the middle link")
+					workspaceDir := t8CanonicalFixtureRoot(t, workDir(f.api, ws))
 					middle := filepath.Join(workspaceDir, "middle")
 					require.NoError(t, os.Symlink(target, middle))
 					target = middle
@@ -210,7 +229,7 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 				entered = ""
 			}
 			if tc.check != "" {
-				reasons := map[string]string{"not_absolute": "it must be an absolute path", "not_found": "nothing exists at that path (or a link in it is broken)", "not_regular_file": "it is not a regular file", "not_executable": "it is not executable for the Omnipus user", "agent_writable_location": "it is inside a folder agents can write to", "writable_by_others": "it, or the folder holding it, can be changed by any user"}
+				reasons := map[string]string{"not_absolute": "it must be an absolute path", "not_found": "nothing exists at that path (or a link in it is broken)", "not_regular_file": "it is not a regular file", "not_executable": "it is not executable for the Omnipus user", "agent_writable_location": "it is inside a folder agents can write to"}
 				f.expectRejected(t, t8SettingsBody("codex", entered, ""), "codex", "path", "cli_path_invalid", tc.check, at, "The program path for Codex was not saved: "+reasons[tc.check]+".")
 			} else {
 				w := f.call(t, http.MethodPut, t8SettingsRoute, t8SettingsBody("codex", entered, "--flag ok"), "person")
@@ -255,23 +274,8 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 		det, ok := t8SettingsRow(t, rows, "claude-code")["detected"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, link, det["link_path"])
-		assert.Equal(t, target, det["path"])
+		resolved, err := filepath.EvalSymlinks(target)
+		require.NoError(t, err)
+		assert.Equal(t, resolved, det["path"])
 	})
-}
-
-func t8AuditScalars(v any) []string {
-	var out []string
-	switch x := v.(type) {
-	case string:
-		out = append(out, x)
-	case map[string]any:
-		for _, child := range x {
-			out = append(out, t8AuditScalars(child)...)
-		}
-	case []any:
-		for _, child := range x {
-			out = append(out, t8AuditScalars(child)...)
-		}
-	}
-	return out
 }

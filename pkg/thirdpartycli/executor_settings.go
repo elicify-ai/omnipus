@@ -13,12 +13,14 @@ package thirdpartycli
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // EnvMask replaces every env_overrides value on every read (EX-01).
@@ -203,36 +205,106 @@ func MaskEnv(env map[string]string) map[string]string {
 
 // AgentWritableRoots lists the agent-writable locations a program path must
 // stay outside beyond $OMNIPUS_HOME: the gateway's home folder (every
-// workspace root lives under it) and the sandbox's read+write grants
-// (sandbox.allowed_paths), r17 §3.5. The Settings save, the read model and
-// the agent tools all use this one list.
-func AgentWritableRoots(home string, cfg *config.Config) []string {
+// workspace root lives under it), the sandbox's read+write grants
+// (sandbox.allowed_paths) and the host folder of every workspace mount (T11
+// §5). It is read on every call, so a mount added after a program was saved
+// counts at the next check. The Settings save, every run, the read model and
+// the agent tools all use this one list. A non-nil error means the mounts
+// could not be listed completely: the list is then incomplete, and a check
+// over it must refuse (CheckProgramPath), since a missing root would
+// otherwise silently turn "refuse" into "allow". A missing mount record is
+// an empty list, not an error.
+func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 	out := []string{home}
 	if cfg != nil {
 		out = append(out, cfg.Sandbox.AllowedPaths...)
 	}
-	return out
+	mounts, err := workspaceMountRoots(home)
+	if err != nil {
+		return out, err
+	}
+	return append(out, mounts...), nil
+}
+
+// workspaceMountRoots returns the host folder of every mount of every
+// workspace, or an error when a workspace listing or a mount record cannot be
+// read in full.
+func workspaceMountRoots(home string) ([]string, error) {
+	if strings.TrimSpace(home) == "" {
+		home = config.OmnipusHomeDir()
+	}
+	ids, err := workspace.ListWorkspaceIDs(home)
+	if err != nil {
+		return nil, fmt.Errorf("the workspaces could not be listed: %w", err)
+	}
+	var roots []string
+	for _, id := range ids {
+		mounts, ok, dropped := workspace.LoadMountsWithDropStatus(home, id)
+		if !ok || dropped {
+			return nil, fmt.Errorf("the mount record of workspace %q could not be read in full", id)
+		}
+		for _, m := range mounts {
+			roots = append(roots, m.HostPath)
+		}
+	}
+	return roots, nil
+}
+
+// PresetUseNote is the plain-text note on the audit entry of every run or test
+// message that applies preset parameters (T11 §4 Audit).
+const PresetUseNote = "person preset used; flag filter bypassed for preset parameters"
+
+// PresetAuditWithheld stands in for preset text in an audit entry when the
+// configuration is missing: the entry says so rather than holding clear text.
+const PresetAuditWithheld = "[not recorded: the sensitive-data filter is unavailable]"
+
+// PresetAuditFilter returns the function preset text goes through on its way
+// into an audit entry (T11 §4 Audit). It obeys tools.filter_sensitive_data the
+// way pkg/agent's filterExternalString does: switch on, the config's
+// sensitive-data replacer with no short-content fast path; switch off, the text
+// as typed. Only the audit copy is filtered; the worker gets the preset as
+// typed. With no config the switch cannot be read, so nothing is known to allow
+// clear text: every non-empty value becomes PresetAuditWithheld and the failure
+// is logged. The same applies to a missing replacer with the switch on.
+func PresetAuditFilter(cfg *config.Config) func(string) string {
+	if cfg != nil && !cfg.Tools.IsFilterSensitiveDataEnabled() {
+		return func(s string) string { return s }
+	}
+	var replacer *strings.Replacer
+	if cfg != nil {
+		replacer = cfg.SensitiveDataReplacer()
+	}
+	if replacer == nil {
+		slog.Error("audit: sensitive-data filter unavailable; preset text withheld from the audit entry")
+		return func(s string) string {
+			if s == "" {
+				return ""
+			}
+			return PresetAuditWithheld
+		}
+	}
+	return replacer.Replace
 }
 
 // ProgramWarning returns the exact text a run of an external worker on cli
 // would be refused with right now, given the program path a person saved in
 // Settings, or "" when a run would start (r17 §3.8, §3.11). The path is
-// checked with the same ValidateProgramPath the Settings save and the spawn
-// use.
-func ProgramWarning(cli, settingsPath string, agentWritable ...string) string {
-	_, refusal := RunProgram(cli, settingsPath, agentWritable...)
+// checked with the same CheckProgramPath the Settings save and the spawn use;
+// agentWritable and rootsErr are AgentWritableRoots' results.
+func ProgramWarning(cli, settingsPath string, agentWritable []string, rootsErr error) string {
+	_, refusal := RunProgram(cli, settingsPath, agentWritable, rootsErr)
 	return refusal
 }
 
 // RunProgram is the spawn-time program decision (r17 §3.6): with no saved
-// path the refusal is NoPath; otherwise ValidateProgramPath runs again and a
+// path the refusal is NoPath; otherwise CheckProgramPath runs again and a
 // failure is CheckFailed. On success resolvedPath is the checked file, the
 // one the driver must exec. There is no fallback to any other program.
-func RunProgram(cli, settingsPath string, agentWritable ...string) (resolvedPath, refusal string) {
+func RunProgram(cli, settingsPath string, agentWritable []string, rootsErr error) (resolvedPath, refusal string) {
 	if strings.TrimSpace(settingsPath) == "" {
 		return "", NoPathText(cli)
 	}
-	resolved, err := ValidateProgramPath(cli, settingsPath, agentWritable...)
+	resolved, err := CheckProgramPath(cli, settingsPath, agentWritable, rootsErr)
 	if err != nil {
 		var ce *CheckError
 		if errors.As(err, &ce) {

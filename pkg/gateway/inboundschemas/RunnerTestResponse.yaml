@@ -1,9 +1,10 @@
 title: RunnerTestResponse
 description: >
   Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an
-  external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external
-  CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated —
-  WITHOUT running any real agent work (no tokens spent). The three failure reasons have
+  external-CLI runner (Spec-4 FR-4.2). Validates that the program saved in Settings ->
+  Third-party agents for the agent's CLI (claude-code, codex, opencode) passes the checks
+  a real run applies, runs, and is authenticated — WITHOUT running any real agent work
+  (no tokens spent). The three failure reasons have
   distinct remedies (install vs login vs config) and never collapse into one.
 type: object
 required:
@@ -19,8 +20,9 @@ properties:
   reason:
     type: string
     description: >
-      Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on
-      PATH — install it), "handshake-failed" (binary present but did not run / report
+      Failure classifier. Empty when ok=true. One of: "missing-binary" (no program
+      saved in Settings, or the saved one fails the program checks; message is the text
+      a run would be refused with), "handshake-failed" (binary present but did not run / report
       a version), "unauthenticated" (present and runs but no credentials — login),
       "unknown-cli" (the agent's executor.cli is not a supported external CLI),
       "not-external-cli" (the agent's executor is not external-cli, so there is no

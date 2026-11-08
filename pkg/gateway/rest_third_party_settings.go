@@ -68,15 +68,25 @@ func (a *restAPI) HandleThirdPartyAgentSettings(w http.ResponseWriter, r *http.R
 }
 
 // thirdPartyAgentWritable lists the agent-writable locations the path check
-// refuses beyond $OMNIPUS_HOME: the gateway's own home folder (every
-// workspace root lives under it) and the sandbox's read+write grants
-// (sandbox.allowed_paths). r17 §3.5.
-func thirdPartyAgentWritable(homePath string, cfg *config.Config) []string {
+// refuses beyond $OMNIPUS_HOME, with the error that makes the list
+// incomplete; see thirdpartycli.AgentWritableRoots.
+func thirdPartyAgentWritable(homePath string, cfg *config.Config) ([]string, error) {
 	return thirdpartycli.AgentWritableRoots(homePath, cfg)
 }
 
+// thirdPartySavedNotAppliedText is the 500 text when the write reached disk but
+// the running config could not be refreshed; thirdPartySavedNotAppliedCode lets
+// the Settings tab show it without calling the save a failure.
+const (
+	thirdPartySavedNotAppliedText = "third-party agent settings were saved, but they are not applied yet; " +
+		"save again or restart Omnipus to apply them"
+	thirdPartySavedNotAppliedCode = "saved_not_refreshed"
+)
+
 // putThirdPartyAgentSettings validates every row, then writes the whole
-// section in one config write and audits each changed path and preset.
+// section in one config write and audits each changed path and preset. A
+// change that reached disk is audited at once even when the refresh fails: a
+// retry reads the saved values back as "previous", so it could never record it.
 func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -87,7 +97,7 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body gen.ThirdPartyAgentSettings
-	if err := json.Unmarshal(raw, &body); err != nil {
+	if err = json.Unmarshal(raw, &body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -96,24 +106,31 @@ func (a *restAPI) putThirdPartyAgentSettings(w http.ResponseWriter, r *http.Requ
 	if cfg == nil {
 		cfg = a.agentLoop.GetConfig()
 	}
-	writable := thirdPartyAgentWritable(a.homePath, cfg)
+	writable, rootsErr := thirdPartyAgentWritable(a.homePath, cfg)
 	for _, cli := range thirdpartycli.CLIs {
-		if checkErr := validateThirdPartyRow(cli, rows[cli], writable); checkErr != nil {
+		if checkErr := validateThirdPartyRow(cli, rows[cli], writable, rootsErr); checkErr != nil {
 			writeThirdPartyRefusal(w, checkErr)
 			return
 		}
 	}
 	var previous map[string]config.ThirdPartyCLIConfig
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	err = a.safeUpdateConfigJSON(func(m map[string]any) error {
 		previous = readThirdPartyRows(m)
 		writeThirdPartyRows(m, rows)
 		return nil
-	}); err != nil {
+	})
+	var refreshErr *configRefreshError
+	if err != nil && !errors.As(err, &refreshErr) {
 		logsafeError("rest: PUT /settings/third-party-agents: failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to update third-party agent settings")
 		return
 	}
 	a.auditThirdPartyChanges(r, previous, rows)
+	if refreshErr != nil {
+		logsafeError("rest: PUT /settings/third-party-agents: saved but not applied", "error", err)
+		jsonErrCode(w, http.StatusInternalServerError, thirdPartySavedNotAppliedText, thirdPartySavedNotAppliedCode)
+		return
+	}
 	writeJSON(w, http.StatusOK, a.thirdPartySettingsView())
 }
 
@@ -175,9 +192,9 @@ func thirdPartyRowsFromBody(body gen.ThirdPartyAgentSettings) map[string]config.
 }
 
 // validateThirdPartyRow checks path before preset_args; "" is a valid path.
-func validateThirdPartyRow(cli string, row config.ThirdPartyCLIConfig, writable []string) *thirdpartycli.CheckError {
+func validateThirdPartyRow(cli string, row config.ThirdPartyCLIConfig, writable []string, rootsErr error) *thirdpartycli.CheckError {
 	if row.Path != "" {
-		if _, err := thirdpartycli.ValidateProgramPath(cli, row.Path, writable...); err != nil {
+		if _, err := thirdpartycli.CheckProgramPath(cli, row.Path, writable, rootsErr); err != nil {
 			return asCheckError(cli, err)
 		}
 	}
@@ -244,6 +261,7 @@ func writeThirdPartyRows(m map[string]any, rows map[string]config.ThirdPartyCLIC
 }
 
 // auditThirdPartyChanges records each changed path and preset (r17 §3.10).
+// Preset values go through thirdpartycli.PresetAuditFilter (T11 §4 Audit).
 // A failed audit write is logged, never silent.
 func (a *restAPI) auditThirdPartyChanges(r *http.Request, previous, saved map[string]config.ThirdPartyCLIConfig) {
 	if a.auditor == nil {
@@ -259,7 +277,8 @@ func (a *restAPI) auditThirdPartyChanges(r *http.Request, previous, saved map[st
 			a.logThirdPartyAudit("settings.third_party_agents.path_changed", actor, cli, "path", before.Path, after.Path)
 		}
 		if before.PresetArgs != after.PresetArgs {
-			a.logThirdPartyAudit("settings.third_party_agents.preset_changed", actor, cli, "preset_args", before.PresetArgs, after.PresetArgs)
+			filter := thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())
+			a.logThirdPartyAudit("settings.third_party_agents.preset_changed", actor, cli, "preset_args", filter(before.PresetArgs), filter(after.PresetArgs))
 		}
 	}
 }

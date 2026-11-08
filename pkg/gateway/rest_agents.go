@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // setAgentModelProvider echoes the agent's explicit primary-model provider (O3
@@ -256,10 +257,24 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 		return
 	}
 
-	// Validate the agent's CONFIGURED binary (executor.cli_path), not just the
-	// default $PATH binary — otherwise a custom cli_path that does not exist
-	// would false-green. Empty cli_path falls back to the default name.
-	res := runner.TestConnectionWithPath(r.Context(), cli, executor.CLIPath)
+	// Test the program a real run would start: the one saved in Settings, with
+	// the same check and the same refusal, never executor.cli_path or a program
+	// on $PATH (T11 FR-9). The file that passed is the file probed. An
+	// unsupported cli has no Settings row and gets unknown-cli below.
+	resolved := ""
+	if thirdpartycli.IsKnownCLI(cli) {
+		var refusal string
+		if _, resolved, refusal = a.executorProgram(cli); refusal != "" {
+			jsonOK(w, gen.RunnerTestResponse{
+				Ok:      false,
+				Reason:  gen.RunnerTestResponseReasonMissingBinary,
+				Message: refusal,
+				Cli:     strPtr(cli),
+			})
+			return
+		}
+	}
+	res := runner.TestConnectionWithPath(r.Context(), cli, resolved)
 	resp := gen.RunnerTestResponse{
 		Ok:      res.OK,
 		Reason:  gen.RunnerTestResponseReason(res.Reason),

@@ -69,9 +69,11 @@ const (
 	// EventExecutorSmokeTest records a POST /agents/executor-smoke-test call,
 	// which spawns a caller-influenced external-CLI binary/path to run a real,
 	// bounded test prompt (unlike cli-validate's zero-token --version probe,
-	// this spends real model usage). Details carry {cli, binary, ok} only —
-	// never response_text (the model's actual answer) or cli_args, either of
-	// which could plausibly carry operator-sensitive content.
+	// this spends real model usage). Details carry {cli, binary, ok}, plus
+	// preset_args and note when a person's saved standard parameters were
+	// applied (filtered by the same rule as a real run's audit entry) — never
+	// response_text (the model's actual answer) or cli_args, either of which
+	// could plausibly carry operator-sensitive content.
 	// Decision is allow when the run produced a real response (ok=true) and
 	// deny otherwise (missing binary, handshake/timeout/turn-cap failure, or a
 	// denied/errored run).

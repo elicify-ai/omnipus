@@ -14582,7 +14582,7 @@ type Agent struct {
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentExecutorKind `json:"kind,omitempty"`
 
-		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
@@ -15091,7 +15091,7 @@ type AgentDetail struct {
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentDetailExecutorKind `json:"kind,omitempty"`
 
-		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
@@ -16692,7 +16692,7 @@ type CliDetectEntrySource string
 
 // CliPreset One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 type CliPreset struct {
-	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When a workspace's mount record cannot be read in full the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 	Path string `json:"path"`
 
 	// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -18194,7 +18194,7 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; details.at the path element that failed; location_unverifiable means a workspace's mount record could not be read in full, so the location cannot be checked, and details.at is the entered path) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
 	Code *string `json:"code,omitempty"`
 
 	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file).
@@ -18255,16 +18255,13 @@ type ExecProxyStatus struct {
 	Running bool `json:"running"`
 }
 
-// ExecutorCommandPreviewRequest Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form.
+// ExecutorCommandPreviewRequest Stateless request to preview the REAL command line Omnipus would spawn for a subagent_3p external-CLI worker with these settings — computed by calling the same buildArgs() logic each driver uses at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go via the BuildClaudeArgs/BuildCodexArgs/BuildOpencodeArgs cross-package export), not a hand-maintained approximation. Body-driven and agent-agnostic (mirrors POST /system/cli-validate) so it works both from the create wizard, where no agent id exists yet, and from an existing agent's edit form. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode.
 type ExecutorCommandPreviewRequest struct {
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 	Cli ExternalCliTool `json:"cli"`
 
 	// CliArgs Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why.
 	CliArgs *string `json:"cli_args,omitempty"`
-
-	// CliPath Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path).
-	CliPath *string `json:"cli_path,omitempty"`
 
 	// MaxToolIterations Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
@@ -18275,10 +18272,10 @@ type ExecutorCommandPreviewRequest struct {
 
 // ExecutorCommandPreviewResponse The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored.
 type ExecutorCommandPreviewResponse struct {
-	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_path/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why). Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
+	// Argv The exact, ordered argument list that would be passed to the binary, already reflecting the previewed model/cli_args/ max_tool_iterations and with any denylisted cli_args tokens already removed (see dropped_args for what was removed and why), followed by the person's saved standard parameters, which are not filtered. Does not include a token for the task prompt itself for claude-code or codex (delivered via stdin, not argv — see prompt_delivery); for opencode the literal placeholder "<prompt>" appears in the position the real task prompt would occupy.
 	Argv []string `json:"argv"`
 
-	// Binary The resolved binary name or path that would be spawned — the previewed cli_path verbatim when non-empty, otherwise the CLI's bare default command name (resolved via the OS $PATH at actual spawn time, which this preview cannot see into).
+	// Binary The program that would be spawned: the path a person saved in Settings -> Third-party agents for this CLI, exactly as saved. With no saved path, or a saved path that fails the program checks, the route refuses with 400 and the text a run would be refused with.
 	Binary string `json:"binary"`
 
 	// CommandLine argv joined into a single, shell-quoted display string (binary first), suitable for showing directly in the UI or copying into a terminal.
@@ -18329,7 +18326,7 @@ type ExecutorConfig struct {
 	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
 
-	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings → Third-party agents → <Name>." or "This agent cannot run: the program set for <Name> in Settings → Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
 	ProgramWarning *string `json:"program_warning,omitempty"`
 }
 
@@ -18372,7 +18369,7 @@ type ExecutorDefaults struct {
 	Notes string `json:"notes"`
 }
 
-// ExecutorSmokeTestRequest Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape so it works from the create wizard too, but is NOT fully agent-agnostic like those two: when agent_id names a real, saved agent, the run happens in THAT agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate, multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's own doc comment) — matching exactly where a genuine delegation to this agent would run, so the test is representative of real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually see). Omitting agent_id (the create-wizard case, before the agent has been saved) or naming an agent that doesn't resolve falls back to a disposable, ephemeral scratch directory instead — the response's used_agent_workspace field says which one happened.
+// ExecutorSmokeTestRequest Runs a trivial, real prompt through an external-CLI worker's real dispatch path (the same driver.Run() a genuine subagent_3p delegation uses) and returns the real response. Distinct from the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only, never spends a token) — this spawns a real, authenticated subprocess and costs real model usage, so it is an explicit operator action, never automatic. Mirrors POST /agents/executor-preview and POST /system/cli-validate's body-driven shape so it works from the create wizard too, but is NOT fully agent-agnostic like those two: when agent_id names a real, saved agent, the run happens in THAT agent's own dedicated directory ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate, multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's own doc comment) — matching exactly where a genuine delegation to this agent would run, so the test is representative of real behavior (project files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually see). Omitting agent_id (the create-wizard case, before the agent has been saved) or naming an agent that doesn't resolve falls back to a disposable, ephemeral scratch directory instead — the response's used_agent_workspace field says which one happened. There is no cli_path member (T11 C-B1): the program for the CLI is the path a person saved in Settings -> Third-party agents, and a request that carries cli_path is refused with 400 in every inbound-validation mode.
 type ExecutorSmokeTestRequest struct {
 	// AgentId Optional id of an existing, saved agent whose own dedicated directory ($OMNIPUS_HOME/agents/{id}/ — a per-agent folder, not the separate pkg/workspace.Workspace feature) this test should run in. When it resolves to a real agent, the run uses that directory (never deleted afterward — only the ephemeral scratch-directory fallback is cleaned up). When omitted, empty, or naming an agent that no longer exists, falls back to a disposable ephemeral scratch directory instead.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -18382,9 +18379,6 @@ type ExecutorSmokeTestRequest struct {
 
 	// CliArgs Free-form additional CLI arguments, same tokenizer and safety filter as ExecutorConfig.cli_args.
 	CliArgs *string `json:"cli_args,omitempty"`
-
-	// CliPath Optional executor.cli_path override, same semantics as ExecutorCommandPreviewRequest.cli_path.
-	CliPath *string `json:"cli_path,omitempty"`
 
 	// Model Model slug/shape to run with, same semantics as ExecutorCommandPreviewRequest.model.
 	Model *string `json:"model,omitempty"`
@@ -24752,7 +24746,7 @@ type RunNowRequest struct {
 	OccurrenceMs *int64 `json:"occurrence_ms,omitempty"`
 }
 
-// RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+// RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the program saved in Settings -> Third-party agents for the agent's CLI (claude-code, codex, opencode) passes the checks a real run applies, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
 type RunnerTestResponse struct {
 	// Cli The external CLI name that was tested (the agent's executor.cli value).
 	Cli *string `json:"cli,omitempty"`
@@ -24766,11 +24760,11 @@ type RunnerTestResponse struct {
 	// Ok True when the CLI is present, authenticated, and the version handshake succeeded.
 	Ok bool `json:"ok"`
 
-	// Reason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+	// Reason Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
 	Reason RunnerTestResponseReason `json:"reason"`
 }
 
-// RunnerTestResponseReason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+// RunnerTestResponseReason Failure classifier. Empty when ok=true. One of: "missing-binary" (no program saved in Settings, or the saved one fails the program checks; message is the text a run would be refused with), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
 type RunnerTestResponseReason string
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
@@ -27865,7 +27859,7 @@ type ThirdPartyAgentSettings struct {
 	Clis struct {
 		// ClaudeCode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 		ClaudeCode *struct {
-			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When a workspace's mount record cannot be read in full the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 			Path string `json:"path"`
 
 			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -27874,7 +27868,7 @@ type ThirdPartyAgentSettings struct {
 
 		// Codex One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 		Codex *struct {
-			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When a workspace's mount record cannot be read in full the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 			Path string `json:"path"`
 
 			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
@@ -27883,7 +27877,7 @@ type ThirdPartyAgentSettings struct {
 
 		// Opencode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
 		Opencode *struct {
-			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file not inside an agent-writable location, workspace mounts included; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. When a workspace's mount record cannot be read in full the location cannot be checked and the path is refused with check location_unverifiable. Every run checks it again and execs the resolved file.
 			Path string `json:"path"`
 
 			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.

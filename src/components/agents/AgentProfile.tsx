@@ -55,7 +55,6 @@ import {
   fetchProviders,
   fetchActivity,
   fetchSkills,
-  testAgentRunner,
   workspacesQueryKeys,
   getCsrfCookie,
   CSRF_HEADER_NAME,
@@ -158,23 +157,31 @@ function useSmAndUp(): boolean {
   return matches
 }
 
-// r17 17.6: "Change in Settings" beside the read-only Program line. The
-// profile is hosted inside the app router; where no router is mounted (an
-// isolated component render) a plain link to the same address is used, since
-// a router Link cannot render without one.
-function ProgramSettingsLink() {
+// r17 17.6: "Change in Settings" beside the read-only Program line, opening
+// Settings on the Third-party agents tab (T11 FR-8). The profile is hosted
+// inside the app router; where no router is mounted (an isolated component
+// render) a plain link to the same address is used, since a router Link cannot
+// render without one. onNavigate closes the agent sheet the link sits in.
+function ProgramSettingsLink({ onNavigate }: { onNavigate: () => void }) {
   const router = useRouter({ warn: false })
   const className =
     'shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline-offset-2 hover:underline'
   if (!router) {
     return (
-      <a href="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+      <a href="/settings?tab=third-party-agents" tabIndex={0} data-testid="profile-program-settings-link" onClick={onNavigate} className={className}>
         Change in Settings
       </a>
     )
   }
   return (
-    <Link to="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+    <Link
+      to="/settings"
+      search={{ tab: 'third-party-agents' }}
+      tabIndex={0}
+      data-testid="profile-program-settings-link"
+      onClick={onNavigate}
+      className={className}
+    >
       Change in Settings
     </Link>
   )
@@ -316,15 +323,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // agent inherits "ready" a render too early and reproduces the same bug
   // on every subsequent agent open.
   const [formHydrated, setFormHydrated] = useState(false)
-
-  // I12: cache the executor kind+cli we've already passed the runner-test
-  // for, so the auto-save debounce (500 ms) doesn't re-fire the test on
-  // every unrelated keystroke while the user has external-cli selected. We
-  // re-test when the kind or cli changes (or the agent id changes). T8: the
-  // agent has no program path of its own any more — the program per CLI is
-  // set by a person in Settings → Third-party agents.
-  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; agentId: string | null }
-  const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
   // §6.3: the last save's outcome is unknown (transport failure), not refused.
   const [saveUncertain, setSaveUncertain] = useState(false)
@@ -672,7 +670,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // and /api/v1/performance is an admin-only read (503 under dev-mode bypass).
   const globalToolIterationLimit = useGlobalToolIterationLimit({ enabled: isOpen })
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
-    ? buildExecutorPreviewRequest(executor.cli, model, executor.effective_cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
+    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined
 
   const formData = useMemo(() => {
@@ -800,53 +798,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // the form is re-hydrated from the server's current state — otherwise
       // the stale form would just 409 again on every debounce tick.
       if (conflictRef.current) return
-      // I12: when the agent's executor is external-cli, run the runner-test
-      // BEFORE allowing the save to commit. We re-test when the kind or cli
-      // actually changes (or the agent id changes) so the auto-save
-      // debounce doesn't re-fire on every unrelated keystroke. On a
-      // failure, throw — useAutoSave catches and surfaces the error inline,
-      // the save is blocked, and the form stays dirty so the user can fix
-      // and retry.
-      if (data.executor?.kind === 'external-cli' && agentId) {
-        const sig: ExecutorSig = {
-          kind: data.executor.kind,
-          cli: data.executor.cli,
-          agentId,
-        }
-        const last = testedExecutorSig.current
-        const needsTest = !last
-          || last.agentId !== sig.agentId
-          || last.kind !== sig.kind
-          || last.cli !== sig.cli
-        if (needsTest) {
-          let result
-          try {
-            result = await testAgentRunner(agentId)
-          } catch (err) {
-            // Network / 5xx failure — surface the message inline. The user
-            // can retry the save (the next save re-runs this check).
-            const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err)
-            addToast({
-              message: `Runner test failed before save: ${msg}`,
-              variant: 'error',
-            })
-            throw new Error(`Runner test failed: ${msg}`, { cause: err })
-          }
-          if (!result.ok) {
-            // Backend returned a structured failure (missing-binary,
-            // unauthenticated, handshake-failed, unknown-cli, not-external-cli).
-            // Block the save — operator needs to fix the runner first.
-            addToast({
-              message: `Runner test failed: ${result.message}. Fix the runner before saving.`,
-              variant: 'error',
-            })
-            throw new Error(`Runner test failed (${result.reason || 'unknown'}): ${result.message}`)
-          }
-          // Cache the signature only on success — a failed test keeps us
-          // ready to retry on the next change.
-          testedExecutorSig.current = sig
-        }
-      }
       // #904: a refused own limit is dropped from this and later saves so the
       // other fields still save (useToolIterationLimitRefusal).
       await limitRefusal.save(data, async (draft) => {
@@ -1909,9 +1860,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 </span>
                 <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
-              {/* T8 contract-first: the program is set by a person in
-                  Settings → Third-party agents, never on the agent. One
-                  read-only line; T11 slice B owns the rest of this screen. */}
+              {/* The program and its standard parameters are set by a person
+                  in Settings → Third-party agents, never on the agent; this
+                  block shows them read-only and links there (T11 §4, FR-8). */}
               <div data-testid="profile-cli-path" className="space-y-[var(--space-1)]">
                 <div className="flex items-center gap-[var(--space-2-5)]">
                   <span className="text-[var(--color-muted)] w-44 shrink-0">Program</span>
@@ -1923,13 +1874,25 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     {executor?.effective_cli_path ?? 'Not set'}
                   </span>
                   {/* r17 17.6: a link to where the program is set, not a disabled input. */}
-                  <ProgramSettingsLink />
+                  <ProgramSettingsLink onNavigate={handleCloseAgentSheet} />
+                </div>
+                <div className="flex items-center gap-[var(--space-2-5)]">
+                  <span className="text-[var(--color-muted)] w-44 shrink-0">Standard parameters</span>
+                  <span
+                    data-testid="profile-preset-args"
+                    className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] break-all"
+                  >
+                    {executor?.effective_preset_args ? executor.effective_preset_args : 'None'}
+                  </span>
                 </div>
                 {executor?.program_warning && (
                   <p id="profile-program-warning" data-testid="profile-program-warning" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                     {executor.program_warning}
                   </p>
                 )}
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
+                  Set by a person for every agent on this CLI, in Settings → Third-party agents.
+                </p>
               </div>
               <div data-testid="profile-env-overrides" className="space-y-[var(--space-2)]">
                 <Label>Environment overrides</Label>

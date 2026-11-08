@@ -297,7 +297,8 @@ func agentExecutorView(a *config.AgentConfig, cfg *config.Config, home string) (
 	if row.PresetArgs != "" {
 		view["effective_preset_args"] = row.PresetArgs
 	}
-	warning := thirdpartycli.ProgramWarning(ec.CLI, row.Path, thirdpartycli.AgentWritableRoots(home, cfg)...)
+	writable, rootsErr := thirdpartycli.AgentWritableRoots(home, cfg)
+	warning := thirdpartycli.ProgramWarning(ec.CLI, row.Path, writable, rootsErr)
 	if warning != "" {
 		view["program_warning"] = warning
 	}

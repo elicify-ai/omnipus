@@ -466,7 +466,10 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 	)
 	ed.auditRunSpawn(runCtx, cli)
 	if resume {
-		evCh, err = driver.Resume(runCtx, ed.runID, task)
+		// A continuation runs under these same options, on the native
+		// conversation: the program and parameters that were checked and
+		// audited above are the ones that start (T11 FR-9/10).
+		evCh, err = runner.ResumeCurrent(runCtx, driver, runOpts)
 		if err != nil {
 			// FR-043: a delivery that cannot reach the native conversation —
 			// no captured conversation id, a rejected/crashed resume — is a
