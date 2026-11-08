@@ -293,7 +293,12 @@ func TestKeepAlive_RepeatedTimeoutsDuringAndAfterReconnectDialExactlyOnce(t *tes
 // the captured client's proxy points at a closed local port (the same shape as
 // the offline fixture), so every reconnect dial is refused while the live
 // socket is dropped remotely; SetProxy(nil) — the library's own reset path —
-// restores direct dialling for the recovery leg.
+// restores direct dialling for the recovery leg, swapped in only while the
+// loop's next iteration is parked at its own log line so no dial can read the
+// transport while the test writes it (the library swaps the transport
+// unlocked), and the reported state is polled within bounded windows on both
+// legs because the server's handshake receipt precedes the client's own
+// connect completion.
 func TestReconnect_FailureIsVisibleInTheChannelStatusAndRecoveryClearsIt(t *testing.T) {
 	f, server, captured, remote := w2StartLinkedAgainstFakeServer(t)
 	require.Equal(t, int32(1), server.handshakes.Load(), "instrument: exactly the initial dial so far")
@@ -309,34 +314,41 @@ func TestReconnect_FailureIsVisibleInTheChannelStatusAndRecoveryClearsIt(t *test
 	require.NoError(t, remote.CloseNow(), "instrument: the remote drop reached the socket")
 	w2WaitOurReconnectHeld(t, held)
 	release()
-	// A refused dial returns quickly. Give the failure a bounded moment to land
-	// while the broken endpoint stays broken, then require it visible.
-	failureVisible := make(chan struct{})
-	go func() {
-		for {
-			if !f.ch.IsRunning() {
-				close(failureVisible)
-				return
-			}
-			runtime.Gosched()
-		}
-	}()
-	select {
-	case <-failureVisible:
-	case <-time.After(2 * time.Second):
-	}
-	require.False(t, f.ch.IsRunning(),
+	// A refused dial returns quickly. The failure must become visible through
+	// the status surface within this bounded window; polled rather than
+	// hot-spun so no reader goroutine outlives a failed leg.
+	require.Eventually(t, func() bool { return !f.ch.IsRunning() },
+		2*time.Second, 5*time.Millisecond,
 		"an unexpected reconnect failure must be visible through the channel's existing status surface (IsRunning — the flag publishNativeRunning sets and manager.GetStatus reports), not swallowed into the log")
-	// Recovery: restore direct dialling; the loop's next attempt succeeds and
-	// the reported state clears again. The bound covers reconnectWithBackoff's
-	// 5s initial backoff plus one localhost handshake.
+	// Recovery: restore direct dialling at a point the test controls — while
+	// the loop's next iteration is parked at its own log line, BEFORE its
+	// dial. SetProxy swaps the library's transport unlocked (vendored client.go
+	// setTransport) and the failed dial read it on the reconnect goroutine, so
+	// the swap must be ordered by the hold: hold receipt -> write -> release
+	// -> resume. The loop reaches that iteration only after one
+	// reconnectInitial backoff, so this wait is bounded at more than two
+	// backoffs; it is a wait, not the verdict.
+	held2, release2 := fix1HoldCapturedReconnect(t)
+	select {
+	case <-held2:
+	case <-time.After(12 * time.Second):
+		t.Fatal("HARNESS: the managed reconnect loop never reached its next iteration for the recovery swap")
+	}
 	captured.SetProxy(nil)
+	release2()
 	select {
 	case <-server.connected:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the managed reconnect did not recover after the endpoint returned")
 	}
-	require.True(t, f.ch.IsRunning(), "a later successful reconnect clears the reported failure")
+	// The server finishing its side precedes the client's own ConnectContext
+	// return and the success arm's publishNativeRunning, so require the
+	// reported state to clear within a bounded window instead of reading it
+	// once, unordered. The bound is the fixture's 5s standard; the verdict is
+	// the eventual truth, not its speed.
+	require.Eventually(t, func() bool { return f.ch.IsRunning() },
+		5*time.Second, 10*time.Millisecond,
+		"a later successful reconnect clears the reported failure")
 	select {
 	case <-server.connected:
 		t.Fatalf("a further reconnect dial completed after recovery (handshakes=%d)", server.handshakes.Load())
