@@ -74,7 +74,7 @@ func l1WU2OmnipusSupport() []string {
 		// Founder 2026-10-18: create yes; delete deferred to #1363 (explicit Deny).
 		"create_workspace", "update_workspace", "get_skill", "edit_skill", "install_skill",
 		"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
-		"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
+		"disable_channel", "configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox",
 		"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
 		"read_conversation", "list_mailboxes", "environment_setup", "bash",
 	}
@@ -91,7 +91,7 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 		assert.Contains(t, catalog, name, "§6.5: granted tool %s must not be invisible to the catalogue", name)
 	}
 	ask := []string{"delete_agent", "edit_skill", "remove_mcp_server", "add_mcp_server",
-		"configure_provider", "enable_channel", "configure_channel", "connect_channel",
+		"configure_provider", "enable_channel", "configure_channel", "connect_channel", "set_channel_outbound",
 		"connect_mailbox", "set_agent_permissions", "remove_secret", "select_secret_version",
 		"environment_setup", "bash", "delete_task", "install_skill"}
 	global := map[string]config.ToolPolicy{}
@@ -129,7 +129,12 @@ func TestL1WU2OmnipusPolicies_ExactSupportSetAndNoPerAgentAsk(t *testing.T) {
 			if slices.Contains(support, name) {
 				godWant = "allow"
 			}
-			assert.Equal(t, godWant, tools.ResolveEffectivePolicy(pc, name), "FR-023: God Mode floors only the global ceiling")
+			// Channels FR-033/036, Q22 B: this single tool bypasses the floor;
+			// all previously supported tools retain their original God Mode oracle.
+			if name == "set_channel_outbound" {
+				godWant = "ask"
+			}
+			assert.Equal(t, godWant, tools.ResolveEffectivePolicy(pc, name), "FR-023 plus channels FR-036: only set_channel_outbound always asks")
 			pc.GodMode = false
 		})
 	}
@@ -147,7 +152,7 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 		{"researcher", false}, {"judge", false}, {"plansupervisor", false},
 	}
 	newNames := []string{"request_secret", "list_secrets", "remove_secret", "select_secret_version",
-		"connect_channel", "connect_mailbox", "set_agent_permissions", "read_conversation", "list_mailboxes"}
+		"connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "read_conversation", "list_mailboxes"}
 	catalog := coreagent.AllStaticToolNames()
 	for _, name := range newNames {
 		assert.Contains(t, catalog, name, "FR-007/021: new tool must be classified explicitly")
@@ -163,8 +168,13 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 					(name == "list_secrets" && row.id != "judge" && row.id != "plansupervisor") {
 					want = config.ToolPolicyAllow
 				}
+				// Founder Q4, 2026-11-03: chat-capable Main agents may use
+				// outbound with fresh consent; background/system roles stay denied.
+				if row.private && name == "set_channel_outbound" {
+					want = config.ToolPolicyAsk
+				}
 				pc, _ := tools.BuildFallbackPolicyCfg(cfg, row.id)
-				assert.Equal(t, string(want), tools.ResolveEffectivePolicy(pc, name), "%s/%s independent §6.5 oracle", row.id, name)
+				assert.Equal(t, string(want), tools.ResolveEffectivePolicy(pc, name), "%s/%s independent §6.5 plus Q4 oracle", row.id, name)
 				if want == config.ToolPolicyDeny {
 					p, present := ac.Tools.Builtin.Policies[name]
 					assert.True(t, present, "%s/%s needs explicit Deny", row.id, name)
@@ -202,6 +212,10 @@ func TestL1WU2SecretAndManagementGrants_AllNativeRolesAndCustomMain(t *testing.T
 			assert.True(t, present, "new custom main must classify %s", name)
 			assert.Equal(t, config.ToolPolicyDeny, p, "ordinary management entries stay Deny")
 		}
+		customCfg := config.DefaultConfig()
+		customCfg.Agents.List = []config.AgentConfig{{ID: "q4-custom", Type: config.AgentTypeCustom, Tools: custom}}
+		customPolicy, _ := tools.BuildFallbackPolicyCfg(customCfg, "q4-custom")
+		assert.Equal(t, "ask", tools.ResolveEffectivePolicy(customPolicy, "set_channel_outbound"), "Q4: custom chat agents always ask, not management Deny")
 		assert.Equal(t, config.ToolPolicyAsk, custom.Builtin.Policies["edit_skill"], "r15 §10 Main editing")
 		assert.Equal(t, config.ToolPolicyAllow, custom.Builtin.Policies["get_skill"], "r15 §10 read access")
 		for _, retired := range []string{"create_skill", "remove_skill"} {
@@ -217,5 +231,5 @@ func l1WU2ManagementNames() []string {
 		"delete_workspace", "install_skill",
 		"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel", "disable_channel",
 		"configure_channel", "connect_channel", "connect_mailbox", "set_agent_permissions",
-		"remove_secret", "select_secret_version", "set_config"}
+		"remove_secret", "select_secret_version", "set_config"} // Q4: outbound is no longer an Omnipus-only management grant.
 }
