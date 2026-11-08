@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -26,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // onboardingOwnerRequiredMsg is the 401 for an unauthenticated
@@ -809,8 +811,10 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	switch {
 	case providers.IsCatalogProvider(ro.provider.ID):
 		if ro.provider.Protocol != "" {
+			// The catalog lookup trims the id, so name the trimmed one.
+			listed := strings.TrimSpace(ro.provider.ID)
 			jsonErrField(ro.w, http.StatusBadRequest,
-				fmt.Sprintf(onboardingListedNameMsgFmt, ro.provider.ID, ro.provider.ID), "id")
+				fmt.Sprintf(onboardingListedNameMsgFmt, listed, listed), "id")
 			return true
 		}
 	case ro.provider.AuthMethod == config.AuthMethodSignIn,
@@ -850,15 +854,30 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 // the address and key checks run later, in validateAndStoreOnboardingKey,
 // after the credential store is known to be ready.
 func (ro *restAPIHandleCompleteOnboarding) refuseCustomProvider() bool {
-	p := ro.provider
 	refuse := func(msg, field string) bool {
 		jsonErrField(ro.w, http.StatusBadRequest, msg, field)
 		return true
 	}
+	// The id and model are trimmed once, here, and the trimmed values are what
+	// is checked, probed and saved (review of #1700): config loading trims
+	// both, so an untrimmed value would save a row that no longer loads.
+	ro.provider.ID = strings.TrimSpace(ro.provider.ID)
+	ro.provider.Model = strings.TrimSpace(ro.provider.Model)
+	p := ro.provider
 	// C1: the PUT /providers/{id} id rule — the id becomes a providers[] row
-	// and a "<id>_API_KEY" credential ref.
-	if validateEntityID(p.ID) != nil || len(p.ID) > maxProviderIDLen {
+	// and a "<id>_API_KEY" credential ref, which the runtime publishes as an
+	// environment variable, so it must be non-blank and free of "=".
+	if p.ID == "" || strings.Contains(p.ID, "=") ||
+		validateEntityID(p.ID) != nil || len(p.ID) > maxProviderIDLen {
 		return refuse(onboardingCustomIDShapeMsg, "id")
+	}
+	// The reserved and catalog checks of decodeAndValidate ran on the id as
+	// sent; repeat them on the trimmed id (catalog membership stays exact-case).
+	if isReservedProviderPathSegment(p.ID) {
+		return refuse(fmt.Sprintf("unknown provider %q", p.ID), "id")
+	}
+	if providers.IsCatalogProvider(p.ID) {
+		return refuse(fmt.Sprintf(onboardingListedNameMsgFmt, p.ID, p.ID), "id")
 	}
 	// C2: enforced here because inbound schema validation is off by default.
 	if p.Protocol != "" && !providers.IsCustomRowProtocol(p.Protocol) {
@@ -1589,7 +1608,24 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 		if provider.Custom {
 			in.ProbeModels = []string{provider.Model}
 		}
-		result := providers.ValidateKey(r.Context(), in, a.ssrfChk())
+		checker := a.ssrfChk()
+		var refusals *addressRefusalRecorder
+		if provider.Custom && a.ssrfChecker != nil {
+			refusals = &addressRefusalRecorder{sc: a.ssrfChecker}
+			checker = refusals
+		}
+		result := providers.ValidateKey(r.Context(), in, checker)
+		// A custom row whose address the guard refused DURING the key check
+		// (the host now resolves to a blocked address, or the endpoint
+		// redirected to one) is refused like an address refused up front —
+		// before anything is stored. ValidateKey would report it only as
+		// "unreachable", which for a catalog row stays a warning.
+		if refusals != nil && refusals.refused.Load() {
+			slog.Warn("onboarding: SSRF guard refused a custom endpoint during the key check",
+				"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
+			jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
+			return "", "", false
+		}
 		slog.Debug("onboarding: provider key validation result",
 			"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
 
@@ -1666,8 +1702,9 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 // §2.4): when the address (SSRF) guard is on and refuses the endpoint, the
 // request is refused with 422 before any outbound call and before anything is
 // stored. On a release build the checker is nil unless sandbox.ssrf.enabled
-// is set. This is the one place a hosted build swaps in its always-on
-// endpoint checker and refusal text (design §6, port note step 2).
+// is set. A hosted build swaps in its always-on endpoint checker and refusal
+// text here and in validateAndStoreOnboardingKey's addressRefusalRecorder
+// (design §6, port note step 2).
 func (a *restAPI) refuseBlockedCustomEndpoint(
 	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
 ) bool {
@@ -1682,6 +1719,49 @@ func (a *restAPI) refuseBlockedCustomEndpoint(
 	}
 	return false
 }
+
+// addressRefusalRecorder is the providers.URLChecker a custom row's key check
+// runs with (review of #1700). It applies a.ssrfChecker unchanged and records
+// whether the guard refused an address on policy grounds — at connect time
+// (the host now resolves to a blocked address) or on a redirect — which the
+// key check's result alone reports only as "unreachable". It adds no check of
+// its own and is used only for the save-time key check, never at run time.
+type addressRefusalRecorder struct {
+	sc      *security.SSRFChecker
+	refused atomic.Bool
+}
+
+func (g *addressRefusalRecorder) note(err error) error {
+	if security.IsBlockedAddress(err) {
+		g.refused.Store(true)
+	}
+	return err
+}
+
+func (g *addressRefusalRecorder) CheckURL(ctx context.Context, rawURL string) error {
+	return g.note(g.sc.CheckURL(ctx, rawURL))
+}
+
+func (g *addressRefusalRecorder) SafeClient() *http.Client {
+	client := g.sc.SafeClient()
+	// A connect-time refusal comes back from the transport's round trip (the
+	// guarded dialer's error, wrapped at most); a redirect refusal comes from
+	// CheckRedirect, which the client calls outside the round trip.
+	inner := client.Transport
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := inner.RoundTrip(req)
+		return resp, g.note(err)
+	})
+	checkRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return g.note(checkRedirect(req, via))
+	}
+	return client
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // Wire-format limits from contracts/components/schemas/ProbeProviderRequest.yaml,
 // enforced in the handler as well as the schema because validate_inbound is
