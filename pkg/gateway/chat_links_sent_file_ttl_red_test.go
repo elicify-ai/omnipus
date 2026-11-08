@@ -686,6 +686,155 @@ func TestSentFile_SentAcrossHandoverStaysServedFromTheLiveStore(t *testing.T) {
 	if recCard.Code != http.StatusOK || recCard.Body.String() != "plan" {
 		t.Errorf("GET the replayed card's URL %s = %d %q, want 200 and the sent file bytes", part.Url, recCard.Code, recCard.Body.String())
 	}
+
+	// F1 lifetime half: the pin the send promoted must also survive the
+	// ORIGINAL upload's age limit on the live store — a cleanup that runs
+	// after the send cannot expire the sent file. A fresh unsent upload on
+	// the live store is the expiry control, so the sent-file assertion
+	// cannot pass because the cleanup simply never ran (docs/using-omnipus-ui.md:
+	// a sent file does not expire, so its card and download keep working).
+	controlPath := filepath.Join(filepath.Dir(resolvedPath), "handover-upload-only.md")
+	require.NoError(t, os.WriteFile(controlPath, []byte("temp"), 0o644))
+	controlRef, err := liveStore.Store(controlPath, media.MediaMeta{
+		Filename: "handover-upload-only.md", ContentType: "text/plain",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "upload:"+fixture.sid+"-control")
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	if removed := liveStore.CleanExpired(); removed == 0 {
+		t.Fatalf("instrument: live cleanup expired nothing, want the unsent control upload gone")
+	}
+	if _, controlErr := liveStore.Resolve(controlRef); !errors.Is(controlErr, media.ErrNotFound) {
+		t.Errorf("control: unsent live upload error = %v, want ErrNotFound after MaxAge", controlErr)
+	}
+	if got, resolveErr := liveStore.Resolve(sentRef); resolveErr != nil || got != resolvedPath {
+		t.Errorf("sent ref %s after the live store's next cleanup = %q %v, want the sent file kept: the promoted pin must survive cleanups that run after the send", sentRef, got, resolveErr)
+	}
+	recAfter := httptest.NewRecorder()
+	reqAfter := httptest.NewRequest(http.MethodGet, "/api/v1/media/"+strings.TrimPrefix(sentRef, "media://"), nil)
+	api.HandleMedia(recAfter, reqAfter)
+	if recAfter.Code != http.StatusOK || recAfter.Body.String() != "plan" {
+		t.Errorf("live GET /media after the next cleanup = %d %q, want 200 and the sent file bytes", recAfter.Code, recAfter.Body.String())
+	}
+	recCardAfter := httptest.NewRecorder()
+	reqCardAfter := httptest.NewRequest(http.MethodGet, part.Url, nil)
+	api.HandleMedia(recCardAfter, reqCardAfter)
+	if recCardAfter.Code != http.StatusOK || recCardAfter.Body.String() != "plan" {
+		t.Errorf("GET the replayed card's URL after the next cleanup = %d %q, want 200 and the sent file bytes", recCardAfter.Code, recCardAfter.Body.String())
+	}
+
+	// F1 restart half: the promoted scope must also survive save/load — a
+	// restart cannot demote the sent file back to an expiring upload
+	// (docs/troubleshooting.md: once the cause is fixed, a restart brings the
+	// card and download back — the round-trip must keep the sent-file
+	// lifetime the docs promise, not just the row).
+	liveStore.SaveRegistry()
+	reloaded := sentFileAgedStore(t)
+	require.NoError(t, reloaded.LoadRegistry(), "reloading the live registry must load every row")
+	if got, resolveErr := reloaded.Resolve(sentRef); resolveErr != nil || got != resolvedPath {
+		t.Errorf("reloaded sent ref %s = %q %v, want the sent file back from the registry", sentRef, got, resolveErr)
+	}
+	time.Sleep(20 * time.Millisecond)
+	reloaded.CleanExpired()
+	if got, resolveErr := reloaded.Resolve(sentRef); resolveErr != nil || got != resolvedPath {
+		t.Errorf("reloaded sent ref %s expired at the reloaded store's first cleanup = %q %v, want the sent-file scope restored from the registry", sentRef, got, resolveErr)
+	}
+	fixture.h.agentLoop.SetMediaStore(reloaded)
+	api.mediaStore = reloaded
+	restartedConn := fixture.newConn("handover-restarted-viewer")
+	fixture.h.handleAttachSession(context.Background(), "handover-restarted-viewer", fixture.sid, nil, restartedConn)
+	restartedFrames := pagingDrain(t, restartedConn)
+	restartedComplete := indexOfType(restartedFrames, "catch_up_complete")
+	if restartedComplete < 0 || restartedFrames[restartedComplete].Mode != "snapshot" {
+		t.Error("history after save/restart did not complete a snapshot, want the saved sent-file card restored")
+	}
+	restartedPart, _, restartedOK := sentFileMedia(restartedFrames, "plan.md")
+	if !restartedOK {
+		t.Fatal("history after save/restart has no plan.md card, want the sent file to keep its card")
+	}
+	recRestartedCard := httptest.NewRecorder()
+	reqRestartedCard := httptest.NewRequest(http.MethodGet, restartedPart.Url, nil)
+	api.HandleMedia(recRestartedCard, reqRestartedCard)
+	if recRestartedCard.Code != http.StatusOK || recRestartedCard.Body.String() != "plan" {
+		t.Errorf("GET the restarted card's URL %s = %d %q, want 200 and the sent file bytes", restartedPart.Url, recRestartedCard.Code, recRestartedCard.Body.String())
+	}
+}
+
+func TestSentFile_PromotesAnUploadTheLiveStoreAlreadyHolds(t *testing.T) {
+	// F1 still-present-successor case: the upload was created through the
+	// outgoing store AFTER the swap (a turn in flight), so Store forwarded it
+	// and the live successor already holds it under the unpinned upload scope
+	// when send_file runs. The send must promote that live entry to the
+	// sent-file scope — leaving it unpinned fails the same user guarantee as
+	// the missing-successor case: the next cleanup expires the sent file and
+	// its card and download die (docs/using-omnipus-ui.md). An unsent control
+	// upload proves the cleanup actually expires entries, and a save/reload
+	// round-trip proves the promotion survives a restart.
+	fixture := newAttachFixture(t, "promote-send-turn", "promote-send-msg")
+	_, plan := sentFilePlan(t, fixture.h)
+	resolvedPath, err := filepath.EvalSymlinks(plan)
+	require.NoError(t, err)
+	oldStore := sentFileAgedStore(t)
+	liveStore := sentFileAgedStore(t)
+	oldStore.HandoverTo(liveStore)
+	fixture.h.agentLoop.SetMediaStore(liveStore)
+	uploadRef, err := oldStore.Store(resolvedPath, media.MediaMeta{
+		Filename: "plan.md", ContentType: "text/markdown", Source: "upload:webchat",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "upload:"+fixture.sid)
+	require.NoError(t, err)
+	if _, liveErr := liveStore.Resolve(uploadRef); liveErr != nil {
+		t.Fatalf("instrument: the live successor never received the forwarded upload: %v", liveErr)
+	}
+	controlPath := filepath.Join(filepath.Dir(resolvedPath), "promote-upload-only.md")
+	require.NoError(t, os.WriteFile(controlPath, []byte("temp"), 0o644))
+	controlRef, err := liveStore.Store(controlPath, media.MediaMeta{
+		Filename: "promote-upload-only.md", ContentType: "text/plain",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "upload:"+fixture.sid+"-control")
+	require.NoError(t, err)
+	tool := tools.NewSendFileTool(filepath.Dir(filepath.Dir(plan)), false, 0, oldStore)
+	tool.SetContext("webchat", fixture.sid)
+	result := tool.Execute(context.Background(), map[string]any{"path": plan})
+	if result.IsError {
+		t.Fatalf("instrument: send_file through the outgoing store failed: %s", result.ForLLM)
+	}
+	if len(result.Media) != 1 || result.Media[0] != uploadRef {
+		t.Fatalf("instrument: send_file ref = %v, want the existing upload ref %s", result.Media, uploadRef)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if removed := liveStore.CleanExpired(); removed == 0 {
+		t.Fatalf("instrument: live cleanup expired nothing, want the unsent control upload gone")
+	}
+	if _, controlErr := liveStore.Resolve(controlRef); !errors.Is(controlErr, media.ErrNotFound) {
+		t.Errorf("control: unsent live upload error = %v, want ErrNotFound after MaxAge", controlErr)
+	}
+	if got, resolveErr := liveStore.Resolve(uploadRef); resolveErr != nil || got != resolvedPath {
+		t.Errorf("promoted upload ref %s after the live store's next cleanup = %q %v, want the sent file: sending must promote an upload the live store already holds", uploadRef, got, resolveErr)
+	}
+	api := pagingAPIForAttach(fixture)
+	api.mediaStore = liveStore
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/"+strings.TrimPrefix(uploadRef, "media://"), nil)
+	api.HandleMedia(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "plan" {
+		t.Errorf("live GET /media = %d %q, want 200 and the sent file bytes", rec.Code, rec.Body.String())
+	}
+	liveStore.SaveRegistry()
+	reloaded := sentFileAgedStore(t)
+	require.NoError(t, reloaded.LoadRegistry(), "reloading the live registry must load every row")
+	time.Sleep(20 * time.Millisecond)
+	reloaded.CleanExpired()
+	if got, resolveErr := reloaded.Resolve(uploadRef); resolveErr != nil || got != resolvedPath {
+		t.Errorf("reloaded promoted ref %s = %q %v, want the sent file kept across save/reload", uploadRef, got, resolveErr)
+	}
+	fixture.h.agentLoop.SetMediaStore(reloaded)
+	api.mediaStore = reloaded
+	recRestarted := httptest.NewRecorder()
+	api.HandleMedia(recRestarted, req)
+	if recRestarted.Code != http.StatusOK || recRestarted.Body.String() != "plan" {
+		t.Errorf("live GET /media after save/restart = %d %q, want 200 and the promoted sent file bytes", recRestarted.Code, recRestarted.Body.String())
+	}
 }
 
 func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
@@ -722,6 +871,9 @@ func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
 	}, "tool:send_file:webchat:perm-chat")
 	require.NoError(t, err)
 	stored.SaveRegistry()
+	// Retire the initial publisher before testing failed-state persistence:
+	// its pending save must not restore a row a later store accidentally lost.
+	stored.Stop()
 	require.NoError(t, os.Chmod(parent, 0))
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
 	if _, statErr := os.Stat(plan); !errors.Is(statErr, fs.ErrPermission) {
@@ -730,17 +882,58 @@ func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
 	loaded := media.NewFileMediaStore()
 	t.Cleanup(loaded.Stop)
 	loadErr := loaded.LoadRegistry()
-	require.NoError(t, os.Chmod(parent, 0o755))
 	if loadErr == nil || !errors.Is(loadErr, fs.ErrPermission) {
 		t.Errorf("LoadRegistry error = %v, want a permission error and not a successful drop", loadErr)
 	}
 	if _, resolveErr := loaded.Resolve(ref); resolveErr == nil || errors.Is(resolveErr, media.ErrNotFound) || !errors.Is(resolveErr, fs.ErrPermission) {
 		t.Errorf("Resolve after a permission failure = %v, want the permission cause, not ErrNotFound", resolveErr)
 	}
+	// F2: the distinction must also survive a reload while the denial is
+	// still in place, and a reload handover (store replacement) of the whole
+	// failed state: the successor keeps the failed row's kept permission
+	// cause — a replacement must not degrade it into a routine missing file —
+	// and the healthy row keeps resolving (docs/troubleshooting.md: the
+	// operator fixes the permission and restarts; nothing claims the cards
+	// went missing). Save while access is still denied, so loading the
+	// original, healthy registry alone cannot satisfy the preservation check.
+	loaded.SaveRegistry()
+	stillDenied := media.NewFileMediaStore()
+	t.Cleanup(stillDenied.Stop)
+	if reloadErr := stillDenied.LoadRegistry(); reloadErr == nil || !errors.Is(reloadErr, fs.ErrPermission) {
+		t.Errorf("reload under denial: LoadRegistry error = %v, want the permission aggregate again", reloadErr)
+	}
+	if _, resolveErr := stillDenied.Resolve(ref); resolveErr == nil || errors.Is(resolveErr, media.ErrNotFound) || !errors.Is(resolveErr, fs.ErrPermission) {
+		t.Errorf("reload under denial: Resolve = %v, want the kept permission cause, not ErrNotFound", resolveErr)
+	}
+	if got, resolveErr := stillDenied.Resolve(visibleRef); resolveErr != nil || got != visiblePath {
+		t.Errorf("reload under denial: healthy row = %q %v, want its file", got, resolveErr)
+	}
+	successor := media.NewFileMediaStore()
+	t.Cleanup(successor.Stop)
+	stillDenied.HandoverTo(successor)
+	if _, resolveErr := successor.Resolve(ref); resolveErr == nil || errors.Is(resolveErr, media.ErrNotFound) || !errors.Is(resolveErr, fs.ErrPermission) {
+		t.Errorf("failed-state handover: successor Resolve = %v, want the kept permission cause, not ErrNotFound — a store replacement must not drop the failed row", resolveErr)
+	}
+	if got, resolveErr := successor.Resolve(visibleRef); resolveErr != nil || got != visiblePath {
+		t.Errorf("failed-state handover: successor healthy row = %q %v, want its file", got, resolveErr)
+	}
+	successor.SaveRegistry()
+	deniedRestart := media.NewFileMediaStore()
+	t.Cleanup(deniedRestart.Stop)
+	if reloadErr := deniedRestart.LoadRegistry(); reloadErr == nil || !errors.Is(reloadErr, fs.ErrPermission) {
+		t.Errorf("successor save/reload under denial: LoadRegistry = %v, want the permission cause retained", reloadErr)
+	}
+	if _, resolveErr := deniedRestart.Resolve(ref); resolveErr == nil || errors.Is(resolveErr, media.ErrNotFound) || !errors.Is(resolveErr, fs.ErrPermission) {
+		t.Errorf("successor save/reload under denial: Resolve = %v, want the kept permission cause, not ErrNotFound", resolveErr)
+	}
+	if got, resolveErr := deniedRestart.Resolve(visibleRef); resolveErr != nil || got != visiblePath {
+		t.Errorf("successor save/reload under denial: healthy row = %q %v, want its file", got, resolveErr)
+	}
+	require.NoError(t, os.Chmod(parent, 0o755))
 	// docs/troubleshooting.md: the failed row survives the next registry save,
 	// and once the cause is fixed, a restart brings the card and download back.
 	// A healthy row saved alongside it keeps loading too.
-	loaded.SaveRegistry()
+	successor.SaveRegistry()
 	restarted := media.NewFileMediaStore()
 	t.Cleanup(restarted.Stop)
 	require.NoError(t, restarted.LoadRegistry(), "restart after the permission is fixed must load the whole registry")
