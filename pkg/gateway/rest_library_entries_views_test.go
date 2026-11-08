@@ -366,21 +366,19 @@ func TestLibraryEntriesViews_PlacementFollowsSource(t *testing.T) {
 		"deepest-K: the nested knowledge base's view must not appear in the outer knowledge base's listing")
 
 	innerRows := listEntriesWithViews(t, api, ws, "vault2/inner")
-	require.Equal(t, []string{"inner-view.yaml"}, viewRowNames(t, innerRows),
-		"deepest-K: listing inside the nested knowledge base shows exactly the nested knowledge base's own views")
+	require.Empty(t, viewRowNames(t, innerRows),
+		"L18 (architect A1): a knowledge base that is not itself a listed collection — here one nested inside another — contributes no view rows; listing inside it shows the ordinary rows only")
 
 	// L16 — no path built from source is ever opened or listed: whatever the
 	// source says, a view row's path is the storage file's real path (L7:
 	// K_rel/.omnipus-vault/views/<file>.yaml, K_rel being the knowledge base
-	// the view belongs to). Each row set is therefore checked against ITS OWN
-	// knowledge base's storage folder — the outer vault2's for the adversarial
-	// views, the nested vault2/inner's for its own view.
+	// the view belongs to). The outer vault2's storage folder prefix covers
+	// every row this listing emits (L18: the nested knowledge base emits none).
 	for _, kb := range []struct {
 		storagePrefix string
 		rows          []gen.LibraryEntry
 	}{
 		{"vault2/.omnipus-vault/views/", outerRows},
-		{"vault2/inner/.omnipus-vault/views/", innerRows},
 	} {
 		for _, e := range kb.rows {
 			if e.IsView != nil && *e.IsView {
@@ -389,6 +387,132 @@ func TestLibraryEntriesViews_PlacementFollowsSource(t *testing.T) {
 			}
 		}
 	}
+}
+
+// --- L4 clause / L18 (architect decision A1, founder answer Q5 A) -----------
+
+// TestLibraryEntriesViews_ViewsAddressableAndNestedScopeContributesNone pins
+// the architect's A1 decision (2026-11-08) with founder answer Q5 A:
+//
+//  1. Every emitted view row is addressable: for every is_view row of any
+//     include_views=true listing, the views list for row.view.collection_id
+//     contains row.view.name, and opening that (collection_id, name) does not
+//     refuse it (L4's new clause).
+//  2. A knowledge base that is not itself a listed collection — here one
+//     nested inside another — contributes no view rows anywhere at or below
+//     its root (L18); its storage file still lists as a plain row; and its id
+//     still enumerates an empty views list (nothing widened).
+//
+// RED on the current tree: the nested knowledge base still emits a decorated
+// row whose address the views endpoints do not resolve.
+func TestLibraryEntriesViews_ViewsAddressableAndNestedScopeContributesNone(t *testing.T) {
+	api, ws := seedViewListingVault(t)
+	vault2 := filepath.Join(workDir(api, ws), "vault2")
+	makeKnowledgeBase(t, vault2, "Adversary vault")
+	writeNote(t, vault2, ".omnipus-vault/records/invoice.yaml", baseViewsTestSchema)
+	writeNote(t, vault2, ".omnipus-vault/views/authored.yaml",
+		"name: vault2-authored\ntype: invoice\nlabel: Vault2 authored\nproperties: [client]\n")
+	inner := filepath.Join(vault2, "inner")
+	makeKnowledgeBase(t, inner, "Inner vault")
+	writeNote(t, inner, ".omnipus-vault/records/invoice.yaml", baseViewsTestSchema)
+	writeNote(t, inner, ".omnipus-vault/views/inner-view.yaml",
+		"name: inner-view\ntype: invoice\nlabel: Inner view\nproperties: [client]\n")
+
+	// Item 1 — addressability of every emitted row across the fixtures.
+	folders := []string{
+		viewVaultRel, viewVaultRel + "/CRM", viewVaultRel + "/Deep", "vault2", "vault2/inner",
+	}
+	seen := 0
+	for _, folder := range folders {
+		for _, e := range listEntriesWithViews(t, api, ws, folder) {
+			if e.IsView == nil || !*e.IsView {
+				continue
+			}
+			seen++
+			require.NotNil(t, e.View, "L4: an is_view row carries its view object")
+			base := "/api/v1/library/" + ws + "/knowledge/"
+			q := "?collection_id=" + url.QueryEscape(e.View.CollectionId)
+			listed := knowledgeGet(t, api, base+"views"+q)
+			require.Equal(t, http.StatusOK, listed.Code, listed.Body.String())
+			views := decodeJSON[gen.KnowledgeCollectionViews](t, listed)
+			names := make([]string, 0, len(views.Views))
+			for _, v := range views.Views {
+				names = append(names, v.Name)
+			}
+			assert.Contains(t, names, e.View.Name,
+				"L4: the views list for %s must contain the emitted row's name %q (folder %s)",
+				e.View.CollectionId, e.View.Name, folder)
+			opened := knowledgeGet(t, api, base+"view"+q+"&view="+url.QueryEscape(e.View.Name))
+			require.Equal(t, http.StatusOK, opened.Code, opened.Body.String())
+			assert.Nil(t, decodeJSON[gen.ViewResult](t, opened).Refusal,
+				"L4: an emitted (collection_id, name) must open, never refuse (folder %s)", folder)
+		}
+	}
+	assert.GreaterOrEqual(t, seen, 4, "fixture drift: the fixtures must emit several view rows")
+
+	// Item 2 — the nested knowledge base contributes nothing anywhere below
+	// its root.
+	requireNoViewFacts(t, listEntriesWithViews(t, api, ws, "vault2/inner"))
+
+	storageRel := "vault2/inner/.omnipus-vault/views"
+	storageRows := listEntries(t, api, ws, storageRel, "&include_hidden=true")
+	row, ok := findEntryByPath(storageRows, storageRel+"/inner-view.yaml")
+	require.True(t, ok, "L18: the nested storage file itself is still listed plainly (rows: %v)",
+		viewRowNames(t, storageRows))
+	require.Nil(t, row.IsView, "L18: the nested storage file must not be decorated with is_view")
+	require.Nil(t, row.View, "L18: the nested storage file must carry no view object")
+
+	listed := knowledgeGet(t, api, "/api/v1/library/"+ws+"/knowledge/views?collection_id="+
+		url.QueryEscape(collectionIDOf(t, api, ws, "vault2/inner")))
+	require.Equal(t, http.StatusOK, listed.Code, listed.Body.String())
+	assert.Empty(t, decodeJSON[gen.KnowledgeCollectionViews](t, listed).Views,
+		"L18: the nested id still enumerates an empty views list — nothing is widened")
+}
+
+// --- S2 ---------------------------------------------------------------------
+
+// TestLibraryEntriesViews_StorageSymlinkRowStaysUndecorated pins the storage
+// annotation rule: a row of a REAL storage directory is decorated only from
+// the authorized storage file itself. A YAML-named leaf link in the storage
+// directory must stay an ordinary plain row — no is_view, no view object —
+// and nothing from the linked-to file may appear anywhere in the response.
+// The positive control (a real storage file is decorated) proves the
+// annotation branch runs at all.
+//
+// RED on the current tree: the annotation branch matches by file name and
+// decorates the link row from the linked-to file's bytes.
+//
+// On the never-opened half of the guarantee: the shared loaders expose no
+// seam a test can observe reads through, so this test asserts the guarantee
+// at the response level (no decorated fields, none of the linked-to file's
+// content). No production hook was invented for it; the gap is recorded in
+// the round report.
+func TestLibraryEntriesViews_StorageSymlinkRowStaysUndecorated(t *testing.T) {
+	api, ws := seedViewListingVault(t)
+	storageRel := viewVaultRel + "/.omnipus-vault/views"
+
+	outside := t.TempDir()
+	outsideLabel := "OUTSIDE_STAY_LABEL"
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "target.yaml"),
+		[]byte("name: stow\ntype: invoice\nlabel: "+outsideLabel+"\nproperties: [client]\n"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "target.yaml"),
+		filepath.Join(workDir(api, ws), storageRel, "stow.yaml")))
+
+	rows := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+	stow, ok := findEntryByPath(rows, storageRel+"/stow.yaml")
+	require.True(t, ok, "fixture drift: the linked leaf must still be listed plainly (rows: %v)",
+		viewRowNames(t, rows))
+	require.False(t, stow.IsDir, "fixture drift: the linked leaf is a file row")
+	require.Nil(t, stow.IsView,
+		"the storage annotation must not decorate a leaf link with is_view")
+	require.Nil(t, stow.View,
+		"the storage annotation must not attach a view object to a leaf link")
+
+	real, ok := findEntryByPath(rows, storageRel+"/invoices--outstanding.yaml")
+	require.True(t, ok, "fixture drift: the real storage file must be present")
+	require.NotNil(t, real.IsView, "control: a real storage file's row is decorated")
+	require.True(t, *real.IsView, "control: a real storage file's row is a view row")
+	require.NotNil(t, real.View, "control: a real storage file's row carries its view object")
 }
 
 // --- L7 ---------------------------------------------------------------------
