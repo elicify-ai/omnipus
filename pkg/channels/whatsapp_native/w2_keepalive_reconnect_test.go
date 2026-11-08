@@ -4,6 +4,9 @@ package whatsapp
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/url"
 	"runtime"
 	"testing"
 	"time"
@@ -210,10 +213,20 @@ func TestKeepAlive_RepeatedTimeoutsDuringAndAfterReconnectDialExactlyOnce(t *tes
 	f.ch.eventHandler(first)
 	w2WaitOurReconnectHeld(t, held)
 	// More dead-connection timeouts while the one reconnect is still pending:
-	// keepAliveLoop would keep emitting them, each newer than the last.
+	// keepAliveLoop would keep emitting them, each newer than the last. Record
+	// the newest timestamp observed: the equality boundary below is against the
+	// latest one, not against the first.
+	var pendingLatest time.Time
 	for n := 2; n <= 4; n++ {
-		f.ch.eventHandler(w2KeepAliveTimeout(whatsmeow.KeepAliveMaxFailTime+time.Second, n))
+		ev := w2KeepAliveTimeout(whatsmeow.KeepAliveMaxFailTime+time.Second, n)
+		pendingLatest = ev.LastSuccess
+		f.ch.eventHandler(ev)
 	}
+	// The same latest timestamp again while the reconnect is still pending: one
+	// failed keepalive episode repeats its LastSuccess (keepalive.go keeps
+	// lastSuccess until a ping succeeds), so the pending reconnect must absorb
+	// it without dialling or restarting.
+	f.ch.eventHandler(&events.KeepAliveTimeout{ErrorCount: 7, LastSuccess: pendingLatest})
 	select {
 	case <-server.connected:
 		t.Fatalf("a handshake completed while the one reconnect was held and later timeouts were being dropped (handshakes=%d)", server.handshakes.Load())
@@ -248,6 +261,11 @@ func TestKeepAlive_RepeatedTimeoutsDuringAndAfterReconnectDialExactlyOnce(t *tes
 	} {
 		f.ch.eventHandler(stale)
 	}
+	// Equality with the LATEST observed timestamp after the claim cleared: the
+	// same episode's timestamp must not start a second reconnect now that
+	// nothing is pending. Correct code drops it as not newer; a mutant that
+	// lets the equal boundary through dials again right here.
+	f.ch.eventHandler(&events.KeepAliveTimeout{ErrorCount: 8, LastSuccess: pendingLatest})
 	select {
 	case <-server.connected:
 		t.Fatalf("a stale past-threshold timeout after the completed reconnect dialled again (handshakes=%d)", server.handshakes.Load())
@@ -257,4 +275,73 @@ func TestKeepAlive_RepeatedTimeoutsDuringAndAfterReconnectDialExactlyOnce(t *tes
 		"R3: repeated timeouts during and after one keepalive reconnect still produce exactly one reconnect dial, and it is ours")
 	require.False(t, w2ReconnectingUnderLock(f.ch), "R3: no reconnect is left running after the repeated timeouts")
 	require.True(t, client.IsConnected(), "R3: the channel ends connected after the repeated timeouts")
+}
+
+// TestReconnect_FailureIsVisibleInTheChannelStatusAndRecoveryClearsIt pins the
+// no-silent-swallow rule for our managed reconnect (issue #1687: our loop is
+// the single reconnect owner): when a reconnect dial fails for an unexpected
+// (non-cancellation) reason, the failure must be visible through the channel's
+// EXISTING status surface — the BaseChannel running flag (pkg/channels/base.go
+// IsRunning/SetRunning) — which is what this channel already uses to report
+// connection state: publishNativeRunning sets it on a successful connect and
+// disposeNative clears it on stop, and manager.GetStatus reports it per
+// channel. Today the error arm of reconnectWithBackoff only logs, so a broken
+// connection keeps reporting running: the RED this test must show. A later
+// successful reconnect clears it again.
+//
+// The unexpected failure is deterministic without touching production code:
+// the captured client's proxy points at a closed local port (the same shape as
+// the offline fixture), so every reconnect dial is refused while the live
+// socket is dropped remotely; SetProxy(nil) — the library's own reset path —
+// restores direct dialling for the recovery leg.
+func TestReconnect_FailureIsVisibleInTheChannelStatusAndRecoveryClearsIt(t *testing.T) {
+	f, server, captured, remote := w2StartLinkedAgainstFakeServer(t)
+	require.Equal(t, int32(1), server.handshakes.Load(), "instrument: exactly the initial dial so far")
+	require.True(t, f.ch.IsRunning(), "instrument: the connected channel reports running through its existing status surface")
+	brokenListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	brokenAddr := brokenListener.Addr().String()
+	require.NoError(t, brokenListener.Close())
+	brokenProxy, err := url.Parse("http://" + brokenAddr)
+	require.NoError(t, err)
+	captured.SetProxy(http.ProxyURL(brokenProxy))
+	held, release := fix1HoldCapturedReconnect(t)
+	require.NoError(t, remote.CloseNow(), "instrument: the remote drop reached the socket")
+	w2WaitOurReconnectHeld(t, held)
+	release()
+	// A refused dial returns quickly. Give the failure a bounded moment to land
+	// while the broken endpoint stays broken, then require it visible.
+	failureVisible := make(chan struct{})
+	go func() {
+		for {
+			if !f.ch.IsRunning() {
+				close(failureVisible)
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+	select {
+	case <-failureVisible:
+	case <-time.After(2 * time.Second):
+	}
+	require.False(t, f.ch.IsRunning(),
+		"an unexpected reconnect failure must be visible through the channel's existing status surface (IsRunning — the flag publishNativeRunning sets and manager.GetStatus reports), not swallowed into the log")
+	// Recovery: restore direct dialling; the loop's next attempt succeeds and
+	// the reported state clears again. The bound covers reconnectWithBackoff's
+	// 5s initial backoff plus one localhost handshake.
+	captured.SetProxy(nil)
+	select {
+	case <-server.connected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the managed reconnect did not recover after the endpoint returned")
+	}
+	require.True(t, f.ch.IsRunning(), "a later successful reconnect clears the reported failure")
+	select {
+	case <-server.connected:
+		t.Fatalf("a further reconnect dial completed after recovery (handshakes=%d)", server.handshakes.Load())
+	case <-time.After(5 * time.Second):
+	}
+	require.Equal(t, int32(2), server.handshakes.Load(),
+		"exactly one reconnect dial on recovery")
 }
