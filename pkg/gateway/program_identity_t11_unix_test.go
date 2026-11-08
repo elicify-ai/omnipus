@@ -28,6 +28,8 @@ type t11ProgramIdentityFixture struct { // not-wire-format: filesystem fixture o
 // Fixtures emit a fixed local protocol response and only write local markers.
 func t11ProgramIdentity(t *testing.T) *t11ProgramIdentityFixture {
 	t.Helper()
+	// Fixtures use an absolute shell and builtins, never an installed CLI.
+	t.Setenv("PATH", t.TempDir())
 	f := t8SettingsAPI(t)
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
