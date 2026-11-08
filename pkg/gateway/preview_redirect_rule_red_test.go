@@ -93,6 +93,8 @@ func piRedNewRedirectHarness(t *testing.T) *piRedRedirectHarness {
 	api.devServers = reg
 	devEntry, regErr := reg.Register(piRedRedirectAgent, upstreamPort(t, upstream.URL), 0, "npm run dev", 10)
 	require.NoError(t, regErr)
+	require.NotNil(t, devEntry, "Register must return the dev registration")
+	require.NotEmpty(t, devEntry.Token, "Register must mint a non-empty token")
 	h.devToken = devEntry.Token
 
 	mainMux := http.NewServeMux()
@@ -243,9 +245,28 @@ func TestPreviewRedirectRule(t *testing.T) {
 // needed.
 func piRedRedirectLabel(t *testing.T, h *piRedRedirectHarness) string {
 	t.Helper()
-	label := middleware.PreviewLabelForToken(h.devToken)
+	// The dev registration is the mint (the store-level Register, so there is
+	// no directory to write and no JSON to parse): check it exists, then build
+	// the isolated_url exactly as the tool's mint does and split it.
+	entry := h.api.devServers.Lookup(h.devToken)
+	require.NotNil(t, entry, "the dev registration must exist under its own token")
+	require.Equal(t, piRedRedirectAgent, entry.AgentID, "the dev registration must belong to the harness agent")
+
+	labelURL := middleware.PreviewIsolatedURL("http://localhost:"+h.port, h.devToken)
+	require.NotEmpty(t, labelURL, "the dev mint must produce an isolated_url (FR-001/FR-022)")
+	u := strings.TrimPrefix(labelURL, "http://")
+	u = strings.TrimSuffix(u, "/")
+	parts := strings.SplitN(u, ".", 2)
+	require.Len(t, parts, 2, "isolated_url must be <label>.localhost[:port], got %q", labelURL)
+	label := parts[0]
+
+	require.Equal(t, middleware.PreviewLabelForToken(h.devToken), label,
+		"the URL's label must be derived from the dev token")
 	require.True(t, middleware.IsValidPreviewLabel(label),
 		"the dev registration's label must be a valid preview label, got %q", label)
+	byLabel := h.api.devServers.LookupByLabel(label)
+	require.NotNil(t, byLabel, "the label must resolve to a dev registration")
+	require.Equal(t, h.devToken, byLabel.Token, "the label must resolve to THIS dev registration, not another")
 	return label
 }
 
