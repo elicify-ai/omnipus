@@ -259,6 +259,8 @@ func scrubberAssertSpellingEchoMasked(t *testing.T, cred string, spellings []str
 // be mixed with literal characters of the same value, and may concern a
 // code point below U+00A0 as well. In every variant the value must not
 // reach the sink in any recoverable spelling, and the mask must stand in.
+// The unicode_* rows mix a Unicode escape with a \xHH escape in one
+// field; character_octal spells a character as a three-digit octal escape.
 // The byte-identity controls below show credential-free content is
 // untouched.
 func TestScrubber_RegisteredSpellingEchoesNeverReachFileSink(t *testing.T) {
@@ -291,6 +293,28 @@ func TestScrubber_RegisteredSpellingEchoesNeverReachFileSink(t *testing.T) {
 		field := strconv.Quote(`provider echoed token-\x85-8F at retry`)
 		scrubberAssertSpellingEchoMasked(t, cred, scrubberCodePointSpellings('\u0085'), field)
 	})
+
+	t.Run("unicode_hex_composed", func(t *testing.T) {
+		const cred = "töken-éa-7M"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed t\u00f6ken-\xe9a-7M at retry`)
+		// No spelling list: the mask assertion carries this row.
+		scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+	})
+
+	t.Run("unicode_long_hex_composed", func(t *testing.T) {
+		const cred = "tüken-éb-3N"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed t\U000000fcken-\xe9b-3N at retry`)
+		scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+	})
+
+	t.Run("character_octal", func(t *testing.T) {
+		const cred = "token-é-9W"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed token-\351-9W at retry`)
+		scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+	})
 }
 
 // TestScrubber_SpellingEscapesCredentialFreeFieldStaysByteIdentical is the
@@ -319,4 +343,52 @@ func TestScrubber_AsciiCredentialUnrelatedFieldStaysByteIdentical(t *testing.T) 
 	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
 	require.Equal(t, field, values[0],
 		"an unrelated field must reach the sink byte-for-byte")
+}
+
+// TestScrubber_ComposedEscapeKindsCredentialFreeFieldStaysByteIdentical
+// extends the byte-identity controls to the remaining escape kinds: a
+// credential-free field mixing short hex with a Unicode escape, and one
+// carrying octal escapes, must both reach the sink unchanged.
+func TestScrubber_ComposedEscapeKindsCredentialFreeFieldStaysByteIdentical(t *testing.T) {
+	t.Run("hex_with_unicode", func(t *testing.T) {
+		scrubberRegisterCredential(t, "plain-needle-4K")
+		field := strconv.Quote(`provider echoed \xf6 and \u00e9 and \U000000e9 in an unrelated retry`)
+		raw := scrubberLogRawField(t, field)
+		values := scrubberFileStringValues(t, raw)
+		require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+		require.Equal(t, field, values[0],
+			"a credential-free field with composed escape text must reach the sink byte-for-byte")
+	})
+
+	t.Run("character_octal", func(t *testing.T) {
+		scrubberRegisterCredential(t, "plain-needle-4K")
+		field := strconv.Quote(`provider echoed \351 and \240 in an unrelated retry`)
+		raw := scrubberLogRawField(t, field)
+		values := scrubberFileStringValues(t, raw)
+		require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+		require.Equal(t, field, values[0],
+			"a credential-free field with octal escape text must reach the sink byte-for-byte")
+	})
+}
+
+// TestScrubber_FinalCheckMasksWholeField is the regression for the scrubber's
+// last check before a decoded field is written: a field whose written form
+// would itself hold the registered value is replaced whole. It is separate
+// from TestScrubber_QuoteBoundaryFailSafeMasksWholeField, whose input is
+// handled earlier in the scrub.
+func TestScrubber_FinalCheckMasksWholeField(t *testing.T) {
+	const unit = "edge-é-9"
+	const cred = unit + "\""
+	scrubberRegisterCredential(t, cred)
+	field := `retry edge-\xc3\xa9-9\" tail ` + unit
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	for _, variant := range scrubberDecodeClosure(values[0]) {
+		require.NotContains(t, variant, cred,
+			"a recoverable spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+			scrubberMaskToken)
+	}
+	require.Equal(t, scrubberMaskToken, values[0],
+		"the whole field must be replaced by %s", scrubberMaskToken)
 }
