@@ -105,6 +105,15 @@ const (
 	// registered as a bare literal below) — FR-018c: two distinct record
 	// shapes under one audit event kind.
 	EventSkillCall = "skill.call"
+	// EventSkillBuiltinUpdated, EventSkillBuiltinRetired and
+	// EventSkillBuiltinRetiredKept are the start-up built-in facts (skills
+	// spec r15 §5.12, §8.5): a current built-in replaced with its shipped
+	// version, a retired built-in removed, and a retired name kept because
+	// its folder was not placed by Omnipus. The gateway replays them once the
+	// audit logger exists.
+	EventSkillBuiltinUpdated     = "skill.builtin_updated"
+	EventSkillBuiltinRetired     = "skill.builtin_retired"
+	EventSkillBuiltinRetiredKept = "skill.builtin_retired_kept"
 	// EventPlatformSignIn records every attempt to open a session from an
 	// omnipus.ai account (ADR-0008 ruling 5; pkg/gateway/rest_platform_auth.go).
 	// Decision is allow for a completed sign-in and deny for every refusal
@@ -130,12 +139,22 @@ const (
 	DecisionError = "error"
 )
 
+// skill.write outcome values (skills spec r15 §5.12): every skill change is
+// recorded with exactly one of these.
+const (
+	DecisionSkillCommitted      = "committed"
+	DecisionSkillRefused        = "refused"
+	DecisionSkillPartial        = "partial"
+	DecisionSkillExternalChange = "external_change"
+)
+
 // IsValidDecision reports whether d is one of the recognized Decision values.
 // Returns false for unknown values (typos, deprecated values) so the audit
 // pipeline can warn-once and continue rather than reject the entry.
 func IsValidDecision(d Decision) bool {
 	switch d {
-	case DecisionAllow, DecisionDeny, DecisionError:
+	case DecisionAllow, DecisionDeny, DecisionError,
+		DecisionSkillCommitted, DecisionSkillRefused, DecisionSkillPartial, DecisionSkillExternalChange:
 		return true
 	}
 	return false
@@ -188,6 +207,7 @@ var validEventNames = map[EventName]struct{}{
 	EventToolPolicyAskRequested:         {},
 	EventToolPolicyAskGranted:           {},
 	EventToolPolicyAskDenied:            {},
+	EventChannelOutboundWrite:           {},
 	EventToolCollisionMCPRejected:       {},
 	EventAgentConfigCorrupt:             {},
 	EventAgentConfigInvalidPolicyValue:  {},
@@ -221,6 +241,9 @@ var validEventNames = map[EventName]struct{}{
 	// gate (see cancel.go's RequestCancel doc comment for the root-cause
 	// writeup this closes).
 	EventTurnCancelBackgroundKilled: {},
+	// External-CLI spawn record (r17 §3.10), emitted by
+	// pkg/agent/external_run_program.go's auditRunSpawn.
+	EventExternalCLIRun: {},
 	// Live interactive browser panel events (ADR-038 D6).
 	EventBrowserInstanceCreated: {},
 	EventBrowserAction:          {},
@@ -255,8 +278,11 @@ var validEventNames = map[EventName]struct{}{
 	// a bare literal per that file's own reconciliation note, since the
 	// constant lives in pkg/tools, not pkg/audit (importing pkg/tools
 	// from pkg/audit would invert this codebase's dependency direction).
-	EventSkillCall: {},
-	"skill.write":  {},
+	EventSkillCall:               {},
+	"skill.write":                {},
+	EventSkillBuiltinUpdated:     {},
+	EventSkillBuiltinRetired:     {},
+	EventSkillBuiltinRetiredKept: {},
 	// AskUserQuestion default-safe auto-resolution (askuserquestion-tool-
 	// spec v3 US-3 S2/§4; emitted by the gateway's askuser.AuditSink
 	// adapter for every 30-minute timer fire).
@@ -341,6 +367,8 @@ var validEventNames = map[EventName]struct{}{
 	EventMediaCascadeDelete: {},
 	// omnipus-system-agent FR-172: group-chat (room) changes. See events.go.
 	EventRoomChanged: {},
+	// 6b U2b: a held scheduled task fire that could not start. See events.go.
+	EventTaskTriggerFireNotStarted: {},
 	// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
 	// See shell_permission_events.go for the wire shape contract.
 	EventShellModeChange:          {},

@@ -26,16 +26,25 @@ func historyAppendZero[T any](values *[]T) *T {
 }
 func historyEmptySlice[T any](_ []T) []T { return make([]T, 0) }
 func historyNewField[T any](p **T) *T    { *p = new(T); return *p }
+
+// historyFactOrigin is the one origin builder for every entry-derived carrier.
+// turn_id is the persisted source record's OWN recorded turn (spec D1 S11d):
+// omitted when the record has none (unknown), never inferred from the active
+// turn, the session or a neighbouring record.
 func historyFactOrigin(e *session.ChatHistoryEntry) *generated.HistoryEntryOrigin {
 	o := &generated.HistoryEntryOrigin{Position: string(e.Position)}
 	if e.Entry.ID != "" {
 		id := e.Entry.ID
 		o.EntryId = &id
 	}
+	if e.Entry.TurnID != "" {
+		turn := e.Entry.TurnID
+		o.TurnId = &turn
+	}
 	return o
 }
 func historyWirePageInfo(info session.ChatHistoryPageInfo, sid string) (generated.SessionHistoryPageInfo, error) {
-	out := generated.SessionHistoryPageInfo{Mode: info.Mode, Limit: info.Limit, MinRows: info.MinRows, RowCount: info.RowCount, SourceGroupCount: info.SourceGroupCount, SoftByteBudget: info.SoftByteBudget, ProjectedBytes: info.ProjectedBytes, ByteBudgetExceeded: info.ByteBudgetExceeded, StopReason: info.StopReason, RetentionGeneration: info.RetentionGeneration, FirstPosition: historyOptionalPosition(info.FirstPosition), LastPosition: historyOptionalPosition(info.LastPosition)}
+	out := generated.SessionHistoryPageInfo{Mode: info.Mode, Limit: info.Limit, MinRows: info.MinRows, RowCount: info.RowCount, SourceGroupCount: info.SourceGroupCount, SoftByteBudget: info.SoftByteBudget, ByteCeiling: info.ByteCeiling, ProjectedBytes: info.ProjectedBytes, ByteBudgetExceeded: info.ByteBudgetExceeded, StopReason: info.StopReason, RetentionGeneration: info.RetentionGeneration, FirstPosition: historyOptionalPosition(info.FirstPosition), LastPosition: historyOptionalPosition(info.LastPosition)}
 	if info.BudgetOverride != "" {
 		v := info.BudgetOverride
 		out.BudgetOverride = &v
@@ -161,7 +170,7 @@ func historyMeterEnvelope(value any) (int64, error) {
 	if err = json.Unmarshal(envelope["page_info"], &info); err != nil {
 		return 0, err
 	}
-	for _, key := range []string{"projected_bytes", "soft_byte_budget", "byte_budget_exceeded", "budget_override", "stop_reason"} {
+	for _, key := range []string{"projected_bytes", "soft_byte_budget", "byte_ceiling", "byte_budget_exceeded", "budget_override", "stop_reason"} {
 		delete(info, key)
 	}
 	envelope["page_info"], err = json.Marshal(info)
@@ -247,7 +256,12 @@ func validatePreparedHistoryPage(ctx context.Context, prepared preparedHistoryPa
 			return errHistoryPageProtocol
 		}
 	}
+	// Only the soft budget may not underfill; a byte_ceiling stop may (A2.3).
 	if i.StopReason == "byte_budget" && i.RowCount < i.MinRows {
+		return errHistoryPageProtocol
+	}
+	// A page stays within the ceiling unless it is exactly one whole group.
+	if i.ByteCeiling < 1 || i.ProjectedBytes > i.ByteCeiling && i.SourceGroupCount != 1 {
 		return errHistoryPageProtocol
 	}
 	raw, err := json.Marshal(i)

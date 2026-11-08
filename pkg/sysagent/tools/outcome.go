@@ -52,12 +52,11 @@ var (
 	_ tools.ChangeTool = (*ChannelConfigureTool)(nil)
 	_ tools.ChangeTool = (*ChannelEnableTool)(nil)
 	_ tools.ChangeTool = (*ChannelDisableTool)(nil)
-	_ tools.ChangeTool = (*SkillCreateTool)(nil)
 	_ tools.ChangeTool = (*SkillEditTool)(nil)
-	_ tools.ChangeTool = (*SkillRemoveTool)(nil)
 	_ tools.ChangeTool = (*SelectSecretVersionTool)(nil)
 	_ tools.ChangeTool = (*RemoveSecretTool)(nil)
 	_ tools.ChangeTool = (*ChannelConnectTool)(nil)
+	_ tools.ChangeTool = (*ChannelOutboundTool)(nil)
 )
 
 func (t *AgentCreateTool) ReportsChangeOutcome()       {}
@@ -73,6 +72,4 @@ func (t *MCPRemoveTool) ReportsChangeOutcome()         {}
 func (t *ChannelConfigureTool) ReportsChangeOutcome()  {}
 func (t *ChannelEnableTool) ReportsChangeOutcome()     {}
 func (t *ChannelDisableTool) ReportsChangeOutcome()    {}
-func (t *SkillCreateTool) ReportsChangeOutcome()       {}
 func (t *SkillEditTool) ReportsChangeOutcome()         {}
-func (t *SkillRemoveTool) ReportsChangeOutcome()       {}

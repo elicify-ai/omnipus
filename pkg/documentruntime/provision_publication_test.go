@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -21,10 +22,13 @@ func TestProvisionFirstPartyInventoryFailureDoesNotPublishManifest(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.MkdirAll(layout.Skills, 0o755); err != nil {
+	// r15 §11 removes the skill copy, not inventory-failure atomicity. Put
+	// the real fault beside a retained runtime probe asset instead.
+	probeRoot := filepath.Join(layout.Lib, "python", "omnipus_document_probe")
+	if err = os.MkdirAll(probeRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	broken := filepath.Join(layout.Skills, "unreadable-asset")
+	broken := filepath.Join(probeRoot, "unreadable-asset")
 	if err = os.Symlink(filepath.Join(layout.Prefix, "missing-asset"), broken); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +44,7 @@ func TestProvisionFirstPartyInventoryFailureDoesNotPublishManifest(t *testing.T)
 	}
 
 	// Once the asset problem is removed, retry must actually inventory the
-	// exported packages rather than accept an earlier empty-assets manifest.
+	// retained probe assets rather than accept an earlier empty-assets manifest.
 	if err = os.Remove(broken); err != nil {
 		t.Fatal(err)
 	}
@@ -101,19 +105,23 @@ func TestProvisionFirstPartyRebuildsEmptyInventoryManifest(t *testing.T) {
 			if len(got.Assets) == 0 {
 				t.Fatal("matching revision with empty asset inventory must be rebuilt")
 			}
-			// Pin the four required bundled packages independently of DocumentSkillIDs.
-			for _, id := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {
-				rel := "skills/" + id + "/SKILL.md"
-				found := false
-				for _, asset := range got.Assets {
-					if asset.Path == rel {
-						found = true
-						break
-					}
+			// r15 §11 removes the four copied skill packages. The retained
+			// probe must still be inventoried, and no retired copy may return.
+			const probeMain = "lib/python/omnipus_document_probe/__main__.py"
+			found := false
+			for _, asset := range got.Assets {
+				if strings.HasPrefix(asset.Path, "skills/") {
+					t.Errorf("retired toolchain skill copy reappeared in inventory: %s", asset.Path)
 				}
-				if !found {
-					t.Errorf("rebuilt inventory is missing %s", rel)
+				if asset.Path == probeMain {
+					found = true
 				}
+			}
+			if !found {
+				t.Errorf("rebuilt inventory is missing %s", probeMain)
+			}
+			if err = VerifyAssets(layout.Prefix, got.Assets); err != nil {
+				t.Fatalf("rebuilt inventory must checksum the retained files: %v", err)
 			}
 			data, err = os.ReadFile(layout.Manifest)
 			if err != nil {

@@ -403,8 +403,47 @@ describe('Button — aria state contract', () => {
 })
 
 
-describe('Button persistent action announcements', () => {
-  it('updates the same initially empty live region through action states and clears idle feedback', () => {
+// CHECK finding 2 (round 4): the `announcement` input is wired ONLY to the
+// control's one status region. It must never reach the accessible name or
+// the accessible description. Before this describe existed, the mutant
+// `feedbackDescription ?? announcement ?? ariaDescription` on the
+// aria-description line survived the entire suite green — nothing locked
+// the "never the description" half of the prop's contract.
+describe('Button — announcement never changes the accessible name or description (CHECK F2)', () => {
+  it('a caller-set aria-description survives the announcement; the announcement still reaches the region', () => {
+    render(<Button announcement="Saved" aria-description="Saves the draft to the vault">Save</Button>)
+    const button = screen.getByRole('button', { name: 'Save' })
+    // The name is unchanged by the announcement.
+    expect(button).toBeInTheDocument()
+    // The description is EXACTLY what the caller set — never the
+    // announcement text. (The mutant reads `announcement` first and fails
+    // here with "Saved".)
+    expect(button).toHaveAttribute('aria-description', 'Saves the draft to the vault')
+    // The announcement is doing its real job in the one region.
+    expect(screen.getByRole('status')).toHaveTextContent('Saved')
+  })
+
+  it('with no caller description, the announcement does not BECOME one', () => {
+    render(<Button announcement="Saved">Save</Button>)
+    expect(screen.getByRole('button', { name: 'Save' })).not.toHaveAttribute('aria-description')
+    expect(screen.getByRole('status')).toHaveTextContent('Saved')
+  })
+
+  it('changing the announcement reroutes the region but never the description', () => {
+    const { rerender } = render(
+      <Button announcement="Saved" aria-description="Saves the draft to the vault">Save</Button>,
+    )
+    const button = screen.getByRole('button', { name: 'Save' })
+    expect(button).toHaveAttribute('aria-description', 'Saves the draft to the vault')
+    rerender(
+      <Button announcement="Saved just now" aria-description="Saves the draft to the vault">Save</Button>,
+    )
+    expect(button).toHaveAttribute('aria-description', 'Saves the draft to the vault')
+    expect(screen.getByRole('status')).toHaveTextContent('Saved just now')
+  })
+})
+
+describe('Button persistent action announcements', () => {  it('updates the same initially empty live region through action states and clears idle feedback', () => {
     const { rerender } = render(<Button>Save</Button>)
     const region = screen.getByRole('status')
     expect(region).toBeEmptyDOMElement()

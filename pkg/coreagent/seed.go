@@ -134,6 +134,8 @@ var allStaticToolNames = []string{
 	// PANICS validateOverrideKeys at boot.
 	"goal_claim",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
+	// r17 §7.9 — the read-back tools beside list_tasks.
+	"get_task", "get_plan", "get_goal",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
 	"set_todos",
@@ -202,19 +204,19 @@ var allStaticToolNames = []string{
 
 	// Sysagent management tools.
 	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
-	"read_agent_metadata",
 	"configure_provider", "list_providers", "test_provider", "list_models",
 	"run_doctor", "get_usage",
 	"add_mcp_server", "remove_mcp_server", "list_mcp_servers",
-	"create_skill", "edit_skill",
-	"remove_skill", "list_skills",
+	"edit_skill", "get_skill", "list_skills",
 	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 	"get_config", "set_config",
-	"create_agent", "get_agent", "get_agent_tools", "update_agent", "delete_agent",
+	"create_agent", "get_agent", "update_agent", "delete_agent",
 
 	// ADR-052 — autonomous agent plan execution: planning tools + the
 	// verifier-role-only inspect_session tool.
 	"create_plan", "execute_plan", "run_task", "inspect_session",
+	// r17 §7.3 — update_plan beside create_plan.
+	"update_plan",
 
 	// ADR-055 (plan-supervisor-spec FR-006) — the supervision/containment
 	// pair. plan_correct is PlanSupervisor's ONLY tool (the correction verb
@@ -344,6 +346,9 @@ var allStaticToolNames = []string{
 	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
 	"connect_channel", "connect_mailbox", "set_agent_permissions",
 	"read_conversation", "list_mailboxes",
+	// channels-spec-r8 FR-032: the dedicated outbound-list writer, implemented
+	// in pkg/sysagent/tools and always asking (FR-036).
+	"set_channel_outbound",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -439,6 +444,21 @@ func coreAgentSkills(id CoreAgentID) []string {
 	default:
 		return nil
 	}
+}
+
+// missingSkills returns the names in want that have lacks, in want's order.
+func missingSkills(have, want []string) []string {
+	held := make(map[string]bool, len(have))
+	for _, name := range have {
+		held[name] = true
+	}
+	var out []string
+	for _, name := range want {
+		if !held[name] {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
@@ -694,6 +714,18 @@ func SeedConfig(cfg *config.Config) bool {
 				sc.modified = true
 			}
 		}
+		// FR-135 (#1482, tool-parity r17 §6, US-14): the core Omnipus agent's
+		// workflow skills are product-owned, not an operator choice — without
+		// them its own workflows (Add agent, Set up a team) dead-end. They are
+		// reconciled at every start: a missing current grant is added; every
+		// other entry (a person's extra skill) is kept. Other core agents are
+		// untouched (the D5.1 rule above stands for them).
+		if ca.ID == IDOmnipus {
+			if missing := missingSkills(a.Skills, coreAgentSkills(IDOmnipus)); len(missing) > 0 {
+				a.Skills = append(a.Skills, missing...)
+				sc.modified = true
+			}
+		}
 
 		// Idempotent Type re-enforcement (tamper protection). The subagent tier
 		// (worker + specialists) MUST carry Type=worker and base agents Type=core —
@@ -874,7 +906,7 @@ const SkillsMigrationDefineGoalRename = "adr080-define-goal-rename"
 // per-agent policies, not a runtime fallback or an extra permission layer.
 // The global ceiling still bounds every grant under strictest-wins.
 //
-// REST create, create_agent and get_agent_tools preview share this constructor.
+// REST create, create_agent and get_agent's new-agent preview share this constructor.
 // Worker callers apply RestrictForWorkerTier before any operator overrides.
 // Each call returns independent maps so one agent cannot change another's seed.
 //
@@ -902,27 +934,31 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"delegate":            allow,
 				"list_agents":         allow,
 				"get_agent":           allow,
-				"get_agent_tools":     allow,
 				"inspect_session":     allow,
 				"list_jobs":           allow,
 				"create_plan":         allow,
 				"execute_plan":        allow,
+				"update_plan":         allow,
 				"stop_plan":           allow,
 				"plan_correct":        allow,
 				"list_tasks":          allow,
+				"get_task":            allow,
+				"get_plan":            allow,
+				"get_goal":            allow,
 				"update_task":         allow,
 				"create_task":         allow,
 				"delete_task":         ask,
 				// Discovery and skill loading are seeded data, not forced
-				// grants in the compositor. Skill authoring keeps Ask.
-				"Skill":        allow,
-				"ToolSearch":   allow,
-				"find_skills":  allow,
-				"list_skills":  allow,
-				"create_skill": ask,
-				"edit_skill":   ask,
-				"search_web":   allow,
-				"fetch_url":    allow,
+				// grants in the compositor. Skill changes keep Ask (skills
+				// spec r15 §10); the read of one skill is allowed.
+				"Skill":       allow,
+				"ToolSearch":  allow,
+				"find_skills": allow,
+				"list_skills": allow,
+				"get_skill":   allow,
+				"edit_skill":  ask,
+				"search_web":  allow,
+				"fetch_url":   allow,
 				// A browsing agent can also recover dialogs and hand over
 				// the browser. Upload alone keeps its consent gate.
 				"browser_navigate":      allow,
@@ -975,6 +1011,10 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// ceiling raise does not remove the agent's Ask posture.
 				"environment_setup": ask,
 				"bash":              config.ToolPolicyDeny,
+				// Founder Q4 (2026-11-03): every chat-capable agent may change
+				// a connection's posting list, always with a fresh approval
+				// (channels-spec-r8 FR-036); workers are denied below.
+				"set_channel_outbound": ask,
 			}),
 		},
 	}
@@ -982,11 +1022,13 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 
 // workerTierDeniedTools is the Main-only set from the 2026-10-22 default
 // tool table. Workers may list secrets but ask their main agent to request
-// one; they do not author goals, plans, new tasks or retrospectives.
+// one; they do not author goals, plans, new tasks or retrospectives, and
+// they do not change skills (skills spec r15 §10). Founder Q4 (2026-11-03)
+// opens set_channel_outbound to chat-capable (Main) agents only.
 var workerTierDeniedTools = []string{
 	"answer_request", "read_conversation", "set_goal", "run_retrospective",
-	"create_plan", "execute_plan", "stop_plan", "plan_correct", "create_task",
-	"request_secret",
+	"create_plan", "execute_plan", "update_plan", "stop_plan", "plan_correct", "create_task",
+	"request_secret", "edit_skill", "set_channel_outbound",
 }
 
 // RestrictForWorkerTier turns Main creation defaults into Worker defaults

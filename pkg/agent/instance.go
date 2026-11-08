@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/modelresolve"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -415,6 +416,8 @@ func (nai *newAgentInstance) prepareIdentity() {
 		// is no "unrestricted" state any more: only names present in
 		// agentCfg.Skills resolve or appear in progressive disclosure.
 		nai.contextBuilder.WithSkillAllowlist(nai.agentCfg.Skills)
+		// Skills spec r15 §5.13a SD-30: the identity half of the grant.
+		nai.contextBuilder.WithSkillBindings(nai.agentCfg.SkillGrants)
 		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
 		// verifier runs memoryless for impartial, reproducible verdicts —
 		// its seed leaves MemoryEnabled=false; every other agent defaults on.
@@ -1202,13 +1205,7 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 // model.primary, else the model half of agents.defaults.default_model
 // (ADR-068 D14.1). Empty when neither is set.
 func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
-		return strings.TrimSpace(agentCfg.Model.Primary)
-	}
-	if defaults == nil || defaults.DefaultModel.IsZero() {
-		return ""
-	}
-	return strings.TrimSpace(defaults.DefaultModel.Model)
+	return modelresolve.AgentPrimaryModel(agentCfg, defaults)
 }
 
 // resolveAgentPrimaryProvider returns the provider the agent's primary model is
@@ -1219,13 +1216,7 @@ func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefau
 // exact pair (ADR-068 D14.1), so it is pinned exactly like an explicit
 // per-agent provider and never inferred from a configured passthrough.
 func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
-		return strings.TrimSpace(agentCfg.Model.Provider)
-	}
-	if defaults == nil || defaults.DefaultModel.IsZero() {
-		return ""
-	}
-	return strings.TrimSpace(defaults.DefaultModel.Provider)
+	return modelresolve.AgentPrimaryProvider(agentCfg, defaults)
 }
 
 // warnUnpairedFallbacks reports every configured fallback that does not name
@@ -1264,21 +1255,7 @@ func resolveAgentFallbacks(agentCfg *config.AgentConfig) []string {
 // agents.defaults.model_fallbacks was removed (issue #1340, founder ruling
 // 2026-10-19).
 func resolveAgentFallbackModels(agentCfg *config.AgentConfig) []config.FallbackModel {
-	if agentCfg == nil {
-		return nil
-	}
-	if len(agentCfg.FallbackModels) > 0 {
-		return agentCfg.FallbackModels
-	}
-	if agentCfg.Model == nil || len(agentCfg.Model.Fallbacks) == 0 {
-		return nil
-	}
-	legacy := agentCfg.Model.Fallbacks
-	out := make([]config.FallbackModel, len(legacy))
-	for i, s := range legacy {
-		out[i] = config.FallbackModel{Model: s}
-	}
-	return out
+	return modelresolve.AgentFallbackModels(agentCfg)
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {

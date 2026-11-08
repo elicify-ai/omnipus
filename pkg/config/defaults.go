@@ -261,7 +261,11 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"answer_request": "allow",
 		"send_file":      "allow",
 		"find_skills":    "allow",
-		"install_skill":  "allow",
+		// install_skill: "ask" (founder decision 2026-11-03) — a person
+		// approves each install. Installs whose config already persisted
+		// "allow" keep it: Reconcile adds missing keys only and never
+		// overwrites an operator-set value (Hard Constraint #6).
+		"install_skill":  "ask",
 		"delegate":       "allow",
 		"message_parent": "allow",
 		// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b):
@@ -402,12 +406,11 @@ func defaultToolPoliciesBrowser() map[string]string {
 func defaultToolPoliciesSysagent() map[string]string {
 	return map[string]string{
 		// --- Sysagent management tools ---
-		"create_workspace":    "allow",
-		"update_workspace":    "allow",
-		"delete_workspace":    "ask", // irreversible delete
-		"list_workspaces":     "allow",
-		"get_workspace":       "allow",
-		"read_agent_metadata": "allow",
+		"create_workspace": "allow",
+		"update_workspace": "allow",
+		"delete_workspace": "ask", // irreversible delete
+		"list_workspaces":  "allow",
+		"get_workspace":    "allow",
 		// omnipus-system-agent FR-020: provider, connector, channel, skill and
 		// agent removals/changes on this list ship "ask" — Omnipus confirms the
 		// whole plan once with Go, and each of these still raises its own
@@ -431,11 +434,13 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
 		"list_mcp_servers": "allow",
-		// Q22=B (2026-10-22): ordinary Main/Worker seeds keep a local Ask,
-		// while Omnipus rides this Allow ceiling without a local entry.
-		"create_skill":      "allow",
-		"edit_skill":        "allow",
-		"remove_skill":      "ask", // FR-020
+		// Skills spec r15 §10: the one skill-change tool asks on a fresh
+		// install (Reconcile never overwrites an operator value); Omnipus
+		// rides this ceiling without a local entry. get_skill, the read of
+		// one skill, is allowed everywhere. create_skill and remove_skill
+		// are retired (tools.RetiredToolNames).
+		"edit_skill":        "ask",
+		"get_skill":         "allow",
 		"list_skills":       "allow",
 		"enable_channel":    "ask",   // FR-020
 		"configure_channel": "ask",   // FR-020
@@ -445,7 +450,6 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"get_config":        "allow",
 		"set_config":        "allow",
 		"get_agent":         "allow",
-		"get_agent_tools":   "allow",
 		"create_agent":      "allow",
 		"update_agent":      "allow",
 		"delete_agent":      "ask", // FR-020
@@ -454,7 +458,10 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// asking for, listing and reading secrets, mailboxes and own
 		// conversations is allowed (each is also explicitly denied per agent
 		// wherever §6.5 says so).
-		"connect_channel":       "ask",
+		"connect_channel": "ask",
+		// channels-spec-r8 FR-032: the outbound-list writer ships ask and is
+		// always-ask besides (FR-036: God Mode never lifts it).
+		"set_channel_outbound":  "ask",
 		"connect_mailbox":       "ask",
 		"set_agent_permissions": "ask",
 		"remove_secret":         "ask",
@@ -515,8 +522,15 @@ func defaultToolPoliciesPlanning() map[string]string {
 		// is refused regardless of its stored policy.
 		"create_plan":     "allow",
 		"execute_plan":    "allow",
+		"update_plan":     "allow",
 		"run_task":        "allow",
 		"inspect_session": "allow",
+		// r17 §7.9/§16 D-7: the read-back tools. Every ordinary agent may
+		// read the tasks, plans and goals the visibility rule (§7.8) shows
+		// it; the hidden system roles are denied by their own seeds.
+		"get_task": "allow",
+		"get_plan": "allow",
+		"get_goal": "allow",
 	}
 }
 

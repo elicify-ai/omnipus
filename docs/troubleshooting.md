@@ -61,6 +61,56 @@ A failure of the whole Credential Vault is different: a locked store, an unreada
 
 A fresh install with no credential-store file and no secret references can still start normally. A missing secret, or an entry that fails authentication while another stored entry can be decrypted, remains scoped to the integrations that depend on it rather than becoming a whole-vault failure.
 
+## What a connection's save message means
+
+When you press **Save** or **Save & Enable** in a connection's settings on the **Connectors** screen, the message you see says what happened to the running connection, not only to the saved settings. Only the first two messages below are success messages; after any other message, **Save & Enable** does not turn the connection on.
+
+| Message | What it means | What to do |
+|---|---|---|
+| `Saved. The connection restarted with the new settings.` | The settings were saved and the connection restarted and is running with them. A second note says a restart was attempted and that other connections and scheduled services may have paused briefly while it ran. | Nothing. |
+| `Saved.` | The settings were saved and, according to Omnipus's records, nothing needed applying: the connection is turned off, or these settings were already applied to it with no failed start, unfinished shutdown or stored token still waiting. It does not confirm that the connection is running or reachable right now. With **Save & Enable**, the enable step shows its own result instead. | Nothing for the settings. If the connection does not answer, check its status on the Connectors screen. |
+| `Saved, but the connection is not running: <reason>.` | The settings were saved and applied, but the connection did not start. The reason comes from the connection, for example a rejected token. | Fix the reason and save again. |
+| `Saved. The restart was not confirmed yet; check the connection status in a moment.` | The settings were saved, but the restart did not confirm in time. | Check the connection's status on the Connectors screen shortly. |
+| `Saved, but applying the change did not complete: <reason>. Check the connection status before retrying.` | The settings were saved, but applying them to the running connection failed. This message does not mean the old settings are still running. When Omnipus can read the connection's state, a second message follows: `The connection is currently: running.`, `not running.` or `not loaded.` | Check the status, fix the reason, then save again. |
+| `settings saved, but the running configuration could not be refreshed; the connection was not restarted` | The settings are on disk, but the running configuration was not updated and the connection was not restarted. | Save again. The next successful save, or the next configuration reload, loads the saved settings. |
+| `The credential was saved, but the configuration change was not: …` | A token or other secret from this save was stored, then saving the rest failed. Nothing else was applied, and the connection keeps its previous token until it next restarts. A restart picks up the new value only when the saved settings refer to the credential this form writes (the usual case); if they refer to a different stored credential, the new value stays stored but unused. | Save again: a successful save of the same form applies everything. |
+| `could not save config` or another error | Nothing was saved. | Fix the cause shown and save again. |
+
+When **Save & Enable** does go on to turn the connection on, that enable step reports its own result. If the connection does not start, the message is `Saved, but the connection is not running: <reason>.` — the same not-running wording as a save that applied but did not start — and not **Channel configured and enabled**. The turned-on setting stays saved, so the card shows **Disable**, not Enable. Open **Configure**, correct the credential, and select **Save**. Saving again applies the settings to a connector that is still turned on. Or select **Disable** on the card, then **Enable**. If the turned-on setting is saved but Omnipus cannot confirm that the connection started in time, the message is `The connector is enabled, but its start could not be confirmed yet.` The turned-on setting stays saved. Check the connector's card rather than treating that as a successful start.
+
+### Saving again with the same values
+
+For an enabled connection, pressing **Save** again without changing anything retries an application of the settings that did not finish. Omnipus decides from its own records of applying and starting the connection, not by testing whether the connection is connected right now. When those records show one of the cases below, it restarts the connection and reports the new result:
+
+- a restart that failed earlier;
+- a start that failed when the gateway started;
+- a shutdown of the previous connection that did not finish;
+- a token you stored through **Configure** that was never applied. Leave the token field blank and save; the stored token is used, and you do not need to type it again. This works when the saved settings select the reference the token was stored under.
+- a connection that could not be built at all, for example because its credential reference could not be resolved. While the cause lasts, each save reports the real failure. Once you fix the cause, the same save builds and starts the connection, again without re-entering a stored token.
+
+When none of these cases is recorded, the save answers `Saved.` without restarting anything, even if the connection has since dropped on its own. `Saved.` therefore does not prove that the connection is running; check its status on the Connectors screen.
+
+## The bot ignores someone
+
+A connector whose **Allow From** list is not empty ignores messages from everyone not on the list and sends them no reply. Open the connector's **Configure** panel on the **Connectors** screen. A line `Ignored <count> messages from senders not on the allowed list. Latest: <ids>` means it has ignored such messages since the connector last started; the ids are the latest ignored senders, most recent first. To let that person in, select and copy their id from the line, add it to **Allow From** (separate ids with commas or spaces; on WhatsApp, with commas only), and save. The gateway log also records a newly ignored sender, once, with the message `channel ignored a sender not on the allowed list` and the sender's id — never the message text. A sender is logged again only after 20 other senders have been ignored since. With an empty **Allow From** list, nobody is ignored.
+
+## The agent says a connection is set to "Only answer"
+
+An agent that tries to start a message on a connector set to **Only answer** is refused with a message that ends `The operator can change it in Connectors > <platform> > Configure ("Answer and also start messages"). Nothing was sent.` To allow it, open **Connectors**, open the connector's **Configure** panel, and in **Starting messages** choose **Answer and also start messages**. List the people and groups the agent may message, then press that section's own **Save**. Starting messages works on Discord and Telegram only; see [Starting messages](connectors.md#starting-messages).
+
+## Saving Starting messages is refused or shows a warning
+
+| Message | What it means | What to do |
+|---|---|---|
+| `An earlier change to this connection did not finish applying, so nothing was saved. …` | The connection's saved and running settings differ, because an earlier change was not applied. While they differ, a list save is accepted only if every permission it leaves in place is already granted in both the saved and the running settings. Switching to **Only answer** without adding ids is always accepted. Removing only some ids can still be refused, for example after the connector was bound to a different agent or workspace. | Finish applying the earlier change: any successful save of this connection, or disable and enable it. Then save the list again. |
+| `Discord could not be reached to check <ids>; nothing was saved; try again` | Omnipus could not ask Discord about the new ids in time. It does not mean the ids are wrong. | Check that the connector is connected, wait a moment, and save again. |
+| `Connect the channel first to add Discord ids.` | New Discord ids are checked with Discord, which needs the connector running. | Start the connector, then save again. |
+| `Saved and in force for starting messages. Other settings could not be refreshed: the running configuration could not be reloaded. Check the server log.` | The new list was saved and is already in force. Only other settings of the running configuration could not be refreshed. | Nothing for the list. Check the server log for why the reload failed before relying on other recent changes. |
+
+## An agent-started message never arrived
+
+An agent's started message is reported as `accepted for sending … (delivery not confirmed)`. That only means it was handed over for sending. If sending fails later, or the message is dropped because the connector's queue is full, no notice is posted in the chat; the failure appears only in the gateway log, as `Send failed` or `Outbound queue full, message dropped`. Ordinary replies keep their usual in-chat notices. On Discord, a direct message to a person is refused, and logged the same way, when Discord does not let the bot open the direct message, or does not answer within 5 seconds (for example while rate limiting it). A message that was refused is never sent later.
+
 ## Every request returns 401 Unauthorized
 
 The web app signs you in once, then rides a session cookie. Scripts must present a Bearer token belonging to a configured account or the gateway's CLI token, or match `OMNIPUS_BEARER_TOKEN`.
@@ -87,8 +137,8 @@ A provider can also report an error after it has already started streaming a rep
 
 | What the provider reported | What you see | Retried? |
 |---|---|---|
-| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, inline, like a dropped connection |
-| Rate limit (429) | The rate-limit message | Handed to the fallback chain |
+| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, when nothing of the reply was shown yet — see the next section |
+| Rate limit (429) | The rate-limit message | Yes — see the next section |
 | Billing or credit (402) | The billing message | No |
 | Bad or missing key (401, 403) | The provider-rejected-your-key message | No |
 | The request itself was rejected (400, 422) | The provider-rejected message | No |
@@ -146,8 +196,38 @@ Read the gateway diagnostic log. These cron warnings remain visible at the defau
 |---|---|---|
 | `previous run still in progress` (`reason: overlap`) | Omnipus still considers an earlier run in progress and skips this tick rather than starting overlapping work. | Inspect that job's current work and cleanup before retrying it. |
 | `no owning agent` (`reason: owner-missing`) | The job has no owning agent ID, so it cannot run through the agent runner. | Check its agent assignment and workspace heartbeat configuration. |
+| `one-time job was running when the previous process stopped; running it again` | At gateway startup, a one-time schedule of the gateway's own scheduler was found mid-run from the previous process, which stopped before saving the outcome. It runs again once, so it may repeat work the stopped run already did. A one-time time that passed while the gateway was not running is still skipped, not replayed. | Check whether the stopped run already did the work. |
+| `one-time trigger was running when the previous process stopped; running it again at this boot` | The same recovery for a scheduled task's one-time trigger (a task set to run once): the previous process started that run and stopped before saving the outcome, so the next gateway start runs it again once. A one-time time that passed while the gateway was not running is still skipped, not replayed, and a trigger you edited while the gateway was down keeps the edited rule instead. | Check whether the stopped run already did the work. |
+| `scheduled fire was missed while Omnipus was down; recorded, not replayed` | A task's scheduled fire (its next pending occurrence, or a one-time time) came due while the gateway was not running. It is recorded once as a `missed` entry on the task's run history and the Calendar, so the gap is visible; it is never replayed. | Nothing to do — the entry is informational. Re-run the task manually with Run-now if it should catch up. |
 
 Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
+
+## The model provider can't be reached or is busy
+
+When a request to the model provider fails for a reason that usually passes — the connection drops, the name cannot be looked up, the provider is overloaded (429, 503, 529) or it stops in the middle of an answer — Omnipus tries again automatically. It makes up to **5 more attempts**, waiting about **2, 5, 10, 20 and 40 seconds** in between (about a minute and a half in total). When the provider says how long to wait (a `Retry-After` of up to 120 seconds), that wait is used instead.
+
+While it waits, the chat shows a live line from the first failed attempt on, saying what went wrong in plain words — a rate limit ("is rate-limiting requests right now"), a connection problem ("could not be reached"), an overloaded or erroring provider ("is overloaded or returning server errors"), a reply that stopped midway ("stopped responding mid-answer") or a general "ran into a problem" — together with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
+
+When a retry succeeds, the chat notes that the connection came back and after how many retries.
+
+If the last attempt also fails, the turn ends with the cause in plain words — for example "We couldn't reach the model provider" — and your message stays in the chat, so you can retry or switch models.
+
+What is not retried:
+
+| Failure | What happens |
+|---|---|
+| A wrong or missing key, or no credit (401, 402, 403) | The error appears at once; every retry would fail the same way |
+| The request itself is rejected (unknown model, conversation too long) | The error appears at once |
+| The provider is slow or silent rather than unreachable | Handled by the per-request time limit and the 5-minute silence limit instead, because each such attempt can already take minutes |
+| Part of the reply was already shown when the failure happened | Not retried, so you never see half an answer followed by a second copy |
+
+When the agent has a fallback model, the first model hands over to the fallback at once on a dropped connection or an overload (a rate limit is retried up to 3 times first). The automatic retries above apply to the last model Omnipus can still try.
+
+## The model has gone quiet
+
+A provider can stop sending anything in the middle of a reply. Omnipus waits up to the silence limit before it ends the call — 5 minutes by default, or the `stream_stall_timeout` set for that model; that limit is unchanged. So you can tell a slow answer from a stalled one, the chat shows a calm notice once the model has said nothing for **30 seconds** ("the model hasn't responded for … seconds, still waiting"). When the model is streaming, the notice also says when the silence limit would end the call. The notice disappears as soon as anything arrives again, and **Stop** stays available the whole time.
+
+Anything the provider sends counts as a sign of life, including the model's hidden reasoning and the provider's keep-alive messages, so a model that is thinking without showing text does not trigger the notice. A reply that is not streamed (an agent's fallback model is called that way) counts as silent until it arrives. A wait between automatic retries is shown by the retry line, not as silence.
 
 ## The provider rejects your model requests
 
@@ -356,6 +436,22 @@ Other session reads and writes that hit a storage failure answer in the same way
 export TMPDIR=/path/to/workspace/tmp
 mkdir -p "$TMPDIR"
 ```
+
+## Attachment and image size limits
+
+Omnipus shrinks images automatically before it sends them to a model, so they fit that model's limits: longest edge, file size, and — for providers that count them — vision-patch budgets such as ChatGPT's limit of 30,000 patches (32×32-pixel tiles) per image. This covers files you attach, images an agent captures itself (for example a full-page `browser_screenshot` of a very long page), and images already stored in the conversation: an oversized image in history is resized again on every send, so one large screenshot can no longer make every following reply on that model fail. When a turn falls back to another model, the image is fitted to that model's limits too.
+
+If the provider still rejects an image for its size, the reply says so — never the generic "unsupported format" message:
+
+| Notice | Meaning and next step |
+|---|---|
+| "An image in this conversation is too large for this model's size limit…" | The provider rejected the image for its size, even after automatic resizing. Send a smaller image — for example capture a viewport screenshot instead of a full-page capture of a very long page — or switch to a model with a larger image limit. Technical detail is available live under **Verbose chat**. |
+
+Things to watch:
+
+- A resized image may be visibly smaller than the capture; the model sees the resized version.
+- Very tall full-page captures are the usual cause of size limits: a 2560-pixel-wide capture of a very long page can need more patches than a model allows even though its file size is modest.
+- When a tool's image cannot be made to fit even after resizing, the tool result carries the exact marker `[attachment unavailable: <filename> (image too large to fit the model's size limits, even after resizing)]` — for example `[attachment unavailable: browser-screenshot.png (image too large to fit the model's size limits, even after resizing)]` — instead of the image. The surrounding tool text is preserved. An older image in the conversation that cannot be made to fit is replaced, for that request only, by `[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]`. An older image whose data is corrupt or truncated (so it cannot even be decoded) and that is also over the size limit is replaced by `[attachment unavailable: image (data unreadable: corrupt or truncated, and over the model's size limits)]` — sending it would only earn a media-too-large rejection on every later iteration, and the marker says the real cause.
 
 ## Limits and things to watch
 

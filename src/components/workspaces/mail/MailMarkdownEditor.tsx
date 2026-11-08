@@ -40,7 +40,7 @@ import { Field } from '@/components/ui/field'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { isValidMailRecipient } from './MailRecipientInput'
 import './mail-markdown-editor.css'
 
@@ -153,7 +153,8 @@ function ToolbarButton({
 }) {
   const accessibleName = shortcut === undefined ? label : `${label} (${shortcut})`
   return (
-    <Tooltip content={accessibleName} interactive>
+    <Tooltip>
+      <TooltipTrigger asChild>
       <IconButton
         size="sm"
         variant={active ? 'secondary' : 'ghost'}
@@ -166,6 +167,8 @@ function ToolbarButton({
       >
         {children}
       </IconButton>
+      </TooltipTrigger>
+      <TooltipContent>{accessibleName}</TooltipContent>
     </Tooltip>
   )
 }

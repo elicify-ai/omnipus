@@ -68,6 +68,7 @@ export function makeSnapshotHistory(rowCount: 0 | 1 | 2): Pick<SessionSnapshotFr
       row_count: rowCount,
       source_group_count: rowCount,
       soft_byte_budget: 4194304,
+      byte_ceiling: 8_388_608, // #1452 D2 A2.3: required server-owned 8 MiB ceiling.
       projected_bytes: 1024,
       byte_budget_exceeded: false,
       stop_reason: 'end',

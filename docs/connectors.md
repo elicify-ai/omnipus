@@ -19,12 +19,14 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 
 ## How to connect a chat app
 
-1. Open **Connectors**. Platforms that are not connected yet show **Configure**.
+1. Open **Connectors**. Platforms that are not connected yet show **Configure**, and those tiles stay on the screen after another connector is set up.
 2. Select **Configure** for the platform you want. A panel opens with its required fields.
 3. Enter the platform credentials. Use the platform guide below to find the values you need.
 4. Choose a **Workspace** and a **Main agent**, the agent that answers messages on this account. The **Main agent** list contains members of that workspace.
-5. Select **Save & Enable**. On success, the connected account appears with an **Enabled** status. For WhatsApp, keep the panel open for pairing: **Enabled** is the gateway's currently loaded setting, not proof that a code is ready, the phone is linked, or messages can be delivered. See the recovery details below if enabling reports an error.
+5. Select **Save & Enable**. On success, the connected account appears with an **Enabled** status. If the connection does not start, Connectors shows an error instead of **Channel configured and enabled**. The message is `Saved, but the connection is not running: <reason>.` The turned-on setting stays saved, so the card's action is **Disable**, not Enable. Open **Configure**, correct the credential, and select **Save**. That applies the corrected settings again while the connector stays turned on. You can instead select **Disable** on the card, then **Enable**, to turn it off and back on. For WhatsApp, keep the panel open for pairing: **Enabled** is the gateway's currently loaded setting, not proof that a code is ready, the phone is linked, or messages can be delivered. See the recovery details below if enabling reports an error.
 6. To connect another account on the same platform, select **Add another…** beside its group.
+
+Turning a connector off does not remove it. A real connector that is turned off stays as its own card with the muted badge **Off**. That is a connector bound to an agent, an extra named account such as a second WhatsApp, or a connector whose credential is saved. **Configure**, **Enable** and **Delete** stay on that card. A platform you have never given a credential stays a **Configure** tile, including while other connectors are already set up. If Omnipus cannot check the saved settings of a turned-off connector, the card stays, with a notice that its saved settings could not be checked and a **Retry** control.
 
 If a connection finishes starting after a newer settings change has cancelled that start, Omnipus stops that older connection instead of leaving it active without a worker. If its cleanup cannot finish, the reload reports the error; resolve the reported problem and reload the configuration to retry cleanup. Each failed retry still reports the error and retains that same connection for another cleanup attempt. This also applies when a restart was requested without changing settings, or when only the availability of a stored credential changed: reloading the same settings retries the captured cleanup. Its message workers stay stopped, and a replacement is not installed, until cleanup succeeds. This cleanup belongs to that older connection, not a replacement with the same name.
 
@@ -116,6 +118,27 @@ Each drop is written to the log as an error and to the audit log, and the connec
 
 Changing a connector from workspace A to B does not move its existing A conversation. Subsequent input uses a separate B-scoped conversation, without carrying A's conversation history or recalled shared notes into it. Existing A archives remain readable in A. Directly trying to reuse an A chat or helper in B is refused with a visible error; open B's conversation instead.
 
+## Starting messages
+
+By default an agent only answers messages that arrive on a connector. Each connector's **Configure** panel has a **Starting messages** section with two choices:
+
+- **Only answer**: the agent answers messages that arrive here. It never starts a conversation.
+- **Answer and also start messages**: the agent may also start messages, but only to the people and groups in the list below, **People and groups the agent may message**.
+
+Enter one id per line, up to 20; the same id entered twice counts once. Write the id as the platform gives it, either bare or with the connector's prefix (for example `discord:123456789012345678`). Names such as `@alice`, `*`, and ids from another platform are refused, and the panel marks the refused line under the field. The section has its own **Save** button; the panel's main **Save** does not change it. This list is separate from **Allow From**, which controls whose messages the agent answers. Only you can change the list, here in the panel; agents have no tool to change it.
+
+Starting messages works on Discord and Telegram only. On every other connector the section says `Starting messages is not supported yet on <name>. The agent only answers here.` The [Discord](connectors/discord.md#starting-messages) and [Telegram](connectors/telegram.md#starting-messages) guides say which ids to use.
+
+On a Discord or Telegram connector that has never been saved, the section shows only `Save the connection first`. Fill in the connector's settings, press the panel's main **Save**, and the two choices appear.
+
+You can take permission away even while the connector is not running: remove ids, or switch to **Only answer**, and save. If an earlier change to the connector did not finish applying, removing only some ids can be refused; switching to **Only answer** still works (see [troubleshooting](troubleshooting.md#saving-starting-messages-is-refused-or-shows-a-warning)). Adding a Discord id needs the connector running, because Omnipus checks each new id with Discord before it saves.
+
+When an agent starts a message, the result it gets says `accepted for sending … (delivery not confirmed)`. That means the message was handed over for sending, not that the person received it. If sending fails later, the failure appears only in the gateway log; see [troubleshooting](troubleshooting.md#an-agent-started-message-never-arrived).
+
+A scheduled task posts to a connector only when it runs isolated (**Run isolated** on the task) or from a heartbeat. A task that runs under the agent's main conversation can message only its own conversation, so its posts to a connector are refused. Heartbeats and isolated tasks have no conversation of their own on a connector, so every message they post to a connector is a started message. It still needs **Answer and also start messages** and the destination on the list, like any other start.
+
+At every turn an agent is told which connectors it may start messages on; see [what an agent knows about its connectors](agents.md#what-an-agent-knows-about-its-connectors).
+
 ## Connectors you can set up
 
 Each guide explains the credentials and platform-specific setup.
@@ -161,6 +184,8 @@ Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-u
 - **Disable** stops a connected account without deleting its configuration. Disabling also erases the mailbox's cached mail metadata and its new-mail watching state, and revokes its open previews; re-enabling starts fresh. The configuration and stored password are kept, and the mailbox keeps the same private storage name it had.
 - Deleting an account removes its configuration, credentials, cached mail metadata, and new-mail watching state. The removal result says which of the two happened: **removed** (everything succeeded) or **removed, cleanup pending** (the account is gone and can no longer be used, but erasing its cached files did not fully finish). Cleanup pending is never shown as a full success; the response carries a retry key, and the separately authorized cleanup operation (`POST /api/v1/mailboxes/cleanup` with that key) finishes the job — it keeps working after the mailbox row is gone. Deleting an agent or a workspace runs the same erase for every mailbox it held.
 - Omnipus keeps the mailbox's cached mail metadata in its own private storage under the data directory, and the application makes sure its own backups and restores never copy that storage or the new-mail watching state. A **cache unavailable** warning means Omnipus could not prove that protection on your install — a genuine failure such as a disk or permission problem — not missing external setup. Mail keeps working live while the warning shows; only the cached metadata is off.
+- **Allow From** (under **Advanced** in the **Configure** panel) is the list of senders the agent answers. Separate ids with commas or spaces; on WhatsApp, separate them with commas only. On WhatsApp, enter the sender's account id, such as `1234567890@s.whatsapp.net`, not a phone number such as `+1 234 567 890`: Omnipus compares the id exactly and does not turn a phone number into an account id. The easiest way to get the right id is to copy it from the **Ignored … Latest:** line in the **Configure** panel (see below) after that person has sent a message. Omnipus saves them as a list of separate ids. Leave the field empty to answer everyone. A list saved by an earlier version as one piece of text, such as `111, 222`, is read as separate ids when Omnipus loads it.
+- When a running connector ignores messages from senders who are not on its allowed list (the **Allow From** field), its **Configure** panel shows one line, `Ignored <count> messages from senders not on the allowed list. Latest: <ids>`, counted since the connector last started; you can select and copy each id to add it to the list.
 - A workspace-bound connector cannot fall back to another agent if its selected agent is later deleted or becomes ineligible. Update the connector's routing choice.
 - WhatsApp ships in every build on the supported platforms; it is unavailable only on a few unsupported architectures (mipsle, netbsd, freebsd/arm) where its SQLite dependency cannot compile. There is no separate lite build.
 - LINE and Google Chat webhook mode need a public HTTPS address.

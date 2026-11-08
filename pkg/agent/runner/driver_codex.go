@@ -317,7 +317,8 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 			args = append(args, "-m", model)
 		}
 		args = append(args, kept...)
-		args = append(args, "-") // read prompt from stdin
+		args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
+		args = append(args, "-")                // read prompt from stdin
 		return args
 	}
 
@@ -333,7 +334,8 @@ func (d *CodexDriver) buildArgs(opts RunOptions) []string {
 		args = append(args, "-C", opts.WorkDir)
 	}
 	args = append(args, kept...)
-	args = append(args, "-") // read prompt from stdin
+	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
+	args = append(args, "-")                // read prompt from stdin
 	return args
 }
 

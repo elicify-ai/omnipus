@@ -6,12 +6,14 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
@@ -107,18 +109,23 @@ func newTestRestAPIWithSkillsDirs(t *testing.T, builtinDir string) *restAPI {
 // TestDeleteBuiltinSkillRejected verifies DELETE of a builtin skill returns 403.
 func TestDeleteBuiltinSkillRejected(t *testing.T) {
 	builtinDir := t.TempDir()
-	seedSkill(t, builtinDir, "summarize",
-		"name: summarize\ndescription: Summarize arbitrary text.",
-		"# summarize\n\nSummarize text.")
+	// r15 F2 retires summarize; plan remains an embedded built-in.
+	seedSkill(t, builtinDir, "plan",
+		"name: plan\ndescription: Plan the requested task.",
+		"# Plan\n\nPlan the requested task.")
 
 	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/summarize", nil)
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/plan", nil)
 	w := httptest.NewRecorder()
 	api.HandleSkills(w, r)
 
 	assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "built-in skills cannot be removed")
+	var refusal gen.ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &refusal))
+	// ErrorResponse permits optional code/details; r15 §5.10 fixes the text.
+	assert.Equal(t, `Built-in skills can't be removed or edited. Use "Make a copy" to create your own version.`, refusal.Error, "r15 §5.10 exact built-in refusal")
+	assert.FileExists(t, filepath.Join(builtinDir, "plan", "SKILL.md"), "rejected delete leaves the built-in intact")
 }
 
 // TestDeleteNonBuiltinSkillNotRejectedByGuard verifies the builtin guard does

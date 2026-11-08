@@ -192,6 +192,7 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"list_agents":     AutoRuns,
 	"create_plan":     AutoRuns,
 	"execute_plan":    AutoRuns,
+	"update_plan":     AutoRuns,
 	"plan_correct":    AutoRuns,
 	"stop_plan":       AutoRuns,
 	"run_task":        AutoRuns,
@@ -199,6 +200,9 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"update_task":     AutoRuns,
 	"delete_task":     AutoAsks,
 	"list_tasks":      AutoRuns,
+	"get_task":        AutoRuns,
+	"get_plan":        AutoRuns,
+	"get_goal":        AutoRuns,
 	"list_jobs":       AutoRuns,
 	"inspect_session": AutoRuns,
 	"set_goal":        AutoRuns,
@@ -267,12 +271,10 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"remove_mcp_server": AutoAsks,
 
 	// System (agents)
-	"get_agent":           AutoRuns,
-	"get_agent_tools":     AutoRuns,
-	"read_agent_metadata": AutoRuns,
-	"create_agent":        AutoAsks,
-	"update_agent":        AutoAsks,
-	"delete_agent":        AutoAsks,
+	"get_agent":    AutoRuns,
+	"create_agent": AutoAsks,
+	"update_agent": AutoAsks,
+	"delete_agent": AutoAsks,
 
 	// System (workspaces)
 	"list_workspaces":  AutoRuns,
@@ -282,10 +284,9 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"delete_workspace": AutoAsks,
 
 	// System (skills)
-	"list_skills":  AutoRuns,
-	"create_skill": AutoAsks,
-	"edit_skill":   AutoAsks,
-	"remove_skill": AutoAsks,
+	"list_skills": AutoRuns,
+	"get_skill":   AutoRuns, // skills spec r15 §10: a read
+	"edit_skill":  AutoAsks,
 
 	// Omnipus system agent (omnipus-system-agent FR-021, BDD-3.3): the
 	// connection, permission and secret-removal/selection tools are on the
@@ -294,7 +295,10 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	// listing secret names and mailboxes, and reading the agent's own
 	// conversations run like the other reads (the secret card is itself the
 	// person's step).
-	"connect_channel":       AutoAsks,
+	"connect_channel": AutoAsks,
+	// channels-spec-r8 FR-032/T-10 row 11: explicit entry, never the
+	// unknown-name fallback.
+	"set_channel_outbound":  AutoAsks,
 	"connect_mailbox":       AutoAsks,
 	"set_agent_permissions": AutoAsks,
 	"remove_secret":         AutoAsks,
@@ -450,6 +454,11 @@ func AutoWorkspacePath(
 func autoPathCovered(policy fspolicy.FSPolicy, realPath string) (bool, string) {
 	if fspolicy.IsCarveOut(realPath, policy) {
 		return false, fmt.Sprintf("%q is in the protected secret set", realPath)
+	}
+	// Skills spec r15 §10.1 item 4: a path inside <home>/skills/ always
+	// asks, so the standard card appears for a skill change under Auto.
+	if fspolicy.CoversForDeny(registrySkillsRoot(), realPath) {
+		return false, "skill folder changes always ask"
 	}
 	if policy.WorkDir != "" && fspolicy.CoversForGrant(policy.WorkDir, realPath) {
 		return true, ""

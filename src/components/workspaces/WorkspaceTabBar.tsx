@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useWorkspaceHeaderMode } from './useWorkspaceHeaderMode'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
@@ -141,7 +141,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
   const settingsActive =
     resolveActiveSegment(useLocation().pathname, workspaceId) === 'settings'
   const activePanelId = useUiStore((s) => s.activePanel?.id ?? null)
-  const { mode, availableRef, fullRef, iconsRef } = useWorkspaceHeaderMode()
+  const { mode, stripMinWidth, availableRef, fullRef, iconsRef } = useWorkspaceHeaderMode()
 
   /** Every toggle goes through the outgoing panel's leave gate; changing
    * header mode must never change the scoped open/close action. */
@@ -219,7 +219,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           </Button>
         )
         return iconsOnly && !measuring ? (
-          <Tooltip key={segment} content={label} side="bottom" className="w-max" interactive>{button}</Tooltip>
+          <Tooltip key={segment}><TooltipTrigger asChild>{button}</TooltipTrigger><TooltipContent side="bottom">{label}</TooltipContent></Tooltip>
         ) : button
       })}
     </>
@@ -230,6 +230,9 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
       ref={availableRef}
       data-testid="workspace-header-entries"
       data-mode={mode}
+      // On the header line the strip claims the width of the mode it chose, so
+      // the line takes any shortfall from the chat title (useWorkspaceHeaderMode).
+      style={stripMinWidth > 0 ? { minWidth: stripMinWidth } : undefined}
       className="relative flex min-w-0 flex-1 items-stretch"
     >
       {/* Clip only the invisible probes, never the real strip's tooltips.

@@ -21,7 +21,7 @@ import (
 // strips (pkg/documentruntime/runtime.go::ChildEnvironment).
 var documentRuntimeNames = map[string]struct{}{
 	"PATH": {}, "PYTHONPATH": {}, "NODE_PATH": {}, "XDG_CACHE_HOME": {}, "HOME": {},
-	"TMPDIR": {}, "OSL_SOCKET_PATH": {}, "LANG": {}, "LC_ALL": {}, "OMNIPUS_DOCUMENT_SKILLS": {},
+	"TMPDIR": {}, "OSL_SOCKET_PATH": {}, "LANG": {}, "LC_ALL": {},
 }
 
 // setupLayerNames are the names the environment_setup layer sets

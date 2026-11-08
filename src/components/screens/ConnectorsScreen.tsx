@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useSyncExternalStore } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,6 +29,7 @@ import { BrandDisclaimer } from '@/components/ui/brand-disclaimer'
 import { channelSlug } from '@/components/ui/channel-logo'
 import {
   fetchChannels,
+  fetchChannelConfig,
   enableChannel,
   disableChannel,
   createChannelInstance,
@@ -81,9 +82,11 @@ function deriveBaseType(channel: ChannelEntry): string {
 // backend data). A bare-key entry that is neither enabled nor workspace-bound
 // is a template — "available", not configured; the moment the operator enables
 // it, binds it, or creates a namespaced <type>.<slug> instance it counts as
-// real. Known trade-off: a token saved on a bare stub left disabled AND
-// unbound keeps the type in the roster — acceptable, since Save & Enable is
-// the configure flow's primary action.
+// real. The list wire has no credential marker, so a token saved on such a
+// stub is indistinguishable from a never-configured one until GET
+// /channels/{id} returns the "[configured]" sentinel (#1569). That read is
+// limited to these disabled bare stubs. A sentinel promotes the stub to its
+// own card; without one it stays a roster tile.
 
 type ConfiguredChannelEntry = ChannelEntry & { instance_id: string }
 
@@ -106,36 +109,124 @@ function isTemplateStub(channel: ChannelEntry): boolean {
   )
 }
 
-function isConfigured(channel: ChannelEntry): channel is ConfiguredChannelEntry {
-  return channel.instance_id !== undefined && !isTemplateStub(channel)
+// CONFIGURED_SENTINEL is the redacted-config marker (rest_channels.go::redactChannelConfig).
+// The same literal ChannelConfigPanel uses; it is never a secret value.
+const CONFIGURED_SENTINEL = '[configured]'
+
+function configHasSavedCredential(config: Record<string, unknown>): boolean {
+  return Object.values(config).some((value) => value === CONFIGURED_SENTINEL)
+}
+
+interface StubClassification {
+  credentialSaved: ReadonlySet<string>
+  settingsUnchecked: ReadonlySet<string>
+}
+
+function isConfigured(
+  channel: ChannelEntry,
+  stubs: StubClassification,
+): channel is ConfiguredChannelEntry {
+  if (channel.instance_id === undefined) return false
+  if (!isTemplateStub(channel)) return true
+  const id = channel.instance_id
+  return stubs.credentialSaved.has(id) || stubs.settingsUnchecked.has(id)
 }
 
 /** "Available but unconfigured" — the static placeholder rows (no instance_id)
  *  plus the DefaultConfig bare-type template stubs (see isTemplateStub). */
 type UnconfiguredChannelEntry = ChannelEntry
 
-function isUnconfigured(channel: ChannelEntry): channel is UnconfiguredChannelEntry {
-  return channel.instance_id === undefined || isTemplateStub(channel)
+function isUnconfigured(channel: ChannelEntry, stubs: StubClassification): channel is UnconfiguredChannelEntry {
+  if (channel.instance_id === undefined) return true
+  if (!isTemplateStub(channel)) return false
+  const id = channel.instance_id
+  // A read that has not settled yet stays a roster tile. Only a saved
+  // credential or a failed read takes it off the roster.
+  return !stubs.credentialSaved.has(id) && !stubs.settingsUnchecked.has(id)
+}
+
+// One saved-settings read per disabled bare stub. Each read settles on its
+// own. A failed read keeps the card (it is not downgraded to a roster tile).
+// A read still in flight stays a roster tile and does not hold the others.
+function useBareStubCredentialReads(channels: ChannelEntry[]) {
+  const stubIds = channels.filter(isTemplateStub).map((channel) => channel.instance_id as string).sort()
+  const stubQueries = useQueries({
+    queries: stubIds.map((id) => ({
+      queryKey: ['channel-stub-credentials', id] as const,
+      queryFn: () => fetchChannelConfig(id),
+      retry: false,
+    })),
+  })
+
+  const failureKey = stubIds
+    .map((id, index) => {
+      const query = stubQueries[index]
+      if (!query?.isError) return ''
+      const message = query.error instanceof Error ? query.error.message : 'config read failed'
+      return `${id}\t${message}`
+    })
+    .filter((entry) => entry !== '')
+    .join('\n')
+  useEffect(() => {
+    if (failureKey === '') return
+    for (const entry of failureKey.split('\n')) {
+      const tab = entry.indexOf('\t')
+      logError({
+        event: 'channelStubConfigReadFailed',
+        instanceId: tab < 0 ? entry : entry.slice(0, tab),
+        message: tab < 0 ? 'config read failed' : entry.slice(tab + 1),
+      })
+    }
+  }, [failureKey])
+
+  const credentialSaved = new Set<string>()
+  const settingsUnchecked = new Set<string>()
+  stubIds.forEach((id, index) => {
+    const query = stubQueries[index]
+    if (query === undefined || (!query.isSuccess && !query.isError)) return
+    if (query.isError) {
+      settingsUnchecked.add(id)
+      return
+    }
+    if (query.data !== undefined && configHasSavedCredential(query.data)) credentialSaved.add(id)
+  })
+
+  function retry(id: string) {
+    const index = stubIds.indexOf(id)
+    const query = stubQueries[index]
+    if (query !== undefined) void query.refetch()
+  }
+
+  return { credentialSaved, settingsUnchecked, retry }
 }
 
 // ── Channel instance row (US-9 AS-2: binding-first title) ────────────────────
 
 // Hoisted to module scope (A10) — a fixed lookup table, not per-render state.
-type ConnectionStatus = 'degraded' | 'enabled' | 'unconfigured'
+type ConnectionStatus = 'degraded' | 'enabled' | 'off'
 
 const STATUS_BADGE: Record<ConnectionStatus, { variant: 'error' | 'success' | 'muted'; label: string }> = {
-  degraded:     { variant: 'error',   label: 'Failed to start' },
-  enabled:      { variant: 'success', label: 'Enabled' },
-  unconfigured: { variant: 'muted',   label: 'Not configured' },
+  degraded: { variant: 'error',   label: 'Failed to start' },
+  enabled:  { variant: 'success', label: 'Enabled' },
+  // A disabled card is a real connector (bound, namespaced, or a saved
+  // credential). A never-configured stub is a roster tile and never reaches
+  // this badge, so it is not labelled "Not configured" here either.
+  off:      { variant: 'muted',   label: 'Off' },
 }
 
 function connectionStatusOf(channel: ChannelEntry): ConnectionStatus {
-  if (channel.degraded === true) return 'degraded'
-  return channel.enabled ? 'enabled' : 'unconfigured'
+  // "Failed to start" is the status of an enabled connector only. A disabled
+  // connector is Off even when the gateway still reports a routing drop
+  // (degraded stays on the channel; it is not the card's status while off).
+  if (channel.enabled && channel.degraded === true) return 'degraded'
+  if (channel.enabled) return 'enabled'
+  return 'off'
 }
 
 interface ChannelInstanceRowProps {
   channel: ConfiguredChannelEntry
+  settingsUnchecked: boolean
+  onRetrySettingsCheck: () => void
   workspaceNameById: Map<string, string>
   agentNameById: Map<string, string>
   onConfigure: () => void
@@ -145,6 +236,8 @@ interface ChannelInstanceRowProps {
 
 function ChannelInstanceRow({
   channel,
+  settingsUnchecked,
+  onRetrySettingsCheck,
   workspaceNameById,
   agentNameById,
   onConfigure,
@@ -187,8 +280,11 @@ function ChannelInstanceRow({
   return (
     <Card
       data-testid={`channel-card-${instanceId}`}
-      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
+      className={settingsUnchecked
+        ? 'flex flex-col gap-[var(--space-2)] p-[var(--space-3)]'
+        : 'flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]'}
     >
+      <div className={settingsUnchecked ? 'flex items-center gap-[var(--space-2-5)]' : 'contents'}>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-[var(--space-2)] flex-wrap">
           {routingIsError ? (
@@ -275,6 +371,13 @@ function ChannelInstanceRow({
           <Trash size={13} />
         </IconButton>
       </div>
+      </div>
+      {settingsUnchecked && (
+        <ErrorState
+          message="Saved settings could not be checked."
+          onRetry={onRetrySettingsCheck}
+        />
+      )}
     </Card>
   )
 }
@@ -285,6 +388,8 @@ interface ChannelTypeGroupProps {
   baseType: string
   displayName: string
   instances: ConfiguredChannelEntry[]
+  settingsUnchecked: ReadonlySet<string>
+  onRetrySettingsCheck: (id: string) => void
   workspaceNameById: Map<string, string>
   agentNameById: Map<string, string>
   onConfigure: (channel: ConfiguredChannelEntry) => void
@@ -297,6 +402,8 @@ function ChannelTypeGroup({
   baseType,
   displayName,
   instances,
+  settingsUnchecked,
+  onRetrySettingsCheck,
   workspaceNameById,
   agentNameById,
   onConfigure,
@@ -329,6 +436,8 @@ function ChannelTypeGroup({
             <ChannelInstanceRow
               key={instanceId}
               channel={channel}
+              settingsUnchecked={settingsUnchecked.has(instanceId)}
+              onRetrySettingsCheck={() => onRetrySettingsCheck(instanceId)}
               workspaceNameById={workspaceNameById}
               agentNameById={agentNameById}
               onConfigure={() => onConfigure(channel)}
@@ -356,9 +465,12 @@ function ChannelTypeGroup({
 interface ChannelRosterProps {
   types: UnconfiguredChannelEntry[]
   onConfigureType: (channel: UnconfiguredChannelEntry) => void
+  // The populated list already shows the disclaimer under the groups. The
+  // empty-state roster is the only surface, so it keeps its own.
+  includeDisclaimer?: boolean
 }
 
-function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
+function ChannelRoster({ types, onConfigureType, includeDisclaimer = true }: ChannelRosterProps) {
   return (
     <div data-testid="channel-roster" className="space-y-[var(--space-3)]">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-[var(--space-2)]">
@@ -382,7 +494,7 @@ function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
           )
         })}
       </div>
-      <BrandDisclaimer />
+      {includeDisclaimer && <BrandDisclaimer />}
     </div>
   )
 }
@@ -969,17 +1081,24 @@ export function ConnectorsScreen() {
     queryFn: fetchMailboxes,
   })
 
+  // Disabled bare stubs look like never-configured templates on the list.
+  // One config read each — and only those — separates a saved credential
+  // (#1569). Each read settles on its own.
+  const stubReads = useBareStubCredentialReads(channels)
+
   // "Configured" (FR-008) = has a persisted instance — the backend only sets
   // instance_id on entries backed by a real config.Channels[] map key; the
-  // static "available but unconfigured" placeholder rows omit it.
-  const configuredInstances = channels.filter(isConfigured)
+  // static "available but unconfigured" placeholder rows omit it. A disabled
+  // bare stub joins this list when its config read shows a saved credential,
+  // or when that read failed (the card stays, with a notice).
+  const configuredInstances = channels.filter((channel) => isConfigured(channel, stubReads))
   // Every instance key currently in use — the create Sheet dedupes its
   // auto-generated key against this set.
   const existingInstanceIds = useMemo(
     () => new Set(allChannels.map((c) => c.instance_id).filter((v): v is string => v !== undefined)),
     [allChannels],
   )
-  const unconfiguredChannels = channels.filter(isUnconfigured)
+  const unconfiguredChannels = channels.filter((channel) => isUnconfigured(channel, stubReads))
 
   // Derive the set of known base types (both configured and connectable) for
   // the create-Sheet's type picker.
@@ -997,14 +1116,14 @@ export function ConnectorsScreen() {
       const baseType = deriveBaseType(c)
       if (!typeDisplayName.has(baseType)) typeDisplayName.set(baseType, c.name)
       if (c.native_available !== undefined) nativeAvailableByType.set(baseType, c.native_available)
-      if (isConfigured(c)) {
+      if (isConfigured(c, stubReads)) {
         const arr = groupedInstances.get(baseType) ?? []
         arr.push(c)
         groupedInstances.set(baseType, arr)
       }
     }
     return { typeDisplayName, nativeAvailableByType, groupedInstances }
-  }, [channels])
+  }, [channels, stubReads])
 
   const groupedTypeOrder = useMemo(() => Array.from(groupedInstances.keys()).sort(), [groupedInstances])
 
@@ -1099,6 +1218,8 @@ export function ConnectorsScreen() {
             baseType={baseType}
             displayName={typeDisplayName.get(baseType) ?? baseType}
             instances={groupedInstances.get(baseType) ?? []}
+            settingsUnchecked={stubReads.settingsUnchecked}
+            onRetrySettingsCheck={stubReads.retry}
             workspaceNameById={workspaceNameById}
             agentNameById={agentNameById}
             onConfigure={(channel) =>
@@ -1115,6 +1236,13 @@ export function ConnectorsScreen() {
             onAddAnother={openCreateFor}
           />
         ))}
+        {unconfiguredChannels.length > 0 && (
+          <ChannelRoster
+            types={unconfiguredChannels}
+            onConfigureType={configureType}
+            includeDisclaimer={false}
+          />
+        )}
         <BrandDisclaimer />
       </div>
     )
@@ -1308,6 +1436,7 @@ export function ConnectorsScreen() {
           nativeAvailable={configuringChannelProps?.nativeAvailable}
           enabled={channelsState?.status === 'success' ? currentConfiguringChannel?.enabled : undefined}
           enabledStateUnknown={channelsState?.status === 'error'}
+          rejectedSenders={currentConfiguringChannel?.rejected_senders}
           open={configuringChannel !== null}
           onOpenChange={(open) => {
             if (!open) setConfiguringChannel(null)

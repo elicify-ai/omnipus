@@ -30,14 +30,11 @@ import (
 // sessionSubRoute is one allowed sub-path under /api/v1/sessions/{id}/.
 // methods is the exhaustive Allow list for that sub-resource. exact requires
 // the whole sub-path to equal name; otherwise name and name + "/" + rest are
-// the same resource. unimplemented means the address is recognised, so a
-// method outside methods is 405, but no handler serves it yet, so an accepted
-// method is 404.
+// the same resource.
 type sessionSubRoute struct {
-	name          string
-	exact         bool
-	methods       []string
-	unimplemented bool
+	name    string
+	exact   bool
+	methods []string
 }
 
 // sessionSubRoutes is the explicit list of sub-paths HandleSessions accepts
@@ -46,13 +43,12 @@ type sessionSubRoute struct {
 // (/api/v1/sessions/{id}, no sub-path) is not in this list.
 //
 // "messages" (exact) is GET /sessions/{id}/messages. "messages" (nested) is
-// messages/{position}: issue #1471 names that address, and a non-GET on it is
-// 405, but no per-message handler exists on this base, so GET is 404 until
-// that route lands. "tool-results" covers the resource and tool-results/{ref};
+// GET /sessions/{id}/messages/{position}; serveSessionHistoryEntry owns the
+// position rules. "tool-results" covers the resource and tool-results/{ref};
 // HandleToolResults owns the ref rules.
 var sessionSubRoutes = []sessionSubRoute{
 	{name: "messages", exact: true, methods: []string{http.MethodGet}},
-	{name: "messages", exact: false, methods: []string{http.MethodGet}, unimplemented: true},
+	{name: "messages", exact: false, methods: []string{http.MethodGet}},
 	{name: "tool-results", exact: false, methods: []string{http.MethodGet}},
 }
 
@@ -101,14 +97,20 @@ func (a *restAPI) dispatchSessionSubPath(w http.ResponseWriter, r *http.Request,
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if route.unimplemented {
-		jsonErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	switch route.name {
-	case "messages":
+	switch {
+	case route.name == "messages" && route.exact:
 		a.getSessionMessages(w, r, sessionID)
-	case "tool-results":
+	case route.name == "messages":
+		// The exact entry wins for "messages", so the nested entry always
+		// carries "messages/{position}".
+		a.serveSessionHistoryEntry(w, r, sessionID, strings.TrimPrefix(subPath, "messages/"))
+	case route.name == "tool-results":
+		// Security F1 (#1452): a stored result is readable only while its
+		// session is, under the same access order as the history page (main
+		// eligibility, then session existence) — never by reference alone.
+		if a.readableSessionStore(w, sessionID) == nil {
+			return
+		}
 		// HandleToolResults reads the ref from r.URL.Path itself.
 		a.HandleToolResults(w, r)
 	default:
@@ -789,6 +791,13 @@ func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) e
 	if err := store.DeleteSession(id); err != nil {
 		return err
 	}
+	// Security F1 (#1452): offloaded tool results die with their session and
+	// every deleted descendant, not only at the separate retention sweep.
+	results := newToolResultStore(a.homePath)
+	var resultErr error
+	for _, sid := range append([]string{id}, descendantIDs...) {
+		resultErr = errors.Join(resultErr, results.removeSession(sid))
+	}
 	// N6: the session is gone, so drop any retained external-CLI driver (and its
 	// option/env snapshot) for it and every deleted descendant.
 	if a.agentLoop != nil {
@@ -831,7 +840,7 @@ func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) e
 				"session_id", id, "error", err)
 		}
 	}
-	return nil
+	return resultErr
 }
 
 // isWorkerAgentID reports whether agentID resolves to a worker agent in the config.

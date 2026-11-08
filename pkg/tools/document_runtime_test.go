@@ -23,14 +23,14 @@ func writeFakeManagedPython(t *testing.T, binDir string) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nprintf 'python=%s\\ncache=%s\\nskills=%s\\nargs=%s\\n' \"$0\" \"$XDG_CACHE_HOME\" \"$OMNIPUS_DOCUMENT_SKILLS\" \"$*\"\n"
+	script := "#!/bin/sh\nprintf 'python=%s\\ncache=%s\\npythonpath=%s\\nnodepath=%s\\nargs=%s\\n' \"$0\" \"$XDG_CACHE_HOME\" \"$PYTHONPATH\" \"$NODE_PATH\" \"$*\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "python"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// provisionLayout resolves a layout under home and provisions first-party
-// assets (probe + skills + manifest) without external dependencies.
+// provisionLayout resolves a layout under home and provisions the retained
+// runtime probe and manifest without external dependencies (r15 §11).
 func provisionLayout(t *testing.T, home, workerID string) documentruntime.Layout {
 	t.Helper()
 	layout, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, workerID)
@@ -45,7 +45,7 @@ func provisionLayout(t *testing.T, home, workerID string) documentruntime.Layout
 
 // TestBashDocumentRuntimeUsesPrefixAndPerTurnCache pins the ES-FR-04
 // environment composition for a wired runtime: the shared read-only prefix
-// provides Bin/Skills, while the writable cache is resolved PER TURN inside
+// provides Bin/Lib (r15 §11 removes the second skill copy), while the writable cache is resolved PER TURN inside
 // the authorized workspace root — never the construction-time data root.
 func TestBashDocumentRuntimeUsesPrefixAndPerTurnCache(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -71,7 +71,8 @@ func TestBashDocumentRuntimeUsesPrefixAndPerTurnCache(t *testing.T) {
 	wantCache := filepath.Join(workspace, ".omnipus-document-cache")
 	if !strings.Contains(result.ForLLM, "python="+filepath.Join(layout.Bin, "python")) ||
 		!strings.Contains(result.ForLLM, "cache="+wantCache) ||
-		!strings.Contains(result.ForLLM, "skills="+layout.Skills) ||
+		!strings.Contains(result.ForLLM, "pythonpath="+filepath.Join(layout.Lib, "python")) ||
+		!strings.Contains(result.ForLLM, "nodepath="+filepath.Join(layout.Lib, "node_modules")) ||
 		!strings.Contains(result.ForLLM, "--format all") {
 		t.Fatalf("result=%+v", result)
 	}
@@ -674,19 +675,27 @@ func TestDocumentRuntimeSocketPolicyUsesResolvedWorkspaceCWD(t *testing.T) {
 // See ADR-092 D2/D8's own accepted-risk language, not a gap introduced here.
 
 func TestDocumentSkillLoadPublishesAuthorizedRuntimeRoot(t *testing.T) {
-	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, "mia")
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	registryFolder := filepath.Join(home, "skills", "elicify-docx")
+	if err := os.MkdirAll(registryFolder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, "mia")
 	if err != nil {
 		t.Fatal(err)
 	}
 	tool := NewSkillTool(5)
 	tool.SetResolver(func(_ context.Context, slug string) SkillLoadOutcome {
-		return SkillLoadOutcome{Status: SkillLoadLoaded, Content: "instructions"}
+		return SkillLoadOutcome{Status: SkillLoadLoaded, Content: "instructions", CanonicalSlug: slug, Folder: registryFolder}
 	}, func(context.Context, string) bool { return true }, nil)
 	tool.SetDocumentRuntime(layout)
 	result := tool.Execute(bashCtx(t), map[string]any{"name": "elicify-docx"})
-	wantRoot := filepath.Join(layout.Skills, "elicify-docx")
-	if result.IsError || !strings.Contains(result.ForLLM, wantRoot) || !strings.Contains(result.ForLLM, layout.Manifest) {
+	if result.IsError || !strings.Contains(result.ForLLM, registryFolder) || !strings.Contains(result.ForLLM, layout.Manifest) {
 		t.Fatalf("result=%+v", result)
+	}
+	if strings.Contains(result.ForLLM, filepath.Join(layout.Prefix, "skills")) {
+		t.Fatalf("r15 §11 forbids guidance pointing at a toolchain skill copy: %s", result.ForLLM)
 	}
 }
 

@@ -45,6 +45,7 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { forceLogout } from '@/lib/authLogout'
 import { humanizeToolName } from '@/lib/humanizeToolName'
+import { isAlwaysAskTool, ONE_REQUEST_APPROVAL_NOTICE } from '@/lib/alwaysAskTools'
 import { queryClient } from '@/lib/queryClient'
 import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
 import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
@@ -320,7 +321,6 @@ function ToolApprovalCard({
     [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
   )
 
-  const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
@@ -329,8 +329,10 @@ function ToolApprovalCard({
     : typeof args.path === 'string' ? args.path.trim()
     : ''
   // Always Allow remembers the exact arguments. A request_mount with no
-  // folder path has nothing safe to remember — hide the button.
-  const hideAlwaysAllow = toolName === 'request_mount' && !mountPath
+  // folder path has nothing safe to remember — hide the button. An always-ask
+  // tool's approval is never remembered (channels FR-038): no Always Allow.
+  const alwaysAsk = isAlwaysAskTool(toolName)
+  const hideAlwaysAllow = alwaysAsk || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
   // Agent display name (D-87): a permission prompt is exactly where the human
@@ -362,9 +364,12 @@ function ToolApprovalCard({
   const resolvedAgentName = actingAgentName || cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
+  // The card shows only the entry's redacted copy (summary and raw dump alike).
+  const shownArgs = previewEntry?.redactArgs ? previewEntry.redactArgs(args) : args
+  const argsJson = JSON.stringify(shownArgs, null, 2)
   const previewCtx: ToolApprovalPreviewContext = {
     toolName,
-    args,
+    args: shownArgs,
     agentId,
     agentName: resolvedAgentName,
     sessionId,
@@ -549,6 +554,13 @@ function ToolApprovalCard({
           </div>
         )}
 
+        {/* Channels FR-038 / S-29: an always-ask tool's approval covers only this call. */}
+        {!hasExpired && alwaysAsk && (
+          <p className="px-[var(--space-3)] pb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+            {ONE_REQUEST_APPROVAL_NOTICE}
+          </p>
+        )}
+
         {/* Countdown */}
         <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
           {hasExpired ? (
@@ -688,12 +700,17 @@ function ToolApprovalCard({
  * (`approvalChatId`) is the active session. Approvals for other chats stay
  * queued and are announced by the "waiting in another chat" banner.
  */
-export function ToolApprovalPanel() {
+export function ToolApprovalPanel({ roomId }: { roomId?: string } = {}) {
   const queue = useToolApprovalStore((s) => s.queue)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const visible: PendingToolApproval[] = activeSessionId
-    ? queue.filter((a) => approvalChatId(a) === activeSessionId)
-    : []
+  // #1449 FR-048/FR-051 (D8, D23): on a group page only the cards that carry
+  // THIS group's reference; the same card also shows in the agent's own
+  // chat, and one decision (by approval id) resolves both.
+  const visible: PendingToolApproval[] = roomId
+    ? queue.filter((a) => a.roomRef?.room_id === roomId)
+    : activeSessionId
+      ? queue.filter((a) => approvalChatId(a) === activeSessionId)
+      : []
   const first = visible[0]
   if (!first) return null
   return (
@@ -714,10 +731,10 @@ export function ToolApprovalPanel() {
 }
 
 /** Docked mount above the composer (next to the question and secret cards). */
-export function ToolApprovalThreadTail() {
+export function ToolApprovalThreadTail({ roomId }: { roomId?: string } = {}) {
   return (
     <div className="mx-auto w-full max-w-3xl px-[var(--space-3)]" data-testid="tool-approval-thread-tail">
-      <ToolApprovalPanel />
+      <ToolApprovalPanel roomId={roomId} />
     </div>
   )
 }

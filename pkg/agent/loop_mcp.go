@@ -409,6 +409,11 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 		servers[name] = serverCfg
 	}
 	mcpCfg.Servers = servers
+	// Read the ingest bound in the same snapshot (#1626): reading al.cfg
+	// after RUnlock races MutateConfig/SwapConfig. Lock order relied on:
+	// al.mcp.initMu (held by our caller) -> al.mu. Config writers take al.mu
+	// only and never wait on initMu while holding it.
+	ingestBoundBytes := al.cfg.Context.IngestBoundBytes
 	al.mu.RUnlock()
 
 	registry := al.GetRegistry()
@@ -521,7 +526,7 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 	}
 	// ADR-066 D10: the live ingest bound applies to every server connected
 	// in this pass (transports are built at connect time).
-	mgr.SetIngestBoundBytes(al.cfg.Context.IngestBoundBytes)
+	mgr.SetIngestBoundBytes(ingestBoundBytes)
 
 	// --- Connects: desired but not (still) live, including changed servers
 	// just disconnected above. Each server connects on its own goroutine

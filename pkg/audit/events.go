@@ -55,6 +55,13 @@ const (
 	// FR-047, FR-054, FR-074, FR-065 (combined event for batch short-circuit).
 	EventToolPolicyAskDenied = "tool.policy.ask.denied"
 
+	// EventChannelOutboundWrite — INFO. The outcome of one approved
+	// set_channel_outbound call at the shared writer (channels security S3):
+	// saved (with the resulting FR-088 revision) or refused/failed after
+	// approval (with the writer's reason). Correlated with its consent records
+	// by approval_id, tool_call_id and session_id; never carries target values.
+	EventChannelOutboundWrite = "channel.outbound.write"
+
 	// EventToolCollisionMCPRejected — WARN. Central registry refused an MCP
 	// registration because of a name collision with a builtin or a
 	// previously-registered MCP server. FR-034, FR-060.
@@ -160,6 +167,12 @@ const (
 	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
+
+	// EventExternalCLIRun — INFO. One external-CLI spawn (r17 §3.10): agent,
+	// CLI, entered and resolved program, agent flags the filter dropped,
+	// the person's preset as typed, and whether a preset token bypassed the
+	// filter.
+	EventExternalCLIRun = "external_cli.run"
 
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
@@ -548,6 +561,16 @@ const (
 	// user (empty for a change driven by a workspace edit). Fields:
 	// {room_id, workspace_id, action, agent_ids}.
 	EventRoomChanged = "room.changed"
+
+	// EventTaskTriggerFireNotStarted — WARN. A scheduled task fire that was
+	// held at gateway start-up until the agents were ready could not start
+	// when it was released (6b U2b). Emitted by
+	// pkg/agent/task_trigger_boot_hold.go. Fields: {task_id, job_id, reason,
+	// error}. reason is one of task_deleted (the task is gone; the fire is
+	// dropped), task_unreadable or dispatch_failed (the fire is kept and runs
+	// at the next start), or agent_missing (the task's agent is gone; a failed
+	// run is recorded on the task).
+	EventTaskTriggerFireNotStarted = "task.trigger.fire_not_started"
 )
 
 // ---------------------------------------------------------------------------
@@ -627,6 +650,12 @@ const (
 	// AskDenyReasonScheduled so a task refusal never reads as a cron job with
 	// missing identity.
 	AskDenyReasonTaskRun AskDenyReason = "task_run"
+
+	// AskDenyReasonMissingTurnID — the request carried no turn id, so no
+	// client could ever render its card (D-03); the registry refuses it
+	// before admission. Its request record is written too, so the refusal
+	// is the terminal decision paired with it (channels security S3).
+	AskDenyReasonMissingTurnID AskDenyReason = "missing_turn_id"
 )
 
 // IsValidAskDenyReason reports whether `r` is one of the known enum values
@@ -640,7 +669,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonSaturated,
 		AskDenyReasonBatchShortCircuit,
 		AskDenyReasonScheduled,
-		AskDenyReasonTaskRun:
+		AskDenyReasonTaskRun,
+		AskDenyReasonMissingTurnID:
 		return true
 	}
 	return false
@@ -818,6 +848,19 @@ func EmitToolPolicyAskRequested(
 	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
 	args map[string]any,
 ) {
+	EmitToolPolicyAskRequestedWithPreview(ctx, logger, approvalID, toolCallID, toolName, agentID, sessionID, turnID, args, args)
+}
+
+// EmitToolPolicyAskRequestedWithPreview is EmitToolPolicyAskRequested with a
+// separate preview source: args_hash still covers the full `args` the card
+// showed, while args_preview is ArgsPreview(previewArgs) — a tool-specific
+// projection that keeps private values out of the audit log (Q2-B A2.1).
+func EmitToolPolicyAskRequestedWithPreview(
+	ctx context.Context,
+	logger *Logger,
+	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
+	args, previewArgs map[string]any,
+) {
 	hash, hashErr := ArgsHash(args)
 	if hashErr != nil {
 		// A hashing failure means args_hash below will be empty — log it so
@@ -833,7 +876,7 @@ func EmitToolPolicyAskRequested(
 		"session_id":   sessionID,
 		"turn_id":      turnID,
 		"args_hash":    hash,
-		"args_preview": ArgsPreview(args),
+		"args_preview": ArgsPreview(previewArgs),
 	}
 	Emit(ctx, logger, EventToolPolicyAskRequested, SeverityInfo, fields)
 }

@@ -201,6 +201,12 @@ export type ChatMessage = Message & {
   deliveryStatus?: UserDeliveryState
   media?: MediaAttachment[]
   /**
+   * #1449 (ADR-20261028 A3.1): SPA-only marks of a group-chat entry shown in
+   * the shared rows. `afterPause`: the answer was posted after /pause and
+   * keeps its muted "after pause" mark (FR-170/FR-217). Never serialized.
+   */
+  roomMarks?: { afterPause: boolean }
+  /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
    * message was originally SENT with. `media` above is display-only
    * (filename/contentType/a resolved preview `url` — see sendMessage's own
@@ -263,6 +269,20 @@ export type ChatMessage = Message & {
    * check); this field covers the entries folded in AFTER that one.
    */
   mergedReplayIds?: string[]
+  /**
+   * #1452 D1 (chat-history-paging-spec S1/S7): the body-free ordered part
+   * list of a row that combines several sources (every site that appends to
+   * `mergedReplayIds` records the part). Lets a later saved record bind to
+   * its own part instead of the whole row; see history-parts.ts. Client-local,
+   * released with the row, never persisted or sent.
+   */
+  historyParts?: HistoryDisplayPart[]
+  /**
+   * #1452 S11 reading position: the stable client-local render identity of a
+   * row whose display key or slot moved when a turn segment folded into it
+   * (the drawn row it grew from). Never persisted or sent.
+   */
+  historyRenderKey?: string
   /**
    * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
    * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
@@ -421,8 +441,38 @@ export interface ProviderRetryEventData {
   receivedAt: string
   attempt: number
   maxAttempts: number
+  /**
+   * The retry cause the backend classified this failure under (the
+   * `provider_retry` frame's `error_code` — pkg/providers/retry_plan.go:
+   * network, rate_limited, overloaded, stream_interrupted). The indicator
+   * words the cause from this field in plain English; a missing or
+   * unrecognized code renders the generic clause, never the code text
+   * (issues #1280/#1478 wording round).
+   */
+  errorCode?: string
   previousProvider?: string
   previousModel?: string
+}
+
+/**
+ * Issues #1478/#1280 — the render state of a live `provider_status`
+ * `waiting` frame, stored per session in its OWN slot
+ * (`SessionChatState.providerStatusEvent`). Only `waiting` occupies the
+ * slot: `responding` and `recovered` clear it (the notice disappears), and
+ * `recovered` additionally appends the short recovered note and clears a
+ * stale `providerRetryEvent` (a recovered call means no retry can still be
+ * pending). `receivedAt` is the client-clock reading at reducer entry (the
+ * C-11 receipt anchor, same as ProviderRetryEventData).
+ */
+export interface ProviderStatusEventData {
+  state: 'waiting'
+  turnId: string
+  /** Server clock — the last provider activity (or the round's start). */
+  silentSince: string
+  /** Server clock — when the silence limit would end the call; absent when unknown. */
+  stallAt?: string
+  sentAt: string
+  receivedAt: string
 }
 
 /** All per-session chat state for one concurrent session. */
@@ -434,6 +484,12 @@ export interface SessionChatState {
   /** Body-free source/display aliases and hidden current-tail order, released on leave. */
   historySourceAliases?: Record<string, string>
   historyLiveOrder?: string[]
+  /**
+   * #1452 D2: saved text positions whose full text the user asked to see
+   * ("Show the rest"). Flags only — the full text lives in the query cache,
+   * never here. Released with the reader (D9).
+   */
+  historyExpandedText?: Record<string, true>
   /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
   historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
@@ -556,6 +612,16 @@ export interface SessionChatState {
    * Optional — see the fixture-compat note on goalStatus.
    */
   providerRetryEvent?: ProviderRetryEventData | null
+  /**
+   * Issues #1478/#1280 — the session's live `provider_status` `waiting`
+   * notice facts, or null. Written only by the `provider_status` case of
+   * slices/provider-frames.ts::handleProviderFrame: `waiting` sets it,
+   * `responding` clears it, `recovered` clears it, appends the recovered
+   * note and clears a stale `providerRetryEvent`. The parent (ChatScreen)
+   * gates the notice on the turn's streaming state like the retry
+   * indicator. Optional — see the fixture-compat note on goalStatus.
+   */
+  providerStatusEvent?: ProviderStatusEventData | null
   /**
    * provider-messages §7.4/D17 — the (unavailable, answered) model pairs for
    * which a fallback note is already visible in THIS chat (live-appended by
@@ -809,6 +875,31 @@ export interface SessionChatState {
 export type PositionedToolCall = ToolCall & { textOffset?: number }
 
 /**
+ * One source of a combined display row (#1452 D1, S1). `start` is the
+ * part's offset in UTF-16 code units in the row's stored text, `joiner` the
+ * exact text inserted before it (S2a), `position` its bound saved history
+ * position once known, `text` whether it currently shows live or saved text.
+ */
+export interface HistoryDisplayPart { // not-wire-format: client-local display bookkeeping
+  sourceId: string
+  start: number
+  joiner: string
+  position?: string
+  text: 'live' | 'saved'
+  /** S9 (#1452 D2): the full text's UTF-8 size when the part shows a saved display preview. */
+  originalSizeBytes?: number
+  /** S10: tool-call anchors relative to this part, in UTF-16 units (call id -> offset). Body-free. */
+  anchors?: Record<string, number>
+  /** Ids of the tool calls recorded on this part's saved source (fetching a call's full result addresses this position). */
+  callIds?: string[]
+  /**
+   * S11b: the joiner was derived while no text preceded this part, so it is
+   * not yet a recorded seam and is derived again when earlier text arrives.
+   */
+  joinerOpen?: true
+}
+
+/**
  * Filter the span-index map (typed shape `{ messageId: string }`), returning
  * a NEW map with all entries whose `messageId` is in `evictedMessageIds`
  * removed.
@@ -869,6 +960,8 @@ export interface HistorySlice {
   retryHistory(sessionId: string, action: HistoryActionKind): Promise<void>
   enterHistoryReading(sessionId: string): void
   releaseSessionHistory(sessionId: string): void
+  /** #1452 D2: show the full text of one shortened saved message part. */
+  expandHistoryText(sessionId: string, position: string): void
 }
 export type HistorySliceContext = {
   get: StoreApi<import('@/store/chat/types').ChatStore>['getState']
@@ -949,6 +1042,8 @@ export interface ChatStore extends HistorySlice {
   rateLimitEvent: RateLimitEventData | null
   /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
   providerRetryEvent?: ProviderRetryEventData | null
+  /** Issues #1478/#1280 — foreground projection of the session's `provider_status` waiting slot. Optional — see the SessionChatState field's doc comment. */
+  providerStatusEvent?: ProviderStatusEventData | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
   /**
