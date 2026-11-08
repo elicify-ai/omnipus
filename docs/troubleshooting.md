@@ -426,6 +426,8 @@ Other session reads and writes that hit a storage failure answer in the same way
 
 A sent file that Omnipus no longer knows is not a storage failure. The chat opens with that one card left out, and the gateway log gets a warning, `replay: skipped file card, media ref unknown to the store`, naming the session and the file's reference. Any other error while reading a file's record still fails the read with the message above.
 
+One such error has its own log line. If Omnipus cannot check a sent file's record at startup for a reason other than the file being gone — for example a permission or disk error on its folder — the gateway log says `registry: registered file could not be inspected`, naming the reference, the path and the cause, followed by `media: failed to load persisted registry`. A chat holding that file then shows the storage-failure message above instead of quietly leaving the card out, and every other chat and file works as usual. Fix the permission or disk problem, then restart the gateway; the file's card and download come back.
+
 ## Two more errors with short fixes
 
 **"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.
