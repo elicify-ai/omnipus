@@ -99,9 +99,10 @@
 #      first is listed; the 260-line second one FAILs
 #   Round-3 rows (CHECK 3):
 #   at. exactly 240 code lines with a blank line inside a Go raw string / TS
-#      template made of ASCII spaces, no-break spaces, em spaces or ideographic
-#      spaces                                                    -> must pass, citing 240
-#   au. 241 code lines around such a blank line                   -> must FAIL citing 241
+#      template made of ANY member of the shared whitespace set (Unicode
+#      White_Space; see the block comment before row at)   -> must pass, citing 240
+#   au. 241 code lines around such a blank line, every member   -> must FAIL citing 241
+#   ax. a line holding only U+200B, U+180E (and U+FEFF in TS) is code -> 241, FAIL
 #   av. exact counts (4) of tiny marked functions with such a blank line
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
@@ -632,19 +633,34 @@ if expect "(aw) TS marker above a line that starts two callbacks" 1; then
   grep -q 'exceptions: 1$' "$TMP/out" || { echo "selfcheck FAIL: (aw) expected exactly one exception" >&2; FAIL=1; }
 fi
 
-# Unicode blank lines (CHECK 3). A line made only of whitespace inside a Go raw
-# string or TS template is blank, whatever kind of whitespace it is: ASCII
-# spaces, no-break space (U+00A0), em space (U+2003) or ideographic space
-# (U+3000). Exactly 240 code lines must stay legal; the byte strings are written
-# as octal escapes so the case does not depend on the locale.
+# Unicode blank lines (CHECK 3 and 4). A line made only of whitespace inside a Go
+# raw string or a TS template is blank. "Whitespace" is one explicit set, the
+# same in both scanners (see hasNonSpace in scripts/funlen/main.go and
+# scripts/tsfunlen.cjs): the Unicode White_Space property,
+#   U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A,
+#   U+2028, U+2029, U+202F, U+205F, U+3000.
+# U+FEFF, U+200B and U+180E are NOT in the set: a line holding only one of them
+# is code. Every member goes through both languages as an exact-240 pass case and
+# a 241 fail case; every non-member as a 241 fail case. Bytes are octal escapes
+# so nothing depends on the locale.
 uni_go() { # uni_go <file> <name> <whitespace bytes> <statement lines>
   { printf 'package fixture\n\nfunc %s() {\n\t_ = `\n%b\n`\n' "$2" "$3"; body_go "$4"; echo '}'; } > "$1"
 }
 uni_ts() {
   { printf 'function %s() {\n  const t = `\n%b\n`;\n' "$2" "$3"; body_ts "$4"; echo '}'; } > "$1"
 }
-for variant in "ascii:    " "nbsp:\302\240\302\240" "emspace:\342\200\203" "ideographic:\343\200\200"; do
-  vname="${variant%%:*}"; vbytes="${variant#*:}"
+WS_SET=("ascii:    " "tab:\\011" "lf:\\012" "vt:\\013" "ff:\\014" "cr:\\015" "nel:\\302\\205" "nbsp:\\302\\240" "ogham:\\341\\232\\200"
+        "u2028:\\342\\200\\250" "u2029:\\342\\200\\251" "u202f:\\342\\200\\257" "u205f:\\342\\201\\237" "u3000:\\343\\200\\200")
+for i in 0 1 2 3 4 5 6 7 8 9 10; do
+  WS_SET+=("u200$(printf '%X' "$i"):\\342\\200\\$(printf '%03o' $((128 + i)))")
+done
+NOT_WS=("zwsp-u200b:\\342\\200\\213" "mvs-u180e:\\341\\240\\216")
+# U+FEFF is rejected by the Go parser outside the file start (illegal byte order
+# mark), so it is exercised through TS only.
+NOT_WS_TS_ONLY=("bom-ufeff:\\357\\273\\277")
+
+for entry in "${WS_SET[@]}"; do
+  vname="${entry%%:*}"; vbytes="${entry#*:}"
   fresh_tree
   uni_go "$TMP/tree/pkg/fixture_uni.go" "BlankGo" "$vbytes" 236
   uni_ts "$TMP/tree/tests/fixture_uni.ts" "blankTs" "$vbytes" 236
@@ -653,17 +669,33 @@ for variant in "ascii:    " "nbsp:\302\240\302\240" "emspace:\342\200\203" "ideo
     grep -q 'BlankGo 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (at/$vname) Go count was not 240" >&2; FAIL=1; }
     grep -q 'blankTs 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (at/$vname) TS count was not 240" >&2; FAIL=1; }
   fi
+  fresh_tree
+  uni_go "$TMP/tree/pkg/fixture_au.go" "BlankPlusGo" "$vbytes" 237
+  uni_ts "$TMP/tree/tests/fixture_au.ts" "blankPlusTs" "$vbytes" 237
+  if expect "(au) 241 code lines around a $vname blank line fails (Go and TS)" 1; then
+    grep -q 'BlankPlusGo 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (au/$vname) Go FAIL did not cite 241" >&2; FAIL=1; }
+    grep -q 'blankPlusTs 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (au/$vname) TS FAIL did not cite 241" >&2; FAIL=1; }
+  fi
 done
 
-# (au) the same blank line with one more real statement is 241 and must fail,
-# citing 241: the whitespace line is neither counted nor allowed to hide a line.
-fresh_tree
-uni_go "$TMP/tree/pkg/fixture_au.go" "BlankPlusGo" "\302\240" 237
-uni_ts "$TMP/tree/tests/fixture_au.ts" "blankPlusTs" "\342\200\203" 237
-if expect "(au) 241 code lines around a Unicode blank line fails" 1; then
-  grep -q 'BlankPlusGo 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (au) Go FAIL did not cite 241" >&2; FAIL=1; }
-  grep -q 'blankPlusTs 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (au) TS FAIL did not cite 241" >&2; FAIL=1; }
-fi
+# A character outside the set makes its line code: 236 statements + signature +
+# two literal edges + that line + brace = 241, which must fail citing 241.
+for entry in "${NOT_WS[@]}" "${NOT_WS_TS_ONLY[@]}"; do
+  vname="${entry%%:*}"; vbytes="${entry#*:}"
+  fresh_tree
+  case "$vname" in
+    bom-*) ;;
+    *) uni_go "$TMP/tree/pkg/fixture_aw2.go" "CodeGo" "$vbytes" 236 ;;
+  esac
+  uni_ts "$TMP/tree/tests/fixture_aw2.ts" "codeTs" "$vbytes" 236
+  if expect "(ax) a $vname line is code, so 240 statements-worth becomes 241 (Go and TS)" 1; then
+    grep -q 'codeTs 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ax/$vname) TS did not count the line as code" >&2; FAIL=1; }
+    case "$vname" in
+      bom-*) ;;
+      *) grep -q 'CodeGo 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ax/$vname) Go did not count the line as code" >&2; FAIL=1; } ;;
+    esac
+  fi
+done
 
 # (av) small witnesses with exact counts: signature, two literal edges, closing
 # brace = 4 lines whatever the blank line holds.

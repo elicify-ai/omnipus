@@ -330,10 +330,15 @@ function markTokenLines(sf, text, lines, firstOnLine, start, end) {
   }
 }
 
-// hasNonSpace: any character in [start, end) that is not whitespace. \s is
-// Unicode whitespace (no-break space, em space, line separators, BOM), so a blank
-// line inside a template literal made of such characters stays blank.
-const NON_SPACE = /\S/;
+// Blank-line whitespace, one explicit set shared with scripts/funlen/main.go (keep
+// the two in step; scripts/check-function-budget-selfcheck.sh runs every member
+// through both). It is exactly the Unicode White_Space property:
+//   U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A,
+//   U+2028, U+2029, U+202F, U+205F, U+3000
+// U+FEFF (byte order mark), U+200B (zero width space) and U+180E (Mongolian vowel
+// separator) are not White_Space: they count as code. JavaScript's own \s is not
+// used because it includes U+FEFF and omits U+0085.
+const NON_SPACE = /[^\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/;
 function hasNonSpace(text, start, end) {
   return NON_SPACE.test(text.slice(start, end));
 }

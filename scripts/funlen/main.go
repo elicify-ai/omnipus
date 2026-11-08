@@ -46,7 +46,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -327,16 +326,33 @@ func markToken(src []byte, file *token.File, starts []int, info *sourceInfo, pos
 	}
 }
 
-// hasNonSpace reports whether b holds any character that is not whitespace.
-// Whitespace is Unicode whitespace (no-break space, em space and the like), so a
-// blank line inside a raw string made of such characters stays blank.
+// Blank-line whitespace, one explicit set shared with scripts/tsfunlen.cjs (keep
+// the two in step; scripts/check-function-budget-selfcheck.sh runs every member
+// through both). It is exactly the Unicode White_Space property:
+//
+//	U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A,
+//	U+2028, U+2029, U+202F, U+205F, U+3000
+//
+// U+FEFF (byte order mark), U+200B (zero width space) and U+180E (Mongolian vowel
+// separator) are not White_Space: they are visible to tools and count as code.
+func isBlankRune(r rune) bool {
+	switch {
+	case r >= 0x09 && r <= 0x0D, r == 0x20, r == 0x85, r == 0xA0, r == 0x1680,
+		r >= 0x2000 && r <= 0x200A, r == 0x2028, r == 0x2029, r == 0x202F, r == 0x205F, r == 0x3000:
+		return true
+	}
+	return false
+}
+
+// hasNonSpace reports whether b holds any character outside that set. An invalid
+// UTF-8 byte counts as a character.
 func hasNonSpace(b []byte) bool {
 	for len(b) > 0 {
 		r, size := utf8.DecodeRune(b)
 		if r == utf8.RuneError && size <= 1 {
 			return true
 		}
-		if !unicode.IsSpace(r) {
+		if !isBlankRune(r) {
 			return true
 		}
 		b = b[size:]
