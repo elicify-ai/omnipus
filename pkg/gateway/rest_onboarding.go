@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // onboardingOwnerRequiredMsg is the 401 for an unauthenticated
@@ -326,6 +327,12 @@ func decodeOnboardingCompleteBody(
 // "onboarding state unknown" or "an authentication authority already
 // exists" — see onboardingWindowGate / preAuthOnboardingWindowGate.
 const onboardingClosedMsg = "onboarding already complete"
+
+// onboardingCatalogEndpointRefusedMsg is the 400 for an endpoint override on
+// a catalog provider id on the hosted edition (see
+// common.CatalogBaseOverrideRefused).
+const onboardingCatalogEndpointRefusedMsg = "This provider's address can't be changed. " +
+	"Leave the address empty to use the provider's own."
 
 // probeWindowClosedMsg is POST /onboarding/probe-provider's refusal body. It
 // is the message that route already returned for "onboarding complete", now
@@ -772,6 +779,15 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 		jsonErr(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID))
 		return true
 	}
+	// Hosted edition: every id here is a catalog id, and a catalog id keeps
+	// the catalog's endpoint (the PUT /providers/{id} rule). An endpoint
+	// override is refused unless the operator's SSRF allow list names its
+	// host; that includes azure, which has no catalog base and is
+	// unsupported on PUT, so a hosted tenant cannot onboard it either.
+	if providercommon.CatalogBaseOverrideRefused(ro.provider.Endpoint) {
+		jsonErrField(ro.w, http.StatusBadRequest, onboardingCatalogEndpointRefusedMsg, "endpoint")
+		return true
+	}
 	// The two variants diverge for the first time here: the api_key variant
 	// must carry a key, and the sign_in variant must name a row whose catalog
 	// entry actually declares sign_in (the rule OnboardingProviderSignIn.yaml
@@ -1050,6 +1066,11 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 			entryMap["auth_method"] = ro.provider.AuthMethod
 			if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 				entryMap["api_base"] = ep
+			} else if custom, _ := entryMap["custom"].(bool); usableStoredAPIBase(ro.provider.ID, strVal(entryMap, "api_base"), custom) == "" {
+				// Hosted: the owner onboarded this pair without an endpoint, so
+				// a base already on the row (a planted one) must not survive
+				// and receive the owner's key.
+				delete(entryMap, "api_base")
 			}
 			if region := strings.TrimSpace(ro.provider.Region); region != "" {
 				entryMap["region"] = region
@@ -1424,8 +1445,8 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 			"Couldn't verify your %s key: no endpoint is configured for this provider and none was supplied. Continuing with the key as entered.",
 			providerDisplayName,
 		)
-	} else if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), probeBase); err != nil {
+	} else if checker := a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(r.Context(), probeBase); err != nil {
 			// SEC-24: this endpoint is reachable pre-auth and CSRF-exempt, and
 			// probeBase can come straight from the request body, so the probe
 			// must never be the thing that reaches an internal address. Skipping
@@ -1811,6 +1832,13 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	// later for a reason the operator cannot act on. A custom row is not a
 	// catalog row, so it declares no auth methods and is never refused here.
 	ro.catalogRow, ro.isCatalogRow = providers.CatalogProvider(ro.body.Id)
+	// Hosted edition: the same refusal PUT /providers/{id} applies — an
+	// api_base on a catalog id is refused unless the operator's SSRF allow
+	// list names its host (common.CatalogBaseOverrideRefused).
+	if ro.isCatalogRow && providercommon.CatalogBaseOverrideRefused(reqAPIBase) {
+		jsonErrField(ro.w, http.StatusBadRequest, onboardingCatalogEndpointRefusedMsg, "api_base")
+		return true
+	}
 	if len(ro.catalogRow.AuthMethods) > 0 && !catalogOffersAuth(ro.catalogRow.AuthMethods, ro.body.Auth) {
 		jsonErrField(ro.w, http.StatusBadRequest, probeUnsupportedAuthMsg(ro.body.Auth), "auth")
 		return true
@@ -1862,10 +1890,10 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	// well-formed and the server REFUSED it — reporting that as "the provider
 	// rejected your key" would send the operator hunting for a credential
 	// problem that does not exist.
-	if ro.a.ssrfChecker != nil {
-		if err := ro.a.ssrfChecker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
+	if checker := ro.a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
 			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
-			jsonErr(ro.w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
+			jsonErr(ro.w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 			return true
 		}
 	}

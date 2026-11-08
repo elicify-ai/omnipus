@@ -446,12 +446,17 @@ func TestProbeProviderID_Validation(t *testing.T) {
 			status: http.StatusBadRequest, field: "model",
 			errContains: "256",
 		},
-		// ── Outline: internal-CIDR api_base → 422, nothing contacted ──
+		// ── Outline: internal-CIDR api_base, nothing contacted ──
+		// newProbeAPI pins the hosted edition, where an endpoint override on
+		// a catalog id is refused (400, field api_base) unless the operator
+		// allow list names its host; only loopback is named, so 10.0.0.5 is
+		// refused before the SSRF gate is consulted. The SSRF 422 itself is
+		// pinned by TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint.
 		{
-			name:   "internal-CIDR api_base is refused by the SSRF gate",
+			name:   "internal-CIDR api_base is refused on a catalog id",
 			body:   `{"id":"openrouter","auth":"api_key","api_key":"k","api_base":"http://10.0.0.5/v1"}`,
-			status: http.StatusUnprocessableEntity,
-			errMsg: "provider endpoint not allowed (SSRF guard)",
+			status: http.StatusBadRequest, field: "api_base",
+			errMsg: onboardingCatalogEndpointRefusedMsg,
 		},
 	}
 
