@@ -13583,8 +13583,7 @@ paths:
         handshake (the same as POST /agents/{id}/runner/test) runs on the
         checked pathname with no second lookup — the only requirement is that
         the binary runs and returns a valid version-shaped response; no
-        per-CLI identity/name match is performed. On Windows the launch can
-        still apply an executable-extension lookup (documented limitation). A signed-in person only (T11,
+        per-CLI identity/name match is performed. A signed-in person only (T11,
         RequirePersonSession): CLI-token, development-bypass and user-less
         requests get 403 before the body is read. Before anything starts,
         the shared program-file check (thirdpartycli.CheckProgramPath against

@@ -730,7 +730,7 @@ The check only asks whether an agent could have planted the program. It does not
 
 On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. **Windows junctions are not followed yet:** a program reached through a junction (a Windows folder link) that points into an agent-writable folder is not recognised as being there. Use the check on Windows only for programs installed outside agent folders and reached without junctions.
 
-When the check passes on Linux or macOS, Omnipus runs exactly the file it checked, by the same path, with no further lookup. **On Windows this is not guaranteed yet:** a later executable-extension lookup can select a different file, so checked-file launch identity is deferred together with the other Windows checks. An empty path is reported as **missing-binary**. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
+When the check passes, Omnipus runs exactly the file it checked, by the same path, with no further lookup — on Linux, macOS and Windows alike. An empty path is reported as **missing-binary**. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
 
 ## Limits and things to watch
 
