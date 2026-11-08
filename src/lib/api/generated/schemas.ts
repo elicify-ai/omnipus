@@ -12008,6 +12008,8 @@ A view that cannot be answered — unknown, stored disabled (FR-105), refused at
 Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the &#x60;.base&#x60; it came from. Base previews and dashboard embeds keep listing by source; this is the collection&#x27;s own list.
 
 A collection_id outside this workspace&#x27;s scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+
+The loader is the one the Library listing uses (include_views on GET .../entries): it reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per load. A view file it does not read is not listed, cannot be opened through GET .../knowledge/view, and is named in unloadable.
 `,
     requestFormat: "json",
     parameters: [

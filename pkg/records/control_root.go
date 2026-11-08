@@ -5,11 +5,26 @@
 package records
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
+
+// LoadControlCheckedAt opens an os.Root at the knowledge base root vaultRoot
+// and runs LoadControlChecked through it, so no schema or view read can leave
+// the knowledge base. vaultRoot also names files in the reports, exactly as
+// LoadSchemas/LoadViews name them.
+func LoadControlCheckedAt(ctx context.Context, vaultRoot string, limits LoadLimits) (CheckedControl, error) {
+	root, err := os.OpenRoot(vaultRoot)
+	if err != nil {
+		return CheckedControl{}, fmt.Errorf("opening knowledge base root: %w", err)
+	}
+	defer root.Close()
+	return LoadControlChecked(ctx, RootControlFS{Root: root}, vaultRoot, limits)
+}
 
 // RootControlFS is a ControlFS whose every access goes through root, which
 // is opened at the knowledge base root: os.Root refuses any name, link or

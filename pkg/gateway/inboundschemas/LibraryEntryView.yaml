@@ -7,9 +7,10 @@ description: >
 
 
   A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml`
-  that the collection's view loader ACCEPTED (the same parser and record
-  schemas GET .../knowledge/views uses, reading only regular files inside
-  the knowledge base, within the listing's size limits). Every
+  that the collection's view loader ACCEPTED (the same load GET
+  .../knowledge/views uses: the same parser and record schemas, reading
+  only regular files inside the knowledge base, within the listing's size
+  limits). Every
   field here is read from that loaded view, never re-derived by the client:
   the same no-re-derivation rule KnowledgeBaseView states.
 

@@ -23,7 +23,7 @@ import (
 // correctly over the API — while having no UI surface at all, because the
 // only views listing was base-views, which is FILE-addressed (`?path=<.base>`)
 // and answers "path is not a base file" for everything else. This endpoint is
-// the collection-addressed list: every view file records.LoadViews accepts,
+// the collection-addressed list: every view file the checked loader accepts,
 // each with the slug it is actually addressed by, its label, its kind,
 // whether it can be served, and — for an imported view — the `.base` it came
 // from (KnowledgeBaseView.source).
@@ -31,9 +31,10 @@ import (
 // Base previews and dashboard embeds keep listing by `source`; nothing about
 // base-views changes here.
 //
-// THE LOADER IS records.LoadViews AND NOTHING ELSE — the same single view
-// parser base-views serves through (see that file's header for why a second
-// parser here would be the same mistake at a different layer), and the same
+// THE LOADER IS loadKnowledgeViewSet AND NOTHING ELSE — records'
+// LoadControlChecked, the same single view parser base-views and the Library
+// listing serve through (see base-views' header for why a second parser here
+// would be the same mistake at a different layer), and the same
 // NewViewFindLoader whose ServeRefusal decides "servable" in both places, so
 // the two listings can never disagree about a view's servability.
 //
@@ -74,13 +75,14 @@ func (a *restAPI) handleKnowledgeViews(w http.ResponseWriter, r *http.Request, w
 		return
 	}
 
-	// LoadViews needs the schemas for the same reason base-views does: without
-	// them a view naming a type or property the vault no longer declares
-	// loads clean and queries nothing. With them it is reported unservable —
-	// which is the honest answer this surface exists to give.
-	// The Library listing's include_views rows use the same parser and schema
-	// check (loadListingViewSet), reading only through a root at the collection.
-	views, report, loadErr := loadKnowledgeViewSet(col.Root)
+	// The views are validated against the schemas for the same reason
+	// base-views does: without them a view naming a type or property the
+	// vault no longer declares loads clean and queries nothing. With them it
+	// is reported unservable — which is the honest answer this surface exists
+	// to give. The load is the Library listing's own (loadKnowledgeViewSet):
+	// only regular files inside the collection, within the listing limits, so
+	// this list and the listing's view rows are one set (L4, #1017).
+	views, report, loadErr := loadKnowledgeViewSet(r.Context(), col.Root)
 	if loadErr != nil {
 		logger.ErrorCF("rest", "knowledge: loading saved views for the views list",
 			map[string]any{"workspace_id": workspaceID, "error": loadErr.Error()})

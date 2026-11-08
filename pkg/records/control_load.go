@@ -21,23 +21,26 @@ import (
 // WHY A SECOND ENTRY POINT
 //
 // LoadSchemas and LoadViews read host paths with os.ReadDir/os.ReadFile. That
-// is right for a caller that has already decided to work on a knowledge base
-// (knowledge_configure, the importer). It is not right for a caller that
-// loads views IMPLICITLY while it does something else — a Library or agent
-// listing that only wants to say which views belong to a folder. Such a
-// caller must not read anything the reader it serves may not read, must not
-// follow links out of the knowledge base, and must not let one planted file
-// make the listing slow, large or stuck.
+// is right for a caller that is changing a knowledge base and must see every
+// file in it (knowledge_configure, knowledge_edit, the importer). It is not
+// right for a caller that SERVES saved views to a reader: a Library or agent
+// listing, the views and base-views endpoints, opening a view, vault search,
+// knowledge_find and knowledge_describe (#1017, team-lead decision
+// 2026-11-08). Such a caller must not read anything the reader it serves may
+// not read, must not follow links out of the knowledge base, and must not let
+// one planted file make the answer slow, large or stuck.
 //
-// LoadViewSetChecked therefore reads only through a ControlFS the caller
-// builds on its own checked handle, refuses links and non-regular files, and
-// stays inside ListingLoadLimits. Parsing, duplicate and schema checks are the
+// LoadControlChecked therefore reads only through a ControlFS the caller
+// builds on its own checked handle (LoadControlCheckedAt: an os.Root at the
+// knowledge base), refuses links and non-regular files, and stays inside
+// ListingLoadLimits. Every serving caller uses the same limits, so the set a
+// listing shows and the set the endpoints serve are one set. Parsing, duplicate and schema checks are the
 // same code LoadSchemas/LoadViews run (loadSchemaPaths/loadViewPaths), so a
 // file that loads here loads identically there.
 // ---------------------------------------------------------------------------
 
-// Limits for implicit loading (team-lead product decision, 2026-11-08, from
-// security review S3 of #1017). One named place: every implicit caller uses
+// Limits for serving saved views (team-lead product decisions, 2026-11-08, from
+// security review S3 of #1017). One named place: every serving caller uses
 // ListingLoadLimits, and nothing else sets these numbers.
 const (
 	// ListingMaxFileBytes is the most read from one schema or view file.
@@ -50,7 +53,7 @@ const (
 	ListingMaxTotalBytes int64 = 4 << 20 // 4 MiB
 )
 
-// LoadLimits bounds one LoadViewSetChecked call.
+// LoadLimits bounds one LoadControlChecked call.
 type LoadLimits struct {
 	MaxFileBytes  int64
 	MaxCandidates int
@@ -90,7 +93,16 @@ var (
 	errBudgetSpent         = fmt.Errorf("the %d MiB limit for one load was already used by other files", ListingMaxTotalBytes>>20)
 )
 
-// LoadViewSetChecked loads a knowledge base's record schemas and then its
+// CheckedControl is what one checked load read: the record schemas, and the
+// saved views validated against them, each with its load report.
+type CheckedControl struct {
+	Schemas      *SchemaSet
+	SchemaReport *SchemaLoadReport
+	Views        *ViewSet
+	ViewReport   *ViewLoadReport
+}
+
+// LoadControlChecked loads a knowledge base's record schemas and then its
 // saved views, validated against those schemas, through cfs and within
 // limits. vaultRoot is used only to name files in reports (SavedView.
 // SourcePath, rejection paths); nothing is opened through it.
@@ -100,33 +112,43 @@ var (
 // directory, a directory cfs refuses, or a cancelled ctx is an error: the
 // caller logs it and shows no views. A refused, oversized or surplus file is
 // a per-file rejection, never an error.
-func LoadViewSetChecked(ctx context.Context, cfs ControlFS, vaultRoot string, limits LoadLimits) (*ViewSet, *ViewLoadReport, error) {
+func LoadControlChecked(ctx context.Context, cfs ControlFS, vaultRoot string, limits LoadLimits) (CheckedControl, error) {
 	reader := &checkedReader{ctx: ctx, cfs: cfs, vaultRoot: vaultRoot, limits: limits, remaining: limits.MaxTotalBytes}
 
 	schemaPaths, err := reader.candidates(VaultMarkerDirName + "/" + RecordsDirName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading schema directory: %w", err)
+		return CheckedControl{}, fmt.Errorf("reading schema directory: %w", err)
 	}
-	schemas, _, err := loadSchemaPaths(schemaPaths, reader.read)
+	schemas, schemaReport, err := loadSchemaPaths(schemaPaths, reader.read)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading record schemas: %w", err)
+		return CheckedControl{}, fmt.Errorf("loading record schemas: %w", err)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, nil, ctxErr
+		return CheckedControl{}, ctxErr
 	}
 
 	viewPaths, err := reader.candidates(VaultMarkerDirName + "/" + ViewsDirName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading views directory: %w", err)
+		return CheckedControl{}, fmt.Errorf("reading views directory: %w", err)
 	}
-	views, report, err := loadViewPaths(viewPaths, schemas, reader.read)
+	views, viewReport, err := loadViewPaths(viewPaths, schemas, reader.read)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading saved views: %w", err)
+		return CheckedControl{}, fmt.Errorf("loading saved views: %w", err)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, nil, ctxErr
+		return CheckedControl{}, ctxErr
 	}
-	return views, report, nil
+	return CheckedControl{Schemas: schemas, SchemaReport: schemaReport, Views: views, ViewReport: viewReport}, nil
+}
+
+// LoadViewSetChecked is LoadControlChecked for a caller that needs only the
+// saved views and their report.
+func LoadViewSetChecked(ctx context.Context, cfs ControlFS, vaultRoot string, limits LoadLimits) (*ViewSet, *ViewLoadReport, error) {
+	c, err := LoadControlChecked(ctx, cfs, vaultRoot, limits)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.Views, c.ViewReport, nil
 }
 
 // checkedReader carries one load's ControlFS, limits and remaining budget.

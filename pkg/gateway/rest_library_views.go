@@ -8,8 +8,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -32,9 +30,9 @@ import (
 // row's path is outside the listed folder by design (contract L7, risk R3).
 //
 // One load per request: K is found once, its schemas and views are loaded
-// once through loadListingViewSet — the views endpoint's parser and schema
-// check, read through a root opened at K and within the listing limits — and
-// placement probes are memoized per folder.
+// once through loadKnowledgeViewSet — the views endpoint's own loader, read
+// through a root opened at K and within the listing limits — and placement
+// probes are memoized per folder.
 //
 // K must itself be a collection of the workspace's knowledge scope, matched
 // exactly (L18, architect decision A1, founder answer Q5 A): a knowledge base
@@ -122,40 +120,20 @@ func joinRel(base, rel string) string {
 	}
 }
 
-// loadKnowledgeViewSet loads a knowledge base's saved views WITH its record
-// schemas, for the views endpoint. The Library listing loads through
-// loadListingViewSet: the same parser and schema check (so a file accepted
-// there is accepted here too), plus the listing's confinement and limits.
-func loadKnowledgeViewSet(realRoot string) (*records.ViewSet, *records.ViewLoadReport, error) {
-	schemas, _, err := records.LoadSchemas(realRoot)
+// loadKnowledgeViewSet loads a knowledge base's record schemas and saved
+// views for every surface that serves views: the Library listing, the views
+// and base-views endpoints. Every read goes through an os.Root opened at the
+// knowledge base's real root: links, special files and anything outside it
+// are refused, each file is opened non-blocking and checked on the opened
+// descriptor, and the load stays within records.ListingLoadLimits (S1-S3). A
+// file it refuses is a per-file rejection in the report (the views endpoint
+// counts and names it, L13), never an error.
+func loadKnowledgeViewSet(ctx context.Context, realRoot string) (*records.ViewSet, *records.ViewLoadReport, error) {
+	loaded, err := records.LoadControlCheckedAt(ctx, realRoot, records.ListingLoadLimits())
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading record schemas: %w", err)
+		return nil, nil, err
 	}
-	views, report, err := records.LoadViews(realRoot, schemas)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading saved views: %w", err)
-	}
-	return views, report, nil
-}
-
-// loadListingViewSet loads K's schemas and saved views for a listing. Same
-// parser and schema check as loadKnowledgeViewSet, but every read goes
-// through an os.Root opened at K's real root: links, special files and
-// anything outside K are refused, each file is opened non-blocking and
-// checked on the opened descriptor, and the load stays within
-// records.ListingLoadLimits (S1-S3). A file it refuses is left out of the
-// rows, never an error.
-func loadListingViewSet(ctx context.Context, realRoot string) (*records.ViewSet, error) {
-	kbRoot, err := os.OpenRoot(realRoot)
-	if err != nil {
-		return nil, fmt.Errorf("opening knowledge base root: %w", err)
-	}
-	defer kbRoot.Close()
-	views, _, err := records.LoadViewSetChecked(ctx, records.RootControlFS{Root: kbRoot}, realRoot, records.ListingLoadLimits())
-	if err != nil {
-		return nil, err
-	}
-	return views, nil
+	return loaded.Views, loaded.ViewReport, nil
 }
 
 // savedViewKindAndSource returns a view's declared kind and source, each nil
@@ -196,7 +174,7 @@ func (a *restAPI) addLibraryViewRows(
 	if !ok {
 		return entries
 	}
-	views, err := loadListingViewSet(ctx, kb.realRoot)
+	views, _, err := loadKnowledgeViewSet(ctx, kb.realRoot)
 	if err != nil {
 		logger.WarnCF("rest", "library listing: saved views could not be loaded; listing without view rows",
 			map[string]any{"workspace_id": workspaceID, "knowledge_base": kb.rel, "error": err.Error()})

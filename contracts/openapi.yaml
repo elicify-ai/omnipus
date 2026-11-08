@@ -9692,10 +9692,10 @@ paths:
           .../knowledge/views?collection_id=<that id> and opens through GET
           .../knowledge/view. A view file that failed to load is not listed
           here; that endpoint's `unloadable` list remains where it is
-          reported. The listing reads only regular files inside the knowledge
-          base (never a link), at most 256 KiB per file, 128 files per
-          folder and 4 MiB per listing; a view file beyond those limits is
-          left out and the listing still succeeds.
+          reported. The listing, like that endpoint, reads only regular files
+          inside the knowledge base (never a link), at most 256 KiB per file,
+          128 files per folder and 4 MiB per listing; a view file beyond those
+          limits is left out and the listing still succeeds.
 
 
           NESTED KNOWLEDGE BASES. A knowledge base that is not itself a
@@ -10936,6 +10936,13 @@ paths:
         never a 403 or 404, which would confirm the collection exists. View
         files the loader rejected are counted in unloadable_count and named
         in unloadable, never silently dropped.
+
+
+        The loader is the one the Library listing uses (include_views on GET
+        .../entries): it reads only regular files inside the knowledge base
+        (never a link), at most 256 KiB per file, 128 files per folder and
+        4 MiB per load. A view file it does not read is not listed, cannot be
+        opened through GET .../knowledge/view, and is named in unloadable.
       tags:
       - Knowledge
       security:
