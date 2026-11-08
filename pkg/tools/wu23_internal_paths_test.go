@@ -180,7 +180,8 @@ func TestWU23_AllowListReadOnlyAndSessionScoped(t *testing.T) {
 	if policyErr != nil {
 		t.Fatal(policyErr)
 	}
-	for _, rel := range []string{"media/allowed.txt", "uploads/acting/allowed.txt", "uploads/root/allowed.txt", "skills/fixture/helper.txt"} {
+	// r15 §6.1 item 3 removes skills from the unconditional base allow-list.
+	for _, rel := range []string{"media/allowed.txt", "uploads/acting/allowed.txt", "uploads/root/allowed.txt"} {
 		t.Run(rel, func(t *testing.T) {
 			path := filepath.Join(f.Home, filepath.FromSlash(rel))
 			h, err := ResolvePath(wu23Context(f), p, "read_file", "allow", FSOpRead, path)
@@ -201,6 +202,24 @@ func TestWU23_AllowListReadOnlyAndSessionScoped(t *testing.T) {
 			}
 		})
 	}
+	t.Run("skills/fixture/helper.txt", func(t *testing.T) {
+		// This turn has no loadable skill grant or editor authority. Helpers
+		// now share the folder's read boundary, not the old A7 blanket allow.
+		// The paired real granted/editor positives live in
+		// TestSkillsBoundary_RealTurnReadListGrep.
+		path := filepath.Join(f.Home, "skills", "fixture", "helper.txt")
+		for _, op := range []FSOp{FSOpRead, FSOpWrite} {
+			h, err := ResolvePath(wu23Context(f), p, "read_file", "ungranted-helper", op, path)
+			if h != nil {
+				assert.NoError(t, h.Close())
+			}
+			assert.Nil(t, h, "ungranted helper must yield no %s handle", op)
+			assert.ErrorIs(t, err, ErrCarveOut, "r15 §6.1: ungranted helper %s is protected", op)
+		}
+		b, err := os.ReadFile(path)
+		assert.NoError(t, err)
+		assert.Equal(t, "WU23_ALLOWED_CONTROL\n", string(b), "refused operations preserve helper bytes")
+	})
 	path := filepath.Join(f.Home, "uploads", "other", "private.txt")
 	h, err := ResolvePath(wu23Context(f), p, "read_file", "other", FSOpRead, path)
 	if h != nil {

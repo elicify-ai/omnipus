@@ -350,18 +350,20 @@ func (pe *PlanEngine) promoteInboxMembers(p *plan.Plan, tasks []task.Task) (prom
 	if !p.PermitsMemberDispatch() {
 		return false
 	}
-	next := task.StatusNext
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusInbox {
 			continue
 		}
-		if _, err := pe.taskStore.Update(t.ID, task.Patch{Status: &next}); err != nil {
+		// r17 TK-30: the store decides on the fresh task state under its lock
+		// and keeps a member whose trigger has not released it waiting.
+		_, promoted, err := pe.taskStore.PromoteInboxIfReleased(t.ID)
+		if err != nil {
 			logger.WarnCF("plan_engine", "promote inbox member to next failed",
 				map[string]any{"plan_id": p.ID, "task_id": t.ID, "error": err.Error()})
 			continue
 		}
-		promotedAny = true
+		promotedAny = promotedAny || promoted
 	}
 	return promotedAny
 }
@@ -594,9 +596,16 @@ func allMembersTerminal(tasks []task.Task) bool {
 // diagnosed instead of spun on.
 func (pe *PlanEngine) planStallReason(tasks []task.Task, now time.Time) string {
 	stranded := pe.observeStrandedMembers(tasks, now)
+	// r17 TK-30: a member whose only hold is its own live trigger occurrence
+	// (or a chain ending only in such members) is waiting as designed.
+	waiting := pe.newExpectedWaitProbe(tasks, now)
 
 	var blockedIDs, inboxIDs, strandedIDs []string
 	for i := range tasks {
+		if (tasks[i].Status == task.StatusBlocked || tasks[i].Status == task.StatusInbox) &&
+			waiting.expected(&tasks[i]) {
+			continue
+		}
 		switch tasks[i].Status {
 		case task.StatusNext:
 			return "" // something is dispatchable - not stalled

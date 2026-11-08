@@ -226,8 +226,8 @@ type GoalRecordAccess interface {
 	// this so set_goal's result can carry it, letting the SPA key a
 	// goal_status live-progress overlay onto the record card it renders
 	// from this tool's own result), current goal condition
-	// (session.SessionMeta.GoalCondition; "" means no active goal — FR-005's
-	// goalless-session refusal reads this) and current goal record JSON
+	// (session.SessionMeta.GoalCondition; "" means the engine must activate a
+	// goal before registration) and current goal record JSON
 	// (session.SessionMeta.GoalCriteriaJSON; legitimately "" for an active
 	// goal with no record registered yet — ADR-088 D1's transient state).
 	ReadGoalState(sessionID string) (goalID, goalCondition, recordJSON string, err error)
@@ -278,6 +278,7 @@ type SetGoalTool struct {
 	// funcs, not late-bound registries.
 	diffFn        DiffFn
 	feasibilityFn FeasibilityFn
+	activateFn    GoalActivationFn
 }
 
 // NewSetGoalTool constructs a SetGoalTool. accessFn may be nil for the
@@ -306,8 +307,8 @@ func (t *SetGoalTool) Name() string { return SetGoalToolName }
 
 // Scope implements Tool. ScopeGeneral — every human-facing agent (core
 // roster, subagent tier that runs owner sessions, custom agents) can author
-// its own goal record; the scope preconditions below (delegation depth,
-// active-goal requirement) are the real per-call gate, not agent type.
+// its own goal record; the session/delegation preconditions and the engine's
+// activation admission are the real per-call gates, not agent type.
 func (t *SetGoalTool) Scope() ToolScope { return ScopeGeneral }
 
 // Category implements Tool.
@@ -421,6 +422,7 @@ type setGoalToolExecute struct {
 	sessionID         string
 	goalID            string
 	currentRecordJSON string
+	needsActivation   bool
 	mode              setGoalMode
 	authorID          string
 	definition        string
@@ -454,7 +456,7 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	return sg.buildResult()
 }
 
-// validateScopeAndMode checks the store, session scope, active goal, mode, and authoring inputs.
+// validateScopeAndMode checks the store, session scope, mode, and authoring inputs.
 func (sg *setGoalToolExecute) validateScopeAndMode() (*ToolResult, bool) {
 	sg.access = sg.t.access()
 	if sg.access == nil {
@@ -466,10 +468,8 @@ func (sg *setGoalToolExecute) validateScopeAndMode() (*ToolResult, bool) {
 		return ErrorResult("set_goal: no session context — this tool needs a real, store-backed session to write a goal record"), true
 	}
 
-	// --- Scope preconditions (ADR-088 D2 / FR-005) — checked BEFORE any
-	// payload parsing, so a delegated or goalless caller gets the scope
-	// refusal rather than a validation error that might read as "try again
-	// with a corrected payload" when no payload could ever succeed here. ---
+	// Delegated sub-turns still cannot author an owner-session goal. A
+	// goalless owner may activate one, but only after record validation.
 	if depth := ToolDelegationDepth(sg.ctx); depth > 0 {
 		return ErrorResult("set_goal is owner-session-only: a delegated sub-turn cannot author or amend " +
 			"this session's goal record (ADR-088 FR-005) — report your findings back to the parent instead"), true
@@ -481,10 +481,7 @@ func (sg *setGoalToolExecute) validateScopeAndMode() (*ToolResult, bool) {
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("set_goal: could not read this session's goal state: %v", err)).WithError(err), true
 	}
-	if strings.TrimSpace(goalCondition) == "" {
-		return ErrorResult("set_goal refuses: this session has no active goal — there is nothing to " +
-			"register a record against (ADR-088 FR-005)"), true
-	}
+	sg.needsActivation = strings.TrimSpace(goalCondition) == ""
 
 	var mErr error
 	sg.mode, mErr = parseSetGoalMode(sg.args)
@@ -702,6 +699,9 @@ func (sg *setGoalToolExecute) rejectDuplicateOrInfeasible() (*ToolResult, bool) 
 
 // persistRecord builds, diffs, persists, and logs the replacement goal record.
 func (sg *setGoalToolExecute) persistRecord() (*ToolResult, bool) {
+	if result, stop := sg.activateGoalIfNeeded(); stop {
+		return result, true
+	}
 	newRec := setGoalRecord{
 		Intent:             sg.oldRec.Intent,
 		Prompt:             sg.oldRec.Prompt,

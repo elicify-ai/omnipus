@@ -172,6 +172,7 @@
             "has_later": false,
             "page_info": {
               "byte_budget_exceeded": false,
+              "byte_ceiling": 8388608,
               "context": {
                 "duplicate_ids": [],
                 "spans": []
@@ -227,6 +228,7 @@
             "id": "id-1",
             "role": "user",
             "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:06Z",
             "type": "replay_message"
           }
         },

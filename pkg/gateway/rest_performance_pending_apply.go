@@ -29,6 +29,9 @@ var performancePendingApplyFieldOrder = []gen.PerformancePendingApplyChangedFiel
 	gen.PerformancePendingApplyChangedFieldsMaxParallelAgents,
 	gen.PerformancePendingApplyChangedFieldsToolsOnDemand,
 	gen.PerformancePendingApplyChangedFieldsGoalMaxRounds,
+	gen.PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds,
+	gen.PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled,
+	gen.PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes,
 	gen.PerformancePendingApplyChangedFieldsMaxToolIterations,
 }
 

@@ -1,13 +1,14 @@
 import { AgentMark } from '@/components/agents/AgentMark'
+import { AttentionHalo } from '@/components/agents/AttentionHalo'
 import type { Agent } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import type { AttentionMotion } from './attentionCue'
-import './attention.css'
 
 /**
  * One slot in front of the agent name: the agent's own AgentMark (the same
  * mark every surface draws), wrapped in the attention halo. An agent that is
  * not loaded draws the Omnipus fallback — never a guessed figure or initial.
+ * The halo itself is the shared AttentionHalo (#1449: the group chat uses
+ * the same one).
  */
 export function SidebarAgentIcon({
   agent,
@@ -21,15 +22,8 @@ export function SidebarAgentIcon({
   motion: AttentionMotion
 }) {
   return (
-    <span
-      data-attention-halo={halo ? 'warning' : undefined}
-      className={cn(
-        'inline-flex shrink-0 rounded-full',
-        halo && 'sidebar-attention-halo',
-        halo && motion === 'loop' && 'sidebar-attention-halo-loop',
-      )}
-    >
+    <AttentionHalo halo={halo} motion={motion}>
       <AgentMark agent={agent} name={name} size={26} />
-    </span>
+    </AttentionHalo>
   )
 }

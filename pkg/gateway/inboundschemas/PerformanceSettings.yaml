@@ -81,6 +81,31 @@ properties:
       (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no
       new settings tab. Always present in responses.
     example: 20
+  goal_reminder_quiet_seconds:
+    type: integer
+    minimum: 30
+    maximum: 3600
+    description: >
+      Idle-only quiet window before an automatic goal reminder, in seconds.
+      Default 60; there is no off value. Always resolved in responses.
+      Live changes apply on the next fixed 30-second sweep without restart.
+    example: 60
+  goal_stalled_checkin_enabled:
+    type: boolean
+    description: >
+      Whether stalled busy work can receive a check-in. Default true.
+      This is the only stalled-work off switch; it does not disable idle
+      reminders. Always resolved in responses. Live without restart.
+    example: true
+  goal_stalled_checkin_minutes:
+    type: integer
+    minimum: 5
+    maximum: 1440
+    description: >
+      Busy-work stall threshold in minutes, independent of the idle quiet
+      window. Default 30. Retained while check-ins are disabled; bounds still
+      apply while disabled. Always resolved in responses. Live without restart.
+    example: 30
   max_tool_iterations:
     type: integer
     minimum: 1

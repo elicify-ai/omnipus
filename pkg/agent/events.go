@@ -162,6 +162,12 @@ const (
 	EventKindProviderFallback
 	// EventKindHelperEvent follows a durable immutable helper-event chat row.
 	EventKindHelperEvent
+	// EventKindProviderStatus (issues #1478, #1280) reports the state of the
+	// provider call a running turn waits on: waiting (silent for a while),
+	// responding (data again, or the call returned, after waiting) and
+	// recovered (the call succeeded after automatic retries). Payload:
+	// ProviderStatusPayload. The hub forwards it as a provider_status frame.
+	EventKindProviderStatus
 
 	eventKindCount
 )
@@ -208,6 +214,7 @@ var eventKindNames = [...]string{
 	"provider_retry",
 	"provider_fallback",
 	"helper_event",
+	"provider_status",
 }
 
 // String returns the stable string form of an EventKind.
@@ -300,6 +307,8 @@ const (
 
 // TurnStartPayload describes the start of a turn.
 type TurnStartPayload struct {
+	// ChatNotice is internal plumbing: only the generated frame reaches viewers.
+	ChatNotice  *generated.ReplayMessageFrame `json:"-"`
 	Channel     string
 	ChatID      string
 	UserMessage string
@@ -682,6 +691,8 @@ type SubTurnOrphanPayload struct {
 // Detail is computed live at the forwarder (NEVER persisted); only the
 // WS path surfaces it, behind Verbose Chat (operator Q2).
 type ErrorPayload struct {
+	// ChatNotice is internal; only this already-saved generated replay reaches viewers.
+	ChatNotice    *generated.ReplayMessageFrame `json:"-"`
 	Stage         string
 	Code          string
 	Message       string
@@ -835,7 +846,9 @@ type PlanStatusChangedPayload struct {
 // goal_status frame (generated.GoalStatusFrame). Session-scoped — SessionID
 // is the transcript session the goal belongs to.
 type GoalStatusChangedPayload struct {
-	SessionID string `json:"session_id"`
+	// ChatNotice is internal; viewers receive only the existing generated frame.
+	ChatNotice *generated.ReplayMessageFrame `json:"-"`
+	SessionID  string                        `json:"session_id"`
 	// GoalID is the stable per-generation goal identifier (ADR-053 R§8.11,
 	// UAT S3 fix) — see session.SessionMeta.GoalID's doc comment. Empty for a
 	// legacy pre-upgrade goal that never had one minted; the WS forwarder

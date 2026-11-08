@@ -8,7 +8,7 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 
 - **Board** — a kanban of eligible top-level workspace tasks, grouped by status in six columns. Scheduled tasks are hidden, and subtasks are not separate Board cards.
 - **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
-- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
+- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. Scheduled tasks are hidden, the same as on Board and List. That view belongs to planning; see [plans](plans.md).
 
 Above the views, the compact **Plans** header and **New Plan** stay visible. The band is open by default when plans exist, and collapsed when there are none. Click **Plans** to fold or unfold it. The tile area has compact space above and below it. **Unhide done plans** is an unchecked checkbox at the bottom-left of that area, below **All tasks**; it appears when completed plans exist. Checking it reveals completed tiles. Click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
@@ -85,7 +85,7 @@ Picking a plan reveals two more fields — the files the task may touch, and whe
 
 ### Agent checklists
 
-With checklist guidance enabled, agents are instructed to use `set_todos` for every request, including a one-line answer, before their first reply or other tool call. They mark the current item `in_progress`, future items `pending`, and finished items `completed`, updating the full list as work advances and before their final reply. These are prompt instructions, not a guarantee of model compliance; see [shared operating rules](agents.md#shared-operating-rules-for-native-agents) for the registration and permission check, how reload applies changes, and the remaining per-request tool-list limit.
+With checklist guidance enabled, agents are instructed to use `set_todos` when a request needs several steps or tool actions, creating the checklist before they start that work. They mark the current item `in_progress`, future items `pending`, and finished items `completed`, updating the full list as items finish. A direct answer — a greeting, a question, a one-step reply — needs no checklist, and the agent answers it directly. These are prompt instructions, not a guarantee of model compliance; see [shared operating rules](agents.md#shared-operating-rules-for-native-agents) for the registration and permission check, how reload applies changes, and the remaining per-request tool-list limit.
 
 Every item must include `active_form`, a present-participle phrase describing work in progress: for example, `text: "Draft the Q4 summary"` and `active_form: "Drafting the Q4 summary"`. This phrase is stored separately; it does not replace the normal checklist text on the Board. Use `create_task` with dependencies for a durable multi-wave plan while keeping your current working checklist here.
 
@@ -95,13 +95,37 @@ A supplied `active_form` must be a string: on `set_todos` and through the API (t
 
 The normalized phrase survives saved-task reloads and is included when the checklist is read back. Each call still replaces the entire checklist, so every item of every `set_todos` call must carry `active_form` again; previously supplied phrases are not carried over automatically.
 
+### Tasks an agent creates or changes
+
+An agent creates a task with `create_task` and changes one it created or is assigned to with `update_task`. Besides the fields on the form, it can set:
+
+- `description` — a longer note about the task.
+- `tags` — at most 16, each at most 64 characters. They are lower-cased, and repeats are dropped.
+- `run_isolated` — `true` runs the task in its own isolated session.
+- `max_attempts` — how many fresh runs the task gets (its retry limit). It must be at least 1 and no higher than the global limit in Settings. Left out, the task uses the global limit, which is three by default. On `update_task`, `clear_max_attempts: true` returns a task to the global limit; the two cannot be sent together.
+
+Only the agent that created a task may change what it asks for — its instruction (`prompt`), criteria, definition of done or retry limit. The assigned agent is refused with a message that says so; the other fields stay open to both.
+
+**Scheduling by an agent.** An agent schedules a task with `trigger`, in the same shape the web app uses:
+
+| `trigger` | What it means |
+|---|---|
+| `{"type": "manual", "config": {}}` | No schedule. The task runs when someone starts it |
+| `{"type": "once", "config": {"at_ms": …}}` | One run at that time (milliseconds since 1970, UTC) |
+| `{"type": "recurring", "config": {"rrule": …, "dtstart_ms": …, "tz": …}}` | A repeating series, managed like any series on the [Calendar](calendar.md) |
+
+- A task created with a schedule begins in **Inbox** and waits there for its occurrence.
+- Adding a future schedule to a task in **Next** moves it to **Inbox** in the same save, so it cannot start early. Blocked, running and finished tasks keep their status.
+- An agent cannot schedule a task in another workspace: creating one with a schedule there, or adding a schedule to one, is refused and nothing is saved. Only the assignee there or a person can schedule it.
+- To stop a schedule, send `{"type": "manual", "config": {}}`. The schedule is removed and the task keeps its current status.
+
 ## Task statuses
 
 The Board has one column per status; the List has a Status column.
 
 | Status | What it means | How it changes |
 |---|---|---|
-| Inbox | Captured, not triaged | Tasks created through the web form begin in Inbox. Agent-created tasks in the agent's current workspace begin in Next. Tasks delivered by an agent to another workspace begin in Inbox, awaiting local pickup. |
+| Inbox | Captured, not triaged | Tasks created through the web form begin in Inbox. Agent-created tasks in the agent's current workspace begin in Next — unless the create carries a schedule (a `trigger` other than manual), which begins in Inbox and waits there for its first occurrence. Tasks delivered by an agent to another workspace begin in Inbox, awaiting local pickup. |
 | Next | Triaged and ready | You move it, or an agent does |
 | In Progress | A run is working on it | You start it, or a plan reaches it |
 | Blocked | A dependency is unmet | Set and cleared automatically |
@@ -141,7 +165,7 @@ Click or tap a card or List row and the task detail panel slides in. The separat
 
 ## Limits and things to watch
 
-A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run.
+A settings reload is not a gateway restart. A task that is already running keeps its run and conversation through the reload; crash recovery does not mark that live run interrupted. If the gateway process actually restarts during a task, the interrupted run ends Failed and does not resume automatically. Retry starts a fresh run. The one exception is a one-time scheduled run that a gateway shutdown or crash interrupted: the next gateway start runs it again, once (see [calendar](calendar.md)). A run you stopped yourself is never run again.
 
 An agent's `set_todos` scratchpad is a separate checklist card, not another execution of the task it is working on. If the agent uses the task's title for its scratchpad, two cards can have the same title: the assigned task and its working checklist. Creating the checklist does not start another task run.
 
@@ -153,7 +177,7 @@ A named connection that cannot be set up (`model_route_unavailable`), and a conf
 - **A task in a plan is driven by its plan.** It has no Run or Stop control of its own; start, stop, and restart happen at the plan level. See [plans](plans.md).
 - **Dependency circles are rejected.** A chain may not loop back on itself, and dependencies stay inside one plan.
 - **Runs stop after the attempt limit** — three by default. When attempts are spent, the task lands in Failed.
-- **Board and List hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
+- **Board, List and Graph hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
 - **An assignee warning means the agent cannot finish this task as configured.** The warning names the fix, usually a tool permission; starting anyway fails at once.
 - **Deleting a task cannot be undone.** The confirmation is your last chance.
 
@@ -161,6 +185,6 @@ A named connection that cannot be set up (`model_route_unavailable`), and a conf
 
 - [workspaces](workspaces.md) — what a workspace is, and how its team decides who can be assigned.
 - [plans](plans.md) — the Graph view, plan membership, and how a plan starts its tasks.
-- [calendar](calendar.md) — scheduled and repeating tasks, which the Board and List hide.
+- [calendar](calendar.md) — scheduled and repeating tasks, which the Board, List and Graph hide.
 - [goals](goals.md) — the goal loop behind every run, and the judge that scores it.
 - [agents](agents.md) — the agents you can assign to a task, and what each is for.

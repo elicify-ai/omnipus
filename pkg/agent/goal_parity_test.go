@@ -107,7 +107,6 @@ const parityClaimEvidence = "importer migrated, backfill verified"
 func observeGoalBehaviour(t *testing.T, ownerKind generated.GoalOwnerKind) goalBehaviourObservation {
 	t.Helper()
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
@@ -427,7 +426,7 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 	})
 
 	t.Run("goalNudgePrompt names the claim tool", func(t *testing.T) {
-		got := goalNudgePrompt(parityGoalText, 1)
+		got := goalNudgePrompt(parityGoalText)
 		if !strings.Contains(got, claimToolName) {
 			t.Fatalf("D-A: the recordless nudge must ALSO tell the agent to mark the work complete by calling %s — "+
 				"a recordless goal can already be finished; nothing about the missing record implies the work is not; got %q",
@@ -437,7 +436,6 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 
 	t.Run("the dispatched re-post carries the instruction", func(t *testing.T) {
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 		_, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -459,7 +457,6 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 
 	t.Run("the dispatched nudge carries the instruction", func(t *testing.T) {
 		resetGoalTriggerStateForTest()
-		withShortIdleWindow(t, 2*time.Second)
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 		_, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -508,7 +505,6 @@ func TestKeeperPromptsInstructTheAgentToClaim(t *testing.T) {
 // judge-active-reviewer-spec.md line 2517 (FR-097's retained push budget).
 func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -517,7 +513,7 @@ func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 	cp := unmetJudgeProvider("no adjudication may ever run on the keeper path")
 	judgeInst.Provider = cp
 
-	const cycles = 12 // six times the push budget
+	const cycles = 12 // more than the five-consecutive-outcome brake; these are notification-only ticks
 	for cycle := 1; cycle <= cycles; cycle++ {
 		al.goalQuietWindowSettle(time.Now())
 		rewindGoalActivity(t, al, store, sid)
@@ -533,9 +529,9 @@ func TestNudgeLadderHasNoTerminatorOfItsOwn(t *testing.T) {
 			t.Fatalf("D-A/JUDGE-FR-097: after %d quiet cycles rounds_used = %d, want 0 — the ladder must never "+
 				"fall through to an adjudication when its push budget is spent", cycle, rec.Round)
 		}
-		if rec.ZeroOutputPushes > goalZeroOutputPushMax {
-			t.Fatalf("JUDGE-FR-097: the push budget must still BOUND the pushes themselves; ZeroOutputPushes = %d, "+
-				"want at most %d", rec.ZeroOutputPushes, goalZeroOutputPushMax)
+		if rec.ZeroOutputPushes > 5 {
+			t.Fatalf("R6: the consecutive-unproductive streak must not exceed five; ZeroOutputPushes = %d, "+
+				"want at most %d", rec.ZeroOutputPushes, 5)
 		}
 	}
 	if cp.callCount() != 0 {

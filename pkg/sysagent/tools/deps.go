@@ -113,6 +113,27 @@ type Deps struct {
 	// agent-loop lock is held. The gateway wires it to lockConfigWrites; nil
 	// (unit tests building Deps by hand) adds no outer lock.
 	LockConfigWrites func() (unlock func())
+	// ApplyChannelOutbound is the one outbound writer (channels-spec-r8
+	// FR-020, FR-030): the gateway wires it to restAPI.applyOutboundChange,
+	// the same function behind PUT /api/v1/channels/{id}/outbound, and
+	// translates its refusals to *ChannelOutboundRefusalError and
+	// ErrChannelOutboundNotConfigured. Any other error is a save failure
+	// before the file write. Nil (unit tests) makes set_channel_outbound
+	// refuse with CONFIG_SAVE_FAILED.
+	ApplyChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundSaved, error)
+	// PreviewChannelOutbound is the read-only run of the writer's checks
+	// before the approval card (Channels Q2-B): the gateway wires it to
+	// restAPI.previewOutboundChange, which shares its validation with the
+	// writer, audits its own refusals as refused_before_approval and
+	// returns errors in the same neutral types as ApplyChannelOutbound.
+	// change.ExpectedRevision empty means "use the current revision". Nil
+	// (unit tests) makes set_channel_outbound refuse before the card.
+	PreviewChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundPreview, error)
+	// AuditChannelOutboundRefusal records one of set_channel_outbound's own
+	// refusals before the card (omnipus_only, invalid_input,
+	// own_connection) as channel.outbound.write, outcome
+	// refused_before_approval. Nil (unit tests) records nothing.
+	AuditChannelOutboundRefusal func(ctx context.Context, change ChannelOutboundChange, reason string)
 	// URLChecker is the SSRF guard for outbound checks a change tool makes to
 	// an operator- or agent-supplied endpoint (configure_provider's model
 	// listing, FR-031). A row whose catalog locality is local always uses
@@ -375,6 +396,12 @@ type Deps struct {
 	// produces a user override rather than mutating the shipped built-in in
 	// place. Nil in tests or when not wired — callers must nil-check before use.
 	SkillWriter *skills.SkillWriter
+	// SkillGrants removes a deleted skill's name from every agent's stored
+	// grant list (founder Q-S3: best-effort hygiene on delete; SD-30 identity
+	// binding stays the safety rule). edit_skill action=delete passes it to the
+	// pipeline exactly as the REST delete does. Nil in tests or when not wired:
+	// the delete then leaves the stale row, which never matches (SD-30).
+	SkillGrants skills.GrantEditor
 	// ResolveToolPolicy returns the live compositor verdict for a registered
 	// caller. ok is false when the identity is absent or no longer registered.
 	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
@@ -513,8 +540,15 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 			return fmt.Errorf("WithConfig: failed to snapshot config: %w", err)
 		}
 		snapshotJSON := snapshotBuf.Bytes()
+		// FR-018: the outbound guard's "before" is the config this tool
+		// write started from; no tool writes outbound (dedicated = false).
+		beforeOutbound := outboundSnapshot(cfg)
 
-		if fnErr := fn(cfg); fnErr != nil {
+		fnErr := fn(cfg)
+		if fnErr == nil {
+			_, fnErr = config.GuardOutbound(beforeOutbound, cfg, false)
+		}
+		if fnErr != nil {
 			// Roll back in-memory state to pre-mutation snapshot.
 			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
 				return fmt.Errorf("fn error: %w; also: restore failed: %w", fnErr, restoreErr)
@@ -542,6 +576,21 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 		}
 		return nil
 	})
+}
+
+// outboundSnapshot copies the channel instances of cfg with their outbound
+// settings deep-copied, as the "before" side of config.GuardOutbound.
+func outboundSnapshot(cfg *config.Config) *config.Config {
+	before := &config.Config{Channels: make(map[string]config.ChannelInstanceConfig, len(cfg.Channels))}
+	for id, inst := range cfg.Channels {
+		inst.Outbound = inst.Outbound.Clone()
+		if inst.Identity != nil {
+			identity := *inst.Identity // the pair rows compare it; fn may edit in place
+			inst.Identity = &identity
+		}
+		before.Channels[id] = inst
+	}
+	return before
 }
 
 // validateID rejects entity IDs containing path separators, "..", or null bytes

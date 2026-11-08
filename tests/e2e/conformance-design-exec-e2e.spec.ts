@@ -26,7 +26,10 @@ import { expect } from '@playwright/test'
 import { SessionDetail, SessionPage } from '../../src/lib/api/generated/schemas'
 import { test } from './fixtures/plan-cleanup'
 import { GatewayProcess } from './fixtures/gateway-process.js'
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model'
+import { attachStandaloneTaskFailureDiagnostic } from './fixtures/conformance-task-diagnostic'
 import {
+  BASE_URL,
   apiFetch,
   createMainAgent,
   createPlanWithMembers,
@@ -144,11 +147,23 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
   // failed) within the budget. A non-terminal state means the ladder
   // (worker → claim → evidence-gate → attempt → verifier → done) did not
   // complete — the design is not behaving as drawn.
-  expect(
-    TERMINAL_STATES.has(finalStatus),
-    `Task ${taskId} must reach a terminal state within 300s — observed "${finalStatus}". ` +
-      'The ladder (worker → claim → verifier → done) failed to terminate.',
-  ).toBe(true)
+  try {
+    expect(
+      TERMINAL_STATES.has(finalStatus),
+      `Task ${taskId} must reach a terminal state within 300s — observed "${finalStatus}". ` +
+        'The ladder (worker → claim → verifier → done) failed to terminate.',
+    ).toBe(true)
+  } catch (originalFailure) {
+    // Capture the original failure BEFORE fixture teardown Stop changes the
+    // runtime phase. Even an unexpected diagnostic failure cannot replace it.
+    try {
+      await attachStandaloneTaskFailureDiagnostic(page, test.info(), taskId, BASE_URL)
+    } catch {
+      // Diagnostics are best-effort; an unexpected collection or attachment
+      // error must not replace the original failed assertion.
+    }
+    throw originalFailure
+  }
 
   // Differentiation test: a successful ladder ends in "done", a bounced
   // ladder ends in "failed" with a clear reason. Either is a valid
@@ -425,6 +440,8 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
       type: 'Main',
       name: 'bootsweep-worker',
       soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+      // Live model plus fallback_models (see createMainAgent).
+      ...e2eAgentModelFields('live'),
     })
     expect(agentRes.ok, `bootsweep: POST /agents failed ${agentRes.status}: ${agentRes.raw}`).toBe(true)
     expect(

@@ -36,6 +36,31 @@ properties:
       US-8 retired). Rejected below 1. Omitted = unchanged (partial
       update).
     example: 20
+  goal_reminder_quiet_seconds:
+    type: integer
+    minimum: 30
+    maximum: 3600
+    description: >
+      New idle-only quiet window in seconds, 30 through 3600. Default 60
+      when absent from configuration, not a PUT default. Omitted = unchanged.
+      No off value. Live on the next fixed 30-second sweep without restart.
+    example: 60
+  goal_stalled_checkin_enabled:
+    type: boolean
+    description: >
+      Enable or disable stalled busy-work check-ins. Omitted = unchanged;
+      explicit false is saved. Disabling does not disable idle reminders
+      or discard goal_stalled_checkin_minutes. Live without restart.
+    example: true
+  goal_stalled_checkin_minutes:
+    type: integer
+    minimum: 5
+    maximum: 1440
+    description: >
+      New busy-work stall threshold in minutes, independent of idle quiet.
+      Omitted = unchanged. Reject out-of-range values even when check-ins are
+      disabled; disabling retains the chosen minutes. Live without restart.
+    example: 30
   max_tool_iterations:
     type: integer
     minimum: 1

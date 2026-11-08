@@ -169,6 +169,7 @@ import { test } from './fixtures/console-errors';
 import { chatInput, assistantMessages } from './fixtures/selectors';
 import { freshChat, type FreshChat } from './fixtures/session-setup';
 import { completedDelegation, type DelegationFrame } from './fixtures/delegation-completion';
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 // Deliberately does NOT call enableVerboseChat — this spec asserts the
@@ -208,16 +209,10 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-// Helper: assert OPENROUTER_API_KEY_CI is present (mirrors subagent.spec.ts's
+// Helper: assert the live-model keys are present (mirrors subagent.spec.ts's
 // requireApiKey — this test drives a real LLM delegate call).
 function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error(
-      'BLOCKED: OPENROUTER_API_KEY_CI not set. ' +
-      'This test requires a real LLM. ' +
-      'The key must be present in CI — see tests/e2e/README.md prerequisites.',
-    );
-  }
+  requireLiveModelKeys('delegation-hidden.spec.ts')
 }
 
 // Helper: start a fresh chat session and route to Jim (delegate-capable —

@@ -295,123 +295,15 @@ func TestGoalMarkerRestate_AnchorsSetGoalUpdateCallAtRestatePosition(t *testing.
 	waitForAnchorFrames(t, collector, sid)
 }
 
-// TestKeeperFallbackCompile_AnchorsSetGoalCallAndClosesWebBubble — CR8(c):
-// after nudge exhaustion the keeper's engine-authored fallback compile
-// registers a record with no turn and no tool. The transcript must end with
-// an assistant entry carrying one set_goal(mode:register) call for it, the
-// live frames must be emitted, and — because a web-routed goal gets no
-// FR-020 channel echo and no turn follows to close the SPA bubble the live
-// tool_call_start opens — exactly one narration outbound must be published
-// to the webchat channel keyed by the session id.
-func TestKeeperFallbackCompile_AnchorsSetGoalCallAndClosesWebBubble(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "", "webchat", "chat-fallback-anchor", "sk1", agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
-	// ADR-086: setGoalRoundsArmed's own record already carries a real, minted
-	// goal id — the synthetic `SetMeta(GoalID: …)` stamp this test used to
-	// need is gone with the field.
-	judgeInst.Provider = unmetJudgeProvider("fallback compile reason")
-
-	collector, cleanup := newEventCollector(t, al)
-	defer cleanup()
-
-	al.goalQuietWindowSettle(time.Now()) // nudge 1
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // nudge 2
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now()) // exhausted — engine fallback compile
-
-	after := goalRecordForSession(t, sid)
-	if goalRecordCompiledJSON(after) == "" {
-		t.Fatal("setup: the fallback compile must have registered a record")
-	}
-
-	entry := lastAssistantEntry(t, store, sid)
-	res := decodeAnchoredSetGoal(t, entry)
-	if res.Mode != tools.SetGoalModeRegister {
-		t.Fatalf("mode = %q, want register", res.Mode)
-	}
-	if res.GoalID != after.GoalID {
-		t.Fatalf("result goal_id = %q, want the goal record's %q", res.GoalID, after.GoalID)
-	}
-	if res.CriteriaCount == 0 {
-		t.Fatal("the anchored result must carry the engine-compiled ladder")
-	}
-	if entry.AgentID != agentInst.ID {
-		t.Fatalf("anchor agent_id = %q, want the goal-bearing agent %q", entry.AgentID, agentInst.ID)
-	}
-
-	start, _ := waitForAnchorFrames(t, collector, sid)
-	if start.ChatID != "chat-fallback-anchor" {
-		t.Fatalf("live frame chat id = %q, want the recorded route's", start.ChatID)
-	}
-
-	select {
-	case msg := <-al.bus.OutboundChan():
-		if msg.Channel != "webchat" || msg.SessionID != sid || msg.ChatID != "chat-fallback-anchor" {
-			t.Fatalf("narration outbound routed to %s/%s session=%q, want webchat/chat-fallback-anchor session=%q",
-				msg.Channel, msg.ChatID, msg.SessionID, sid)
-		}
-		if msg.Content != goalAnchorNarrationFallback {
-			t.Fatalf("narration content = %q", msg.Content)
-		}
-		if msg.AgentID != "" {
-			t.Fatalf("a system-originated send must leave AgentID empty (bus.OutboundMessage contract), got %q", msg.AgentID)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("a web-routed fallback registration must publish exactly one narration outbound to close the SPA bubble")
-	}
-	select {
-	case msg := <-al.bus.OutboundChan():
-		t.Fatalf("expected exactly ONE outbound, got a second: %+v", msg)
-	case <-time.After(200 * time.Millisecond):
-	}
+// Founder R6 retires engine-authored fallback compilation entirely. These
+// replace the old fallback-anchor premises; ordinary real set_goal anchor
+// coverage above remains unchanged.
+func TestKeeperRecordlessPause_NoSyntheticSetGoalAnchor(t *testing.T) {
+	grRecordlessPauseAnchorContract(t, false)
 }
 
-// TestKeeperFallbackCompile_ChannelOrigin_NoWebNarration — the narration
-// outbound is webchat-only: a channel-routed goal already gets its FR-020
-// formatted echo from afterGoalRecordWrite, so the anchor must not add a
-// second outbound there (the existing "exactly ONE echo" contract holds).
-func TestKeeperFallbackCompile_ChannelOrigin_NoWebNarration(t *testing.T) {
-	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
-	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store, sid := newGoalTestSession(t, al, agentInst.ID)
-	al.recordGoalRouting(sid, "", "telegram", "chat-tg-anchor", "sk1", agentInst.ID)
-	setGoalRoundsArmed(t, store, sid, "make the tests pass", 0, time.Now().Add(-1*time.Hour))
-	judgeInst.Provider = unmetJudgeProvider("fallback compile reason")
-
-	al.goalQuietWindowSettle(time.Now())
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now())
-	rewindGoalActivity(t, al, store, sid)
-	al.goalQuietWindowSettle(time.Now())
-
-	entry := lastAssistantEntry(t, store, sid)
-	decodeAnchoredSetGoal(t, entry)
-
-	outbounds := 0
-	deadline := time.After(1 * time.Second)
-loop:
-	for {
-		select {
-		case msg := <-al.bus.OutboundChan():
-			outbounds++
-			if msg.Channel != "telegram" {
-				t.Fatalf("unexpected outbound to %q: %+v", msg.Channel, msg)
-			}
-		case <-deadline:
-			break loop
-		}
-	}
-	if outbounds != 1 {
-		t.Fatalf("channel-origin fallback: want exactly one outbound (the FR-020 echo), got %d", outbounds)
-	}
+func TestKeeperRecordlessPause_ChannelHasNoCompileNarration(t *testing.T) {
+	grRecordlessPauseAnchorContract(t, true)
 }
 
 // TestGoalRecordAccess_ReadGoalState_IDAlwaysPresentOrEmptyTriple is the

@@ -31,8 +31,17 @@ type agentLoopRunTurnToolsExecute struct {
 	setGoalSucceededThisRound bool
 	toolName                  string
 	toolArgs                  map[string]any
-	ledgerToolName            string
-	toctouPolicy              string
+	// recordArgs is the r17 SR-3 record copy of toolArgs (recordToolCalls):
+	// every transcript record, log, event and approval request of this call
+	// uses it. toolArgs stays the execution copy.
+	recordArgs     map[string]any
+	ledgerToolName string
+	toctouPolicy   string
+	// skillWriteKey is the skill key a file-tool write into a skill folder
+	// targets (skills spec r15 §10.1), set by enforceExecutionPolicy's
+	// composition step; it rides the tool's context as the backstop marker
+	// (tools.WithSkillWriteApproval). Reset for every call.
+	skillWriteKey string
 	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
 	// this call; guardAndDispatch pins it on the tool's context so the bash
 	// tool enforces the same decision. Empty for every non-bash call.
@@ -44,7 +53,16 @@ type agentLoopRunTurnToolsExecute struct {
 	// ruleAskSettled is true when this bash call's one upfront prompt also
 	// settled an operator D3 ask rule (§5.7); guardAndDispatch pins it so
 	// the bash tool does not prompt again. Reset for every call.
-	ruleAskSettled    bool
+	ruleAskSettled bool
+	// preApprovalRefusal is the tool's own refusal before any approval card
+	// (tools.PreApprovalChecker); guardAndDispatch records it as the call's
+	// result instead of executing. Reset for every call.
+	preApprovalRefusal *tools.ToolResult
+	// approvalPin is the pin a tools.ApprovalPreparer returned for this call
+	// before its card (Channels Q2-B); guardAndDispatch puts it on the
+	// tool's context (tools.WithApprovalPin), never in the arguments. Reset
+	// for every call.
+	approvalPin       any
 	toolCallID        string
 	asyncCallback     func(_ context.Context, result *tools.ToolResult)
 	asyncCallbackGate *asyncToolCallbackGate
@@ -326,6 +344,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 	// for Anthropic/Azure API compatibility (e.g., "browser_navigate" → "browser.navigate").
 	ex.toolName = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.UnsanitizeToolName(tc.Name)
 	ex.toolArgs = cloneStringAnyMap(tc.Arguments)
+	ex.recordArgs = ex.toolArgs
+	if i < len(ex.rx.rr.recordToolArgs) {
+		ex.recordArgs = cloneStringAnyMap(ex.rx.rr.recordToolArgs[i])
+	}
 
 	// pkg/agent/verifier_budget.go::VerifierBudget (JUDGE-FR-051/
 	// FR-052): once a verifier adjudication's tool-call or byte cap
@@ -480,7 +502,7 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 		// handles that "no placeholder" case by appending directly
 		// (the same shape the headless auto-deny site below relies
 		// on for the identical reason).
-		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, qReason)
+		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, qReason)
 		// ADR-066 D4: denied results enter through the choke point on the
 		// builtin-failure surface (FR-009); it persists the line itself.
 		if err := ex.admitAndCheckpoint(toolResultAdmission{
@@ -524,7 +546,7 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			},
 		)
 		exhaustedMsg := browserControlGateExhaustedMessage(ex.toolName)
-		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, exhaustedMsg)
+		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, exhaustedMsg)
 		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: exhaustedMsg, IsError: false, ParallelN: len(ex.rx.rr.normalizedToolCalls),
 		}); err != nil {
@@ -546,6 +568,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			if toolReq != nil {
 				ex.toolName = toolReq.Tool
 				ex.toolArgs = toolReq.Arguments
+				if refusal := ex.recordArgsAfterHook(); refusal != nil {
+					return ex.admitPlaintextRefusal(tc, refusal)
+				}
 			}
 		case HookActionDenyTool:
 			denyContent := hookDeniedToolContent("Tool execution denied by hook", decision.Reason)
@@ -720,7 +745,19 @@ func (ex *agentLoopRunTurnToolsExecute) applyApprovalHook(tc providers.ToolCall)
 // enforceExecutionPolicy rechecks execution policy and records a policy denial.
 func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ex.toctouPolicy = ex.rx.rr.rq.ri.rf.rt.al.resolveToolPolicyAtExec(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.rx.rr.rq.filterTimePolicyMap)
+	ex.skillWriteKey = ""
+	if ex.toctouPolicy != "deny" {
+		if key, ok := ex.composeSkillWritePolicy(tc); ok {
+			ex.skillWriteKey = key
+			if ex.toctouPolicy == "deny" {
+				return ex.denySkillWrite(tc)
+			}
+		}
+	}
 	if ex.toctouPolicy == "deny" {
+		if canonical, retired := tools.RetiredToolCanonical(ex.toolName); retired {
+			return ex.refuseRetiredToolName(tc, canonical)
+		}
 		// Policy flipped to deny between filter-time and exec-time.
 		// ADR-058 site 1: this branch has no approver-supplied
 		// reason at all, so it uses the fixed loop pseudo-reason
@@ -789,6 +826,8 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	ex.shellModePin = rt.al.bashShellModeFor(rt.ts, ex.toolName)
 	ex.autoPin = tools.AutoVerdict{}
 	ex.ruleAskSettled = false
+	ex.preApprovalRefusal = nil
+	ex.approvalPin = nil
 	if ex.toctouPolicy != "ask" {
 		return agentLoopRunTurnToolsExecuteNext
 	}
@@ -823,7 +862,7 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	// requestAskApproval ran unconditionally, before its own
 	// CheckGrantOrRequestApproval call ever consulted the grant store).
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
-	grantLookupArgs := ex.toolArgs
+	grantLookupArgs := ex.recordArgs
 	if ruleAsk {
 		grantLookupArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 	}
@@ -871,20 +910,20 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // second time.
 func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
 	rt := ex.rx.rr.rq.ri.rf.rt
-	requestArgs := ex.toolArgs
+	requestArgs := ex.recordArgs
 	decisionKind := "classic_ask"
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
 	if ruleAsk {
 		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 		decisionKind = "rule_ask"
 	}
-	// A tool may show server-derived facts on its approval card (e.g.
-	// remove_secret's consumers, FR-077); the call still executes with
-	// ex.toolArgs unchanged.
-	if rt.ts.agent != nil && rt.ts.agent.Tools != nil {
-		if tool, ok := rt.ts.agent.Tools.Get(ex.toolName); ok {
-			requestArgs = tools.WithApprovalContext(rt.turnCtx, tool, requestArgs)
-		}
+	// A tool may refuse before any card, and may show server-derived facts
+	// on its approval card (e.g. remove_secret's consumers, FR-077;
+	// set_channel_outbound's current and new setting, Channels Q2-B); the
+	// call still executes with ex.toolArgs unchanged.
+	requestArgs, refused := ex.prepareApprovalRequest(tc, requestArgs)
+	if refused {
+		return agentLoopRunTurnToolsExecuteNext
 	}
 	// §5.7 fix: re-check the standing grant, with the SAME args
 	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
@@ -912,7 +951,7 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	// the tool_approval_required WS frame is live-only and does not survive a
 	// refresh. Reached only now that the standing-grant check above has
 	// already ruled out a grant settling this call without ever asking.
-	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
+	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs)
 	// The third return (recordGrant, review finding #5) is consumed only by
 	// pkg/tools' D7/D8 pre-flight escalation call sites, reached through
 	// ShellPermissionGate.RequestShellApproval — this classic ask-policy
@@ -994,7 +1033,7 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// the audit log. settleAskToolCallTranscript appends when it
 	// finds no placeholder, which is exactly this case.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
 	// ADR-066 D4: denied results enter through the choke point on the
 	// builtin-failure surface (FR-009); it persists the line itself.
 	if err := ex.admitAndCheckpoint(toolResultAdmission{
@@ -1026,7 +1065,7 @@ func (ex *agentLoopRunTurnToolsExecute) denyAskedCall(tc providers.ToolCall, den
 	// minutes with nobody watching" are distinguishable in the
 	// thread and on replay.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
 	// ADR-058 site 3 — the original defect: denialReason here
 	// is verbatim from CheckGrantOrRequestApproval, so it is
 	// classified for real rather than assumed to be a user
@@ -1089,7 +1128,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 		ex.rx.ctx, steer.BoundarySyncToolText, ts,
 	)
 
-	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
+	argsJSON, marshalErr := json.Marshal(ex.recordArgs)
 	if marshalErr != nil {
 		logger.WarnCF("agent", "failed to marshal tool args for preview", map[string]any{"tool": ex.toolName, "error": marshalErr.Error()})
 		argsJSON = []byte("{}")
@@ -1114,7 +1153,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			// tool-producing session's own transcript identity.
 			SessionID:         toolExecSID,
 			Tool:              ex.toolName,
-			Arguments:         cloneEventArguments(ex.toolArgs),
+			Arguments:         cloneEventArguments(ex.recordArgs),
 			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
@@ -1127,7 +1166,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
 		feedbackReachesUser && !ts.opts.SuppressToolFeedback &&
-		isMessagingChannel(ts.channel) {
+		isMessagingChannel(ts.channel) &&
+		!ex.refuseMainConnectorText(tc.Name) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
 			ex.rx.rr.rq.ri.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -1259,7 +1299,7 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 					AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
 				},
 			)
-		} else if userContent != "" {
+		} else if userContent != "" && !ex.refuseMainConnectorText(toolName) {
 			outboundSessionID := ""
 			if allowSuppressedErrorFeedback {
 				outboundSessionID = ts.transcriptSessionID
@@ -1315,9 +1355,13 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 		SourceKind:          toolName,
 		Content:             content,
+		finishedToolName:    toolName,
+		finishedToolCallID:  session.ToolCallID(toolCallID),
 	}); notifyErr != nil {
-		logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
-			map[string]any{"tool": toolName, "channel": ex.rx.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
+		// Notify owns the safe per-attempt diagnostic and final saved/live/origin
+		// warning. A second raw-cause log here would duplicate that reporting and
+		// wrongly imply the work or any direct ForUser result was erased.
+		return
 	}
 }
 
@@ -1377,6 +1421,9 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// minLength:1 on turn_id causes the SPA to silently drop on arrival —
 	// see tools.WithTurnID's doc comment for the full chain.
 	execCtx = tools.WithTurnID(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.turnID)
+	// #1449 C-I6: a question raised now records the turn's origin at
+	// creation (the same origin an approval raised now carries).
+	execCtx = tools.WithApprovalProvenance(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.approvalProvenance)
 	// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
 	// The loop already uses it to auto-deny `ask`-policy calls; a
 	// tool that must refuse one ARGUMENT rather than the whole call
@@ -1402,6 +1449,14 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
 		return flow
 	}
+	// Channels Q2-B: the state a tool checked and showed on its card rides
+	// the context, so the approved arguments are never rewritten (S1).
+	execCtx = tools.WithApprovalPin(execCtx, ex.approvalPin)
+	if ex.skillWriteKey != "" {
+		// Skills spec r15 §10.1 item 7: the composed decision for this
+		// skill key, checked again by PathHandle.WriteFile.
+		execCtx = tools.WithSkillWriteApproval(execCtx, ex.skillWriteKey)
+	}
 	if ex.autoPin.Run && ex.toctouPolicy == "ask" {
 		// ADR-092 D9 §5.3/§5.5: Auto ran this call without a prompt. Pin the
 		// decision so a RUNS-IF tool re-checks its final path against it,
@@ -1415,15 +1470,9 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.ret0 = agentLoopRunTurnToolsReturn
 		return agentLoopRunTurnToolsExecuteReturn
 	}
-	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
-		execCtx,
-		ex.toolName,
-		ex.toolArgs,
-		ex.rx.rr.rq.ri.rf.rt.ts.channel,
-		ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-		ex.asyncCallback,
-	)
+	ex.toolResult = ex.executeOrPreRefused(execCtx)
 	ex.toolDuration = time.Since(toolStart)
+	noteGoalExecutedTool(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolResult)
 
 	if ex.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 		ex.releaseAsyncCallback()
@@ -1618,6 +1667,21 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		if mediaAudience != steer.AudienceUser {
 			logger.DebugCF("agent", "Steered session: media contained (not sent to a channel)",
 				map[string]any{"tool": ex.toolName, "session_id": ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID})
+		} else if ts := ex.rx.rr.rq.ri.rf.rt.ts; ex.rx.rr.rq.ri.rf.rt.al.mainConnectorTurn(ts.channel, ts.transcriptSessionID) {
+			// #1507 (FR-070, m-03): a connection-fed main keeps the file in
+			// the conversation. The result stays whole (Media, IsError,
+			// text; ArtifactTags below); the model is told in one line.
+			base := ex.toolResult.ForLLM
+			if base == "" && ex.toolResult.Err != nil {
+				base = ex.toolResult.Err.Error()
+			}
+			note := mainConnectorMediaNote(ts.channel)
+			if base != "" {
+				note = base + "\n" + note
+			}
+			ex.toolResult.ForLLM = note
+			logger.DebugCF("agent", "Main connector turn: media kept in the conversation (not sent)",
+				map[string]any{"tool": ex.toolName, "channel": ts.channel, "session_id": ts.transcriptSessionID})
 		} else if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
 			if err := ex.rx.turnChannelManager.SendMedia(ex.rx.ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver tool media",
@@ -1650,7 +1714,8 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
 		ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
 			ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts,
-		) {
+		) &&
+		!ex.refuseMainConnectorText(ex.toolName) {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
@@ -1818,8 +1883,34 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// every subsequent turn. attachToolResultMedia owns that
 	// guard; the artifact tag at loop.go:8246 is the path-based
 	// fallback hook for the rare "rasterize failed" case.
+	//
+	// Issue #1435 R1: the fresh image is fitted to the TURN'S SELECTED
+	// provider/model budget — the provider that will actually receive the
+	// next request — not the package default (whose 7680-px edge exceeds
+	// real ceilings like ZAI's 6000).
+	//
+	// Issue #1435 R2: when a universal image cannot be made to fit, the
+	// helper writes its honest explanation into mediaMsg.Content. That text
+	// is merged into the admitted content HERE — the scratch message's
+	// Content has no other consumer, and without this merge the marker
+	// would never reach the model's input, the live tool event or the
+	// persisted tool result.
 	if len(ex.toolResult.Media) > 0 && ex.rx.rr.rq.ri.turnMediaStore != nil {
-		attachToolResultMedia(&mediaMsg, ex.toolResult.Media, ex.rx.rr.rq.ri.turnMediaStore, ex.rx.rr.rq.ri.maxMediaSize)
+		// The turn's resolved selection wins when present (the light tier may
+		// have switched away from the configured primary); the configured
+		// primary pair is the fallback.
+		rt := ex.rx.rr.rq.ri.rf.rt
+		provider, model := "", ""
+		if len(rt.activeCandidates) > 0 {
+			provider, model = rt.activeCandidates[0].Provider, rt.activeCandidates[0].Model
+		} else if rt.ts != nil && rt.ts.agent != nil {
+			provider, model = rt.ts.agent.primaryModelPair()
+		}
+		selectedBudget := resizeBudgetForModel(ex.rx.rr.rq.ri.turnCatalog, provider, model, ex.rx.rr.rq.ri.maxMediaSize)
+		attachToolResultMedia(&mediaMsg, ex.toolResult.Media, ex.rx.rr.rq.ri.turnMediaStore, ex.rx.rr.rq.ri.maxMediaSize, selectedBudget)
+		if mediaMsg.Content != "" {
+			ex.contentForLLM = injectDocumentContent(ex.contentForLLM, []string{mediaMsg.Content})
+		}
 	}
 	// ADR-066 D5.4 (FR-041/FR-042): budget-first recall decision,
 	// BEFORE the choke point so the archive, transcript and events
@@ -1925,7 +2016,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		Tool:             ex.toolName,
 		Status:           tcStatus,
 		DurationMS:       ex.toolDuration.Milliseconds(),
-		Parameters:       cloneEventArguments(ex.toolArgs),
+		Parameters:       cloneEventArguments(ex.recordArgs),
 		ParentToolCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 	}
 	// Persist media descriptors so replay can re-emit the `media`

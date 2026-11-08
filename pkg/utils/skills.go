@@ -4,17 +4,16 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
 // SkillIdentifierPattern is the canonical shape of a skill identifier — a skill
 // slug or a registry name.
 //
-// It is the SAME expression as pkg/skills' unexported namePattern
-// (pkg/skills/loader.go), which the loader, the manifest validator and
-// SkillWriter.resolveSkillDir all enforce. pkg/skills imports pkg/utils, so the
-// constant cannot be imported in that direction without a cycle; it is
-// duplicated here and pinned by TestSkillIdentifierPattern_MatchesNamePattern
-// (pkg/skills/registry_test.go), which fails if the two ever drift.
+// It is the shared skill name grammar (pkg/skillname — the one source that
+// pkg/skills' loader, manifest validator and SkillWriter.resolveSkillDir and
+// pkg/fspolicy's skills-shelf rules also read).
 //
 // SECURITY: an identifier validated by this package is used directly as a
 // single filesystem path segment — filepath.Join(skillsDir, slug) in
@@ -27,12 +26,12 @@ import (
 // than the demonstrated payload: this pattern admits exactly one well-formed
 // name and rejects ".", "..", "", separators, absolute paths, leading or
 // trailing hyphens, whitespace and NUL bytes by construction.
-const SkillIdentifierPattern = `^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`
+const SkillIdentifierPattern = skillname.Pattern
 
-// MaxSkillIdentifierLength mirrors skills.MaxNameLength. A skill identifier
+// MaxSkillIdentifierLength is the shared maximum (skillname.MaxLength). A skill identifier
 // becomes a directory name, so it is bounded for the same reason the loader
 // bounds a skill name.
-const MaxSkillIdentifierLength = 64
+const MaxSkillIdentifierLength = skillname.MaxLength
 
 var skillIdentifierRE = regexp.MustCompile(SkillIdentifierPattern)
 

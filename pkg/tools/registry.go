@@ -506,6 +506,27 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 var retiredToolCanonicalNames = map[string]string{
 	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
 	"load_tool": "ToolSearch",
+	// Skills spec r15 §10: a skill is created by writing its SKILL.md and
+	// deleted with edit_skill action=delete.
+	"create_skill": "write_file",
+	"remove_skill": "edit_skill",
+	// Tool-parity r17 §7.12.3: get_agent is the single agent reader
+	// (fields ["tool_permissions"], ["soul"], ["agent_md"]).
+	"get_agent_tools":     "get_agent",
+	"read_agent_metadata": "get_agent",
+}
+
+// RetiredToolCanonical returns the current replacement of a tool name retired
+// by a rename, and whether name is such a retired name. It never makes the
+// retired name callable (see retiredToolCanonicalNames).
+func RetiredToolCanonical(name string) (canonical string, ok bool) {
+	canonical, ok = retiredToolCanonicalNames[name]
+	return canonical, ok
+}
+
+// RetiredToolMessage is the tool result a call to a retired name gets.
+func RetiredToolMessage(name, canonical string) string {
+	return fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
@@ -520,16 +541,23 @@ func (r *ToolRegistry) ExecuteWithContext(
 	asyncCallback AsyncCallback,
 ) *ToolResult {
 	tool, ok := r.Get(name)
+	logArgs := args
 	if ok {
 		// Rejected secret-shaped inputs never enter the args log below.
 		if refusal := ToolArgumentRefusal(tool, args); refusal != nil {
 			return refusal
 		}
+		// r17 SR-3: the log carries the record copy; execution keeps args.
+		recorded, err := RecordArguments(tool, args)
+		if err != nil {
+			return RedactionRefusal(tool, err)
+		}
+		logArgs = recorded
 	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
-			"args": args,
+			"args": logArgs,
 		})
 
 	// Capture the registry's injected dependencies once, under a single read
@@ -548,7 +576,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 					"tool":      name,
 					"canonical": canonical,
 				})
-			return ErrorResult(fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)).
+			return ErrorResult(RetiredToolMessage(name, canonical)).
 				WithError(fmt.Errorf("tool %q was renamed to %q", name, canonical))
 		}
 		logger.ErrorCF("tool", "Tool not found",
@@ -575,9 +603,28 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// the fingerprint of a genuine leak, so a legitimate value that merely
 	// mentions the tag is left untouched (A1).
 	if repaired, ok := repairLeakedToolArgs(args); ok {
+		if IsAlwaysAsk(name) {
+			// Channels security S1: an always-ask call executes exactly the
+			// arguments the person approved. A repair here would run an
+			// operation nobody saw on the card, so refuse it; the model must
+			// make a new, well-formed call that gets its own fresh approval.
+			logger.WarnCF("tool", "refused repair of an approved always-ask call",
+				map[string]any{"tool": name})
+			return alwaysAskRepairRefusal(tool, name)
+		}
 		args = repaired
 		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
 			map[string]any{"tool": name})
+	}
+
+	// A read tool's `fields` argument is checked by the one shared helper
+	// before generic schema validation, so the agent sees the §7.13 text
+	// (tool-parity spec r17, scenario 20.10) rather than the generic refusal,
+	// and the tool's Execute is not reached on a bad selection.
+	if selecting, ok := tool.(FieldSelecting); ok {
+		if _, refusal := ValidateFieldsArg(args, selecting.FieldSpecFor(args)); refusal != nil {
+			return refusal
+		}
 	}
 
 	// Validate arguments against the tool's declared schema.
@@ -601,6 +648,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult
+	invoked := false
 	start := time.Now()
 
 	// Use recover to catch any panics during tool execution
@@ -628,8 +676,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 				map[string]any{
 					"tool": name,
 				})
+			invoked = true
 			result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
 		} else {
+			invoked = true
 			result = tool.Execute(ctx, args)
 		}
 	}()
@@ -643,6 +693,11 @@ func (r *ToolRegistry) ExecuteWithContext(
 			Err:     fmt.Errorf("nil result from tool"),
 		}
 	}
+
+	// Own the per-call live fact rather than mutating a tool's reusable result.
+	ownedResult := *result
+	ownedResult.invoked = invoked
+	result = &ownedResult
 
 	// mediaStore is the snapshot taken at entry, not a fresh r.mediaStore
 	// read — see the capture block above.

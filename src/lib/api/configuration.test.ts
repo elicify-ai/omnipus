@@ -131,7 +131,7 @@ const mutationCases = [
   { name: 'workspace update', resource: workspaceResource, save: () => updateWorkspace('ws', { revision, description: 'Updated' }) },
   { name: 'graph update', resource: { revision, workspace_id: 'ws', edges: [], default_depth: 10 }, save: () => updateWorkspaceDelegation('ws', { revision, edges: [] }) },
   { name: 'tool update', resource: { revision, override_names: [], config: { builtin: { policies: { bash: 'allow' } } }, tools: [] }, save: () => updateAgentTools('mia', { revision, override_names: [], config: { builtin: { policies: { bash: 'allow' } } } }) },
-  { name: 'skill installation', resource: { revision, id: 'skill', name: 'skill', description: 'Test skill', version: '1', author: 'Elicify', verified: false, status: 'active' }, save: () => installSkillBySlug('skill') },
+  { name: 'skill installation', resource: { has_local_changes: false, revision, id: 'skill', name: 'skill', description: 'Test skill', version: '1', author: 'Elicify', verified: false, status: 'active' }, save: () => installSkillBySlug('skill') },
 ]
 
 describe.each(mutationCases)('$name state handling', ({ resource, save }) => {

@@ -25,6 +25,7 @@ Day-to-day pages.
 | [Plans](plans.md) | Shared Definition of Done |
 | [Calendar](calendar.md) | Scheduled, recurring work |
 | [Goals](goals.md) | Judge decides completion |
+| [Chat loops](loops.md) | Recurring chat instructions, status and run limits |
 | [Agents](agents.md) | The built-in roster and your own agents |
 | [Knowledge base](knowledge.md) | Notes, records, saved views |
 | [Library](library.md) | Files and shared folders |

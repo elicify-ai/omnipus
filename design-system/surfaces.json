@@ -5102,6 +5102,74 @@
       }
     },
     {
+      "id": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog",
+      "kind": "modal",
+      "source": "src/components/skills/SkillCopyDialog.tsx",
+      "symbol": "SkillCopyDialog",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-skillcopydialog:unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillcopydialog-tsx-skillcopydialog.test.tsx",
+          "test": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-skillcopydialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-skillcopydialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog"
+      }
+    },
+    {
+      "id": "src/components/skills/SkillCopyDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/skills/SkillCopyDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-dialog-1:unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillcopydialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/skills/SkillCopyDialog.tsx#dialog:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-dialog-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#dialog:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillCopyDialog.tsx#overlay:1"
+      }
+    },
+    {
       "id": "src/components/workspaces/ConfirmActionModal.tsx#ConfirmActionModal",
       "kind": "modal",
       "source": "src/components/workspaces/ConfirmActionModal.tsx",
@@ -6293,6 +6361,8 @@
     }
   ],
   "sourceOwners": [
+    { "source": "src/components/connectors/ChannelOutboundSection.tsx", "lane": 5 },
+    { "source": "src/components/skills/channelConfigureOutcome.ts", "lane": 5 },
     {"source":"src/components/agents/AgentPrivateSecrets.tsx","lane":5},
     {"source":"src/components/chat/SecretRequestCard.tsx","lane":3},
     {"source":"src/components/chat/OmnipusChatScreen.tsx","lane":3},
@@ -6372,6 +6442,10 @@
     {
       "source": "src/components/agents/agentDraft.ts",
       "lane": 5
+    },
+    {
+      "source": "src/components/agents/approvalPreviews/AgentChangeApprovalPreview.tsx",
+      "lane": 8
     },
     {
       "source": "src/components/agents/approvalPreviews/BashApprovalPreview.tsx",
@@ -6486,6 +6560,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/assistantRowAttributes.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/AttachmentCard.tsx",
       "lane": 3
     },
@@ -6531,6 +6609,10 @@
     },
     {
       "source": "src/components/chat/ChatThread.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatHeaderSlot.tsx",
       "lane": 3
     },
     {
@@ -6638,6 +6720,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ProviderWaitingIndicator.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RateLimitIndicator.tsx",
       "lane": 3
     },
@@ -6679,6 +6765,14 @@
     },
     {
       "source": "src/components/chat/historical-markdown.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/historyEntryOutcome.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/historyTextOverlay.tsx",
       "lane": 3
     },
     {
@@ -6754,6 +6848,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/HistoryPreviewToolCall.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/PreviewToolHeader.tsx",
       "lane": 4
     },
@@ -6791,6 +6889,10 @@
     },
     {
       "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useOpenReveal.ts",
       "lane": 3
     },
     {
@@ -7578,6 +7680,10 @@
       "lane": 5
     },
     {
+      "source": "src/components/skills/SkillCopyDialog.tsx",
+      "lane": 5
+    },
+    {
       "source": "src/components/skills/WhatsAppNativeNotice.tsx",
       "lane": 5
     },
@@ -8083,6 +8189,62 @@
     },
     {
       "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/conversationSource.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatFileAttachment.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/agents/AttentionHalo.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/GroupHeaderControls.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/ParticipantsPanel.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomMessageBox.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomWorkingLines.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomAttachmentAdapter.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomConversationSource.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomMembership.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomComposerMenu.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomRuntime.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomView.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/OmnipusComposer.tsx",
       "lane": 3
     }
   ]

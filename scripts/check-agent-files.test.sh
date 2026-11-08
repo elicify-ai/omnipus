@@ -304,24 +304,6 @@ Last reviewed: 2026-09-25
 Plugin-reviewer dispatches paste .claude/templates/plugin-reviewer-dispatch.md at the head of every dispatch.
 EOF
 
-cat > "$BASE_DIR/.claude/agents/squad-lead.md" <<EOF
----
-name: squad-lead
-description: Runs one squad end to end (fixture).
-skills:
-  - omnipus-shared-rules
-  - omnipus-planning-orchestration
----
-
-# squad-lead (fixture)
-
-Last reviewed: 2026-09-25
-
-<!-- agent-discipline:shared-traits:start -->
-$SHARED_TRAITS_TXT
-<!-- agent-discipline:shared-traits:end -->
-EOF
-
 cat > "$BASE_DIR/.claude/agents/backend-lead.md" <<EOF
 ---
 name: backend-lead

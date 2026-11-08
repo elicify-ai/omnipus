@@ -15,6 +15,9 @@ oneOf:
     not:
       required: [slug]
 properties:
+  replace_local_changes:
+    type: boolean
+    description: Required true to replace an installed skill whose has_local_changes is true. Absent means false.
   revision:
     $ref: './ConfigurationRevision.yaml'
   slug:

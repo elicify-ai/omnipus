@@ -57,7 +57,12 @@ export interface UseSelectSessionOptions {
  * 6. Navigates — to the workspace chat route whenever the session belongs to a
  *    known workspace (attach already happened above), or to the standalone
  *    `/sessions/$sessionId` route when it does not, WITHOUT attaching first.
- *    That route owns the single attach for the Unfiled case (mirrors how the
+ *    The known-workspace navigation carries the session id in the route's
+ *    declared `open` search key (#1437), the same single-navigation contract
+ *    the session deep link uses: the address then names the chat that is
+ *    actually open, so reloading the page reopens that chat instead of the
+ *    workspace's remembered-chat pointer. That route owns the single attach
+ *    for the Unfiled case (mirrors how the
  *    known-workspace path leaves `enterWorkspaceChat` to no-op when its
  *    descriptor already matches `activeSessionId`, session.ts Bug-1 fix) — so
  *    an "Unfiled" session never attaches silently with nowhere to render it
@@ -151,7 +156,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       supersedeNavigationIntent()
       onSelected?.(session)
       closeEntrySurfaces()
-      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, replace })
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, search: { open: session.id }, replace })
       return
     }
 
@@ -168,7 +173,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       supersedeNavigationIntent()
       onSelected?.(session)
       closeEntrySurfaces()
-      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, replace })
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, search: { open: session.id }, replace })
       return
     }
 

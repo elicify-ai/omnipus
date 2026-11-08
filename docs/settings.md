@@ -28,7 +28,7 @@ Two jobs that look like settings live on their own pages: what agents may do is 
 4. If the variant wants an API key, paste the key and click **Connect**. The row appears with its status.
 5. If the variant uses sign-in, follow the dialog: it gives you a link and a code to approve on the provider's page, using any device. Sign-in is offered only on providers that can really sign in. OpenAI sign-in is on **ChatGPT (subscription)**, not on the API-key **OpenAI** provider. If you try to save sign-in on a provider that has none, Omnipus refuses and names the provider to use instead, for example `sign-in is not available for "OpenAI"; OpenAI sign-in lives on "ChatGPT (subscription)"`. An older install may still have a **Codex CLI** or **GitHub Copilot** row: those providers were removed, so the row shows an "Unknown provider" error and offers no sign-in or Manage action. Remove it, and use **ChatGPT (subscription)** for OpenAI sign-in.
 6. Set the **default model** on the card at the top of the tab. That is the model new chats use unless an agent has its own.
-7. Use **Test** to re-check the connection, **Check with my account** to list available models, or **Remove provider** to delete it. Removing the default provider first asks for its replacement.
+7. Use **Test** to re-check the connection, **Check with my account** to list available models, or **Remove provider** to delete it. The confirmation lists the agents that use that provider. When a default model is already set on another provider, it says those agents will fall back to that default provider and model, and it names both. If the provider you are removing is one you added yourself, or one that runs on your own computer, it also warns that their conversations will go to the default provider instead. If no default model is set, it says those agents will be left without a model. While the default model is still being checked, it says "Checking the default model…" and **Remove** stays off. If that check fails, it says "We could not check the default model, so we can't tell where these agents will go." and **Remove** stays available. Removing the provider that backs the default is refused until you choose a new default provider and model. Until you choose, it says "These agents will use the new default you choose below." After you choose, it names that provider and model as the default those agents will fall back to.
 
 API keys are stored encrypted on this server, never in the main configuration file. See [security](security.md) for how the encrypted store works.
 
@@ -111,11 +111,12 @@ Each tab and neighbor screen has one job.
 | Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
+| Settings, Third-party agents | The program each external command-line tool (Claude Code, Codex, OpenCode) runs, and its standard parameters |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
-| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, and the goal completion budget |
+| Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, the goal completion budget, and idle-reminder and stalled-work check-in timers |
 | Settings, Chat | Chat display, including the verbose view of tool calls; the **Verbose chat** toggle shows or hides the context-window retry notice, "Context window exceeded. Compressing history and retrying..." |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
@@ -142,6 +143,51 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 **Settings → System agents** lists Judge, Plan Supervisor and Omnipus. Judge and Plan Supervisor are internal engine agents and cannot join workspace teams. Omnipus is a hidden member of the default workspace only; open its fixed sidebar entry rather than looking for it in Team. These built-in agents cannot be deleted.
 
 **Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting. The editor saves on its own; if the answer to a save is lost, it says **Save not confirmed — it may or may not have been stored.** with **Retry** instead of claiming it saved. The Omnipus chat's gear button opens this tab directly. While the list loads it says **Loading system agents…**; if it cannot load, the tab says **Could not load the system agents.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
+
+## Third-party agents
+
+**Settings → Third-party agents** decides which program runs for each external command-line tool — Claude Code, Codex and OpenCode — and which standard parameters it always gets. It applies to every external worker that uses that tool. Only a person signed in to the web app can change it: agents cannot, through any tool, and `set_config` refuses the whole sandbox section. An agent can read the saved program and parameters for one worker, read-only, through `get_agent` (see below); it cannot read or change the Settings section itself.
+
+Each tool has two fields:
+
+| Field | What to enter |
+|---|---|
+| Program path | The full path to the tool's program, for example `/opt/homebrew/bin/codex`. Leave it empty if you do not use that tool |
+| Standard parameters | Flags passed on every run of that tool, on one line, exactly as typed. Leave it empty for none |
+
+**Checks when you save.** A program path must be absolute, point at a file that exists, is a regular file and can be run by the user Omnipus runs as. The file, and the folder holding it, must not be changeable by every user on the machine, and the file must not sit in a folder agents can write to (the Omnipus data folder, any workspace folder, or any extra folder the sandbox lets agents write). A link is followed to the real file; each link's folder is checked the same way. On Windows the file must end in `.exe`, `.com`, `.cmd` or `.bat`. Standard parameters may be at most 4,096 characters, with no line breaks. If any field fails, nothing is saved and the message names the tool and the reason, for example "The program path for Codex was not saved: it must be an absolute path." Saving the same section from two browser tabs keeps the last save.
+
+**Checks on every run.** The program is checked again each time a worker starts. If no program is saved for that tool, or it no longer passes the checks, the run is refused before anything starts — for a delegation, no worker session is created — and the person or agent that started it sees the reason — for example "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex." There is no fallback to a program found on the system path. The file that was checked is the file that runs.
+
+**Standard parameters are yours, in clear.** They come after the worker's own flags, so your value wins when both set the same flag, and they are not filtered the way an agent's flags are. They are shown back and written to the audit log exactly as typed, so do not put keys or passwords in them: put secrets in the worker's own environment variables instead, which are always masked.
+
+**Why agents cannot change it.** The program and its parameters decide what actually runs on your machine. Keeping them person-only means an agent cannot point a worker at a different program or add flags that lift the tool's safety settings. An agent can see the saved program and parameters for a worker (read-only) and whether a run would start.
+
+Every change is recorded in the audit log: a changed path or changed parameters, with the old and new value and who saved it. Every external-worker run is recorded too, with the program, the flags the safety filter dropped from the agent's own flags, and your standard parameters.
+
+## Goal timers
+
+The goal timer controls live in **Settings → Performance**, beside the goal completion budget. They govern when the existing keeper can start another work turn, not how long that turn may run.
+
+| Control | Default | Accepted values | What it controls |
+|---|---|---|---|
+| Idle reminder quiet window, in seconds | 60 seconds | Whole numbers from 30 to 3600 | Waiting before an ordinary reminder when a goal is idle. There is no quiet-off switch; zero is invalid. |
+| Stalled-work check-ins | On | On or off | The only off switch for busy-work check-ins. Turning it off does not stop ordinary idle reminders. |
+| Stalled-work check-in interval, in minutes | 30 minutes | Whole numbers from 5 to 1440 | Waiting without new progress while the goal's own background work remains busy. Turning check-ins off disables this input visually but retains its value; the same bounds apply even while off. |
+
+The clocks are independent. A five-minute busy-work check-in can become due inside a 3600-second idle quiet window. Busy observation runs on each sweep, not only after idle quiet expires. Check-ins still follow the one-per-observed-stall and fresh-progress re-arm rules in [Goals](goals.md#one-check-in-for-stalled-background-work). Stop, unanswered questions, claim pauses and the three-failure/five-no-progress brakes continue to take precedence.
+
+A successfully applied change is live for the next keeper sweep without restarting the gateway or replacing the goal. The sweep remains fixed at **30 seconds**: a due reminder or check-in can be noticed up to **30 seconds late**. That is scheduling delay, not a guarantee of response time or completion. Reserving or sending a busy check-in alone does not restart the idle quiet clock; actual activity and the admitted turn use their existing activity rules.
+
+Changing a timer asks you to confirm it first. **Cancelling that confirmation discards the pending change it was for**, so that value is not applied later by a different save. The field then shows the value Omnipus has for that setting: normally the value Omnipus is running with, or the saved value while an earlier save is still waiting to be applied — the page says so in its **saved, but not applied yet** notice.
+
+If you edit a field again while an earlier save is still on its way, the newer value stays on screen and still needs a confirmation of its own before it is sent. The older save finishing does not replace the newer value. On a local install, if a newer valid timer edit has already settled while the earlier save is pending, a fresh password prompt opens automatically after that save finishes, whether it succeeds or fails. The newer value is not sent until you confirm again; it does not reuse the earlier approval.
+
+Each edit queues the setting it changed, but several queued edits can be confirmed and sent together, and a setting that is not part of a request keeps the value it already had.
+
+For scripts, `GET /api/v1/performance` always returns resolved values for `goal_reminder_quiet_seconds`, `goal_stalled_checkin_enabled` and `goal_stalled_checkin_minutes`. `PUT /api/v1/performance` updates only fields supplied in that request and retains every omitted setting. The endpoint still requires administrator access. In local authentication mode it also requires password re-authentication. In platform authentication mode there is no local password step; the web app asks you to confirm the change. An empty update is invalid. The numeric fields reject zero, fractions and out-of-range values, including a minutes value of zero while check-ins are off; the switch accepts a boolean, not text or a number. In the settings file, the keys live under `planning`. Missing or null keys use their defaults, whereas an explicit out-of-range number is a configuration error, not a request to restore the default.
+
+If a save reports **saved, but not applied yet**, do not treat it as a successful live update. The error identifies the fields that request changed. At the **refresh** stage the settings file has the new values but the running configuration—and the keeper's timers—still uses the old values until a successful reload or restart. At the **reload** stage the running configuration has changed but the agent registry could not finish reloading: timer sweeps read that new running configuration, even though other agent settings may remain unapplied. Nothing is rolled back. See [When a save is not applied yet](#when-a-save-is-not-applied-yet).
 
 ## Tool calls per turn
 
@@ -241,6 +287,7 @@ Older versions capped a delegated session at 30 minutes. An install that still h
 Two limits stay, because they protect against a broken connection or command rather than limiting work:
 
 - each request to a model provider has its own request timeout (`request_timeout` on the model, 120 seconds when unset); a provider that stops answering is retried or reported as **The model provider didn't answer this request in time** — the turn itself is not stopped by a clock. For a streamed reply the same limit applies only to waiting for the reply to start; once it is streaming, only a total silence (`stream_stall_timeout`, 300 seconds by default) ends it, so a long reply that keeps arriving is never cut off;
+  - when an agent has a fallback model, each attempt on each model has its own limit. With `request_timeout` set on a model, that value is the limit for that model, longer or shorter than the default. Without it, the limit grows with the size of the request: 120 seconds for a request of up to about 100,000 tokens, 60 seconds more for every further 100,000 tokens or part of them, and never more than 10 minutes — for example about 6 minutes for a 440,000-token request. A very large conversation is therefore no longer cut off after 120 seconds on every model. The silence limit (`stream_stall_timeout`) is unchanged;
 - a shell command run by an agent has its own `timeout_seconds` (default 300 seconds), and the environment-setup tool has its own job timeout.
 
 ### Which new agents get a self-line
@@ -266,11 +313,13 @@ Two limits on what the key does:
 
 When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by these keys in the `session_messaging` block of `config.json`:
 
-- `steer_body` — the largest message body, in bytes. Default **65,536**.
+- `steer_body` — the largest message body, in bytes. Default **65,536**. Group chats use it only up to 65,536 bytes: a smaller value lowers the group message limit (for people and agents alike), a larger one is clamped to 65,536 for groups ([group chats](group-chats.md#who-receives-your-message)). Messages between sessions use the value as it is.
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
 - `steer_aggregate_body` — the most message bytes that may be waiting for one conversation at once, added up across its waiting ordinary messages. Default **1,048,576** (1 MiB). A message that would take the waiting total past this is refused with a named error and is never trimmed; the total comes back down as the agent reads what is waiting. At most 200 messages may wait for one conversation, whichever limit is reached first. Wake-ups and other control messages do not count.
 
-All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
+**Messages you type into a chat while its agent is working behave differently today.** They wait in that chat's queue and reach the agent at its next step. The same 1 MiB total and 200-message limit apply to that queue, but a message that does not fit is not refused: it runs as the next turn, after the current one ends. Stop does not cancel it — Stop ends the current turn, the messages that were waiting in the queue are dropped with a "please resend" notice, and the message that did not fit then starts running. This is tracked in [#1503](https://github.com/elicify-ai/omnipus/issues/1503), which will make such a message refused visibly instead.
+
+All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. Apart from the chat case above, a message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
 
 ### Safety stops that are not settings
 
@@ -294,7 +343,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
-- [agents](agents.md) — giving one agent its own model instead of the default, and the agent roster.
+- [agents](agents.md) — giving one agent its own model instead of the default, the agent roster, and external workers.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
 - [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.

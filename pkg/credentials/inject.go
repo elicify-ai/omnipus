@@ -287,6 +287,14 @@ func nonChannelRefsFor(cfg *config.Config) []credentialRef {
 	return out
 }
 
+// ResolveAllReadHookForTest is a test-only hook point (channels-spec-r8,
+// R8-MIN-001): when non-nil, ResolveAll calls it with the non-secret reference
+// name right after each successful store read and before the next reference is
+// read, so a test can pause a reload's bundle capture between two reads. It is
+// nil in normal execution; tests that set it must restore it in cleanup. The
+// callback never receives the secret value.
+var ResolveAllReadHookForTest func(ref string)
+
 // ResolveAll returns every resolved {ref → plaintext} pair for all provider and
 // channel credential references in cfg, WITHOUT calling os.Setenv. It is the
 // side-effect-free counterpart to InjectFromConfig — useful for sensitive-data
@@ -317,6 +325,9 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 			return
 		}
 		result[ref] = value
+		if hook := ResolveAllReadHookForTest; hook != nil {
+			hook(ref)
+		}
 	}
 
 	// Provider API keys.

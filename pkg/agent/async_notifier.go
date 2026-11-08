@@ -8,13 +8,16 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // asyncNotifyMaxContentBytes mirrors pkg/tools/session.go's maxOutputBufferSize
@@ -88,6 +91,11 @@ type AsyncNotifyEvent struct {
 	// Metadata is an open, currently-unused extension point (FR-N4). See the
 	// type-level doc comment above.
 	Metadata map[string]any
+
+	// Only the actual finished-tool callback supplies these private identities.
+	// They are display attribution, never routing or execution authority.
+	finishedToolName   string
+	finishedToolCallID session.ToolCallID
 }
 
 // AsyncNotifier is the reusable "wake the conversation when background work
@@ -286,48 +294,29 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 			"channel":     event.Channel,
 		})
 
-	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer pubCancel()
-
-	// FR-015/D6b: a per-event sender override. Empty (the default for every
-	// producer except the goal loop's own dispatches) preserves today's
-	// "async:<kind>" composition exactly.
+	// Build the existing control envelope once; retries do not re-observe or
+	// re-author the event and never grant receiving execution authority.
 	senderID := event.SenderCanonicalID
 	if senderID == "" {
 		senderID = fmt.Sprintf("async:%s", event.SourceKind)
 	}
-
-	var publishErr error
-	if n.loop != nil && n.loop.bus != nil {
-		publishErr = n.loop.bus.PublishInbound(pubCtx, bus.InboundMessage{
-			Channel: "system",
-			Sender: bus.SenderInfo{
-				CanonicalID: senderID,
-			},
-			ChatID:  fmt.Sprintf("%s:%s", event.Channel, event.ChatID),
-			Content: event.Content,
-			// FIX 5d: dedicated carriers so processSystemMessage can resolve
-			// the TRUE originating agent and transcript session instead of
-			// guessing an agent / leaving the reconstructed turn with
-			// no transcript binding at all. See bus.InboundMessage's doc
-			// comments on these two fields for the full rationale.
-			AsyncOriginAgentID:       event.AgentID,
-			AsyncTranscriptSessionID: event.TranscriptSessionID,
-			Metadata:                 asyncNotifyMetadata(event),
-		})
-	} else {
-		publishErr = fmt.Errorf("async notifier: no message bus available (source %q)", event.SourceKind)
+	message := bus.InboundMessage{
+		Channel: "system", Sender: bus.SenderInfo{CanonicalID: senderID},
+		ChatID: fmt.Sprintf("%s:%s", event.Channel, event.ChatID), Content: event.Content,
+		AsyncOriginAgentID: event.AgentID, AsyncTranscriptSessionID: event.TranscriptSessionID,
+		Metadata: asyncNotifyMetadata(event),
 	}
-
+	if n.loop == nil || n.loop.bus == nil {
+		return errors.New("async notifier: no message bus available")
+	}
+	noticeID := uuid.NewString()
+	attempts, publishErr := n.publishAsyncNotify(ctx, event, noticeID, message)
 	if publishErr != nil {
-		logger.ErrorCF("agent", "Failed to publish async notification; result permanently lost",
-			map[string]any{
-				"source":  event.SourceKind,
-				"channel": event.Channel,
-				"chat_id": event.ChatID,
-				"error":   publishErr.Error(),
-			})
-		return fmt.Errorf("async notifier: publish failed for source %q: %w", event.SourceKind, publishErr)
+		var warningErr error
+		if attempts > 0 && ctx.Err() != context.Canceled {
+			warningErr = n.reportAsyncNotifyFailure(ctx, event, noticeID)
+		}
+		return fmt.Errorf("async notifier: publish failed: %w", errors.Join(publishErr, warningErr))
 	}
 
 	// EventKindFollowUpQueued is emitted only now, after PublishInbound has

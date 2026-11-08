@@ -521,7 +521,7 @@ func (al *AgentLoop) processSystemMessage(
 			msg.Channel,
 		)
 	}
-	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" {
+	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" && !ordinaryGoalFollowUp(msg) {
 		return al.processSteeredSystemWake(ctx, msg)
 	}
 
@@ -625,7 +625,7 @@ func (al *AgentLoop) processSystemMessage(
 
 	workspaceID := al.resolveSystemMessageWorkspaceID(msg, transcriptStore, transcriptSessionID)
 
-	return al.runAgentLoop(ctx, agent, processOptions{
+	opts := processOptions{
 		SessionKey: sessionKey,
 		Channel:    originChannel,
 		ChatID:     originChatID,
@@ -650,7 +650,11 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
 		NoHistory:            noHistory,
-	})
+	}
+	if ordinaryGoalFollowUp(msg) {
+		return al.runOrdinaryGoalFollowUp(ctx, agent, msg, opts)
+	}
+	return al.runAgentLoop(ctx, agent, opts)
 }
 
 // resolveSystemMessageAgent resolves the TRUE originating agent for a system
@@ -874,7 +878,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if savedErr != nil || consumed {
 		return "", savedErr
 	}
-	if held, holdErr := al.savedWakeHeldForQuestion(sessionID, messageID, saved); held || holdErr != nil {
+	if held, holdErr := al.savedGoalWakeHeld(msg, sessionID, messageID, saved); held || holdErr != nil {
 		return "", holdErr
 	}
 
@@ -955,6 +959,10 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 			return "", fmt.Errorf("steer: wake: %w", identityErr)
 		}
 		claim = executionClaim{SessionID: sessionID, Generation: generation, RunID: wakeRunID, BootSeq: wakeBootSeq}
+		if inboundMetadata(msg, "goal_reminder") == "true" && msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+			noteGoalReminderExecution(inboundMetadata(msg, "goal_id"), wakeRunID)
+			noteGoalCheckInExecution(inboundMetadata(msg, "goal_id"), messageID, claim)
+		}
 		admitted, _, _ := gate.tryAdmitRun(sessionID, generation, wakeRunID, wakeBootSeq)
 		if !admitted {
 			// At the cap. Do not record a consumed marker or acknowledge any
@@ -993,13 +1001,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 	}
 
-	ts.opts.UserMessage = msg.Content
-	ts.userMessage = msg.Content
-	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
-	// its origin, so the woken turn's claim reaches the goal loop (D1).
-	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
-		ts.opts.SenderID = goalLoopFollowUpSenderID
-	}
+	applySteeredSystemWakeMessage(ts, msg)
 	if !al.registerTurnIfAbsent(ts) {
 		release()
 		return "", steer.ErrStaleGeneration
@@ -1061,6 +1063,19 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
+}
+
+func applySteeredSystemWakeMessage(ts *turnState, msg bus.InboundMessage) {
+	ts.opts.UserMessage = msg.Content
+	ts.userMessage = msg.Content
+	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
+	// its origin, so the woken turn's claim reaches the goal loop (D1).
+	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+		ts.opts.SenderID = goalLoopFollowUpSenderID
+		if inboundMetadata(msg, "goal_reminder") == "true" {
+			ts.opts.goalReminderGoalID = inboundMetadata(msg, "goal_id")
+		}
+	}
 }
 
 // consumeAdmittedWake is processSteeredSystemWake's consumption step, run

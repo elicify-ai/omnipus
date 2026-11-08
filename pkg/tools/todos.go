@@ -41,16 +41,19 @@ func (t *SetTodosTool) Scope() ToolScope       { return ScopeCore }
 func (t *SetTodosTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *SetTodosTool) Description() string {
-	return "Use set_todos for every request, including one-line answers, before your first reply or other tool call. " +
-		"Keep your own checklist: mark the current item `in_progress`, future items `pending`, and finished items " +
-		"`completed`; update it as work advances and before your final reply. Pass `outcome` and the FULL `todos` " +
-		"list on every call; each call replaces the list, with no item IDs. Reuse the exact same `outcome` for " +
-		"the same unit of work. You have one active checklist in this session: changing `outcome` closes the " +
-		"previous checklist card as done and starts a new one. Your checklist is shown on the board and re-shown " +
-		"to you each turn. An `active_form` is required for every item: a short present-participle phrase such as " +
-		"\"Drafting the Q4 summary\", at most 500 characters, shown as the chat's working-on line while that item is " +
-		"`in_progress`. Use create_task with dependencies for a durable multi-wave plan, while tracking your own " +
-		"current work here."
+	return "Use set_todos only when the request needs several steps or tool actions. Create the checklist " +
+		"before you start that work: give every item its required `active_form` (a present-participle phrase), " +
+		"mark the current item `in_progress` and the later items `pending`, and update the list as items " +
+		"finish, marking a finished item `completed`. A direct answer (a greeting, a question, a one-step " +
+		"reply) needs no checklist: answer it directly. Never call set_todos just to close a list right " +
+		"before your final reply; an item left `in_progress` at the end of the turn is fine. Pass `outcome` " +
+		"and the FULL `todos` list on every call; each call replaces the list, with no item IDs. Reuse the " +
+		"exact same `outcome` for the same unit of work. You have one active checklist in this session: " +
+		"changing `outcome` closes the previous checklist card as done and starts a new one. Your checklist " +
+		"is shown on the board and re-shown to you each turn. An `active_form` is required for every item: " +
+		"a short present-participle phrase such as \"Drafting the Q4 summary\", at most 500 characters, shown " +
+		"as the chat's working-on line while that item is `in_progress`. Use create_task with dependencies " +
+		"for a durable multi-wave plan, while tracking your own current work here."
 }
 
 func (t *SetTodosTool) Parameters() map[string]any {

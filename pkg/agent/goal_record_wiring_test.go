@@ -21,7 +21,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -638,75 +637,10 @@ func TestGoalRecordFeasibilityFn(t *testing.T) {
 	})
 }
 
-// --- D7 fast lane: TestFallbackCompile_JudgeModelResolution (test 15) ------
-
-// scriptedCompileProvider scripts a single-shot compile response and
-// captures the model string it was called with.
-type scriptedCompileProvider struct {
-	content   string
-	calls     int
-	lastModel string
-}
-
-func (p *scriptedCompileProvider) Chat(
-	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, model string, _ map[string]any,
-) (*providers.LLMResponse, error) {
-	p.calls++
-	p.lastModel = model
-	return &providers.LLMResponse{Content: p.content}, nil
-}
-
-func (p *scriptedCompileProvider) GetDefaultModel() string { return "scripted-compile-mock" }
-
-func TestFallbackCompile_JudgeModelResolution(t *testing.T) {
-	t.Run("judge_model_used_not_the_chat_agent", func(t *testing.T) {
-		chatProvider := &noCallProvider{t: t}
-		al, judgeInst := newGoalLoopTestLoop(t, chatProvider, nil)
-		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-
-		judgeProvider := &scriptedCompileProvider{
-			content: `{"assessment":{"clarity":"clear"},"definition":"Organize the week",` +
-				`"criteria":[{"text":"a plan exists","judgment":"boolean"}],` +
-				`"dod":[{"text":"no secrets leak","judgment":"boolean","provenance":"floor"}]}`,
-		}
-		judgeInst.Provider = judgeProvider
-		judgeInst.Model = "judge-fast-model"
-
-		outcome := al.compileGoalIntentLLM(context.Background(), agentInst, nil,
-			"organize my week", "sess-d7-1", "", "", false, "")
-		if outcome.UsedFallback {
-			t.Fatalf("expected the real Judge-backed compile to succeed, got fallback (reason=%q)", outcome.FallbackReason)
-		}
-		if outcome.Result.Goal == nil || outcome.Result.Goal.Definition != "Organize the week" {
-			t.Fatalf("expected the Judge-compiled definition to land, got %+v", outcome.Result)
-		}
-		if judgeProvider.calls != 1 {
-			t.Fatalf("Judge provider calls = %d, want 1", judgeProvider.calls)
-		}
-		if judgeProvider.lastModel != "judge-fast-model" {
-			t.Fatalf("model sent to the provider = %q, want the Judge agent's OWN model, never the chat agent's", judgeProvider.lastModel)
-		}
-		if chatProvider.calls != 0 {
-			t.Fatalf("the chat (goal-bearing) agent's provider must NEVER be called for the compile, got %d calls", chatProvider.calls)
-		}
-	})
-
-	t.Run("judge_no_provider_degrades_to_deterministic_parser_with_warn", func(t *testing.T) {
-		chatProvider := &noCallProvider{t: t}
-		al, judgeInst := newGoalLoopTestLoop(t, chatProvider, nil)
-		agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-		judgeInst.Provider = nil
-
-		outcome := al.compileGoalIntentLLM(context.Background(), agentInst, nil,
-			"organize my week", "sess-d7-2", "", "", false, "")
-		if !outcome.UsedFallback {
-			t.Fatal("a Judge agent with no provider must degrade to the deterministic parser")
-		}
-		if !strings.Contains(outcome.FallbackReason, "judge") {
-			t.Fatalf("fallback reason = %q, want it to name the Judge-provider degradation", outcome.FallbackReason)
-		}
-	})
-}
+// Founder R6 retires the engine compiler/model-resolution premise. Its two
+// availability cases are replaced by the real five-reminder no-compiler
+// contract in goal_reminder_r6_no_compile_judge_test.go. Actual working-agent
+// record registration, Judge adjudication and goal-frame tests remain intact.
 
 // --- test 16 (emit side): TestGoalStatusFrame_ActiveCarriesRecord ----------
 

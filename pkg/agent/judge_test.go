@@ -152,7 +152,6 @@ func newGoalLoopTestLoop(
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), workerProvider)
 	t.Cleanup(func() { al.Close() })
-
 	judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
 	if !ok {
 		t.Fatal("judge agent not registered")

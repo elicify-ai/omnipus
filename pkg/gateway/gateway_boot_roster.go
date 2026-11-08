@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -335,17 +334,24 @@ func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error
 		switch {
 		case getErr == nil:
 			// Record exists and parsed fine — re-enforce identity fields.
-			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
+			updated, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
 				*existing = seeded
 				return nil
-			}); updateErr != nil {
+			})
+			if updateErr != nil {
 				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
 			}
+			// The store rewrites skill_grants from the installed skills on
+			// every persist (§5.13a); carry what it saved into the live
+			// roster, or the start-up binding step finds the record already
+			// bound and leaves the in-memory agent stale.
+			agents[i].SkillGrants = updated.SkillGrants
 		case errors.Is(getErr, entity.ErrNotFound):
 			// No record on disk yet — create it.
 			if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
 				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
 			}
+			agents[i].SkillGrants = seeded.SkillGrants
 		default:
 			// Get failed for a reason OTHER than "not found" — most commonly a
 			// corrupt/unparseable record. Skip re-seeding this one agent rather
@@ -422,64 +428,4 @@ func persistConfigMarkerList(configPath, key string, markers []string) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
-}
-
-// deleteOrphanedDefineDoneDir deletes the orphaned define-done/ skill
-// directory left behind by the ADR-080 D-SKILL define-goal rename — but
-// ONLY when the replacement define-goal/ directory is verifiably present on
-// disk (fix-wave finding #1, operator-ratified 2026-09-07 Q3). The
-// migration marker (SkillsMigrationDefineGoalRename) alone is NOT
-// sufficient evidence the rename actually landed: skills.SeedDefaults can
-// fail (disk full, permissions, a corrupt embed) after the marker was
-// already recorded in SeededSkillGrants, and deleting define-done/ on the
-// marker's say-so alone would leave a fresh boot with NEITHER directory on
-// disk — loadDefineGoalSkillContent silently returns "" in that state, and
-// every `/goal` compile silently loses its quality bar with no observable
-// signal at compile time.
-//
-// The safe order is: marker present -> define-goal/ verifiably present ->
-// ONLY THEN delete define-done/. Any other combination fails SAFE (not
-// open): define-done/ is left untouched and the reason is returned so the
-// caller can WARN. Returns deleted=true only when define-done/ was actually
-// removed by THIS call; a repeat call after a successful deletion (or when
-// the marker is absent, or define-done/ was never there) is a clean, silent
-// no-op (deleted=false, err=nil) — idempotent by the directories' own
-// on-disk state, never a second marker.
-func deleteOrphanedDefineDoneDir(skillsGlobalDir string, markers []string) (deleted bool, err error) {
-	renamed := false
-	for _, m := range markers {
-		if m == coreagent.SkillsMigrationDefineGoalRename {
-			renamed = true
-			break
-		}
-	}
-	if !renamed {
-		// A pre-ADR-080 install that has not yet run the rename never
-		// reaches this branch — its define-done/ stays untouched until its
-		// own boot actually rewrites its allowlists.
-		return false, nil
-	}
-
-	defineGoalDir := filepath.Join(skillsGlobalDir, "define-goal")
-	if _, statErr := os.Stat(defineGoalDir); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return false, fmt.Errorf(
-				"replacement define-goal/ skill directory not found at %s (SeedDefaults may have failed) "+
-					"— preserving define-done/ rather than deleting it", defineGoalDir)
-		}
-		return false, fmt.Errorf("could not stat replacement define-goal skill directory %s: %w", defineGoalDir, statErr)
-	}
-
-	orphanedDir := filepath.Join(skillsGlobalDir, "define-done")
-	if _, statErr := os.Stat(orphanedDir); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return false, nil // already deleted (or never existed) — clean no-op
-		}
-		return false, fmt.Errorf("could not stat orphaned define-done skill directory %s: %w", orphanedDir, statErr)
-	}
-
-	if rmErr := os.RemoveAll(orphanedDir); rmErr != nil {
-		return false, fmt.Errorf("could not delete orphaned define-done skill directory %s: %w", orphanedDir, rmErr)
-	}
-	return true, nil
 }

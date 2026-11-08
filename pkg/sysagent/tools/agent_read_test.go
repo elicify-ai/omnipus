@@ -33,7 +33,7 @@ func TestGetAgentReturnsSanitizedConfigSoulSparseAssignmentsAndRevision(t *testi
 		t.Fatal(err)
 	}
 
-	result := systools.NewAgentGetTool(&systools.Deps{Home: home}).Execute(context.Background(), map[string]any{"id": agent.ID})
+	result := systools.NewAgentGetTool(&systools.Deps{Home: home}).Execute(context.Background(), map[string]any{"id": agent.ID, "fields": []any{"soul", "stored_overrides", "connectors"}})
 	if result.IsError {
 		t.Fatalf("result=%s", result.ForLLM)
 	}
@@ -51,26 +51,26 @@ func TestGetAgentReturnsSanitizedConfigSoulSparseAssignmentsAndRevision(t *testi
 	if len(revision) != 64 {
 		t.Fatalf("revision=%v", got["revision"])
 	}
-	overrides, overridesOK := got["override_names"].([]any)
+	overrides, overridesOK := got["stored_overrides"].(map[string]any)
 	if !overridesOK {
-		t.Fatalf("override_names=%T %v, want array", got["override_names"], got["override_names"])
+		t.Fatalf("stored_overrides=%T %v, want object", got["stored_overrides"], got["stored_overrides"])
 	}
-	if len(overrides) != 1 || overrides[0] != "bash" {
-		t.Fatalf("override_names=%v", overrides)
+	if len(overrides) != 1 || overrides["bash"] != "deny" {
+		t.Fatalf("stored_overrides=%v", overrides)
 	}
-	servers, serversOK := got["mcp_servers"].([]any)
-	if !serversOK {
-		t.Fatalf("mcp_servers=%T %v, want array", got["mcp_servers"], got["mcp_servers"])
+	servers, serversOK := got["connectors"].([]any)
+	if !serversOK || len(servers) != 1 {
+		t.Fatalf("connectors=%T %v, want one binding", got["connectors"], got["connectors"])
 	}
 	server, serverOK := servers[0].(map[string]any)
 	if !serverOK {
-		t.Fatalf("mcp_servers[0]=%T %v, want object", servers[0], servers[0])
+		t.Fatalf("connectors[0]=%T %v, want object", servers[0], servers[0])
 	}
 	if tools, ok := server["tools"].([]any); !ok || len(tools) != 0 {
 		t.Fatalf("server=%v want explicit empty tools", server)
 	}
-	if _, leaked := got["effective_tools"]; leaked {
-		t.Fatal("get_agent must not duplicate full effective tool catalog")
+	if _, leaked := got["tool_permissions"]; leaked {
+		t.Fatal("get_agent returns only the requested properties (r17 P-2)")
 	}
 }
 
@@ -88,16 +88,14 @@ func TestGetAgentToolsReturnsCatalogEffectivePoliciesAndStoredOverrideNames(t *t
 	cfg := &config.Config{}
 	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow", "read_file": "allow"}
 	deps := &systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }}
-	// SPEC.md compact output: only assigned live MCP tools may join the builtin rows.
+	// Only assigned live MCP tools may join the builtin entries.
 	mail := tools.NewMCPTool(nil, "mail", &mcp.Tool{Name: "send", Description: "Send mail."})
 	defaultToolsWireCatalog(t, deps, []tools.Tool{mail, defaultToolsPreviewMetadata{name: "read_file"}, defaultToolsPreviewMetadata{name: "bash"}})
-	result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID})
+	result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID, "fields": []any{"tool_permissions"}})
 	if result.IsError {
 		t.Fatalf("result=%s", result.ForLLM)
 	}
-	// SPEC.md compact output: revision remains in the header; verbose override/connector blocks are dropped.
-	header := "agent: writer | name: Writer | kind: main | revision: " + state.Revision
-	policies := defaultToolsCompactPolicies(t, result.ForLLM, header)
+	policies := defaultToolsCompactPolicies(t, result.ForLLM, map[string]any{"id": "writer", "revision": state.Revision})
 	if !reflect.DeepEqual(map[string]string{"bash": "deny", "read_file": "allow"}, policies) {
 		t.Fatalf("compact effective policies=%v, want exactly bash deny and read_file allow; no unassigned MCP tools", policies)
 	}
@@ -136,7 +134,7 @@ func TestGetAgentActivationRequiresPublishedRevisionMatch(t *testing.T) {
 		}))
 	}
 	readStatus := func() any {
-		result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID})
+		result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID, "fields": []any{"activation_status"}})
 		if result.IsError {
 			t.Fatalf("get_agent failed: %s", result.ForLLM)
 		}

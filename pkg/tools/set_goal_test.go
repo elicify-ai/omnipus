@@ -351,23 +351,30 @@ func TestSetGoalTool_ScopePreconditions(t *testing.T) {
 		}
 	})
 
-	t.Run("goalless session refuses and writes nothing", func(t *testing.T) {
+	// Founder R5 (2026-10-21): valid goalless calls now activate through the
+	// real agent wiring, covered by TestSelfStartedGoalContract in pkg/agent.
+	// Keep this fake at its existing record-access boundary: invalid input
+	// needs no activation callback and must fail validation before any write.
+	t.Run("goalless invalid input validates before activation and writes nothing", func(t *testing.T) {
 		const sessionID = "session_goal_none"
-		access := newFakeGoalRecordAccess() // no condition set — goalless
+		access := newFakeGoalRecordAccess()
 		tool := newSetGoalTool(access)
 
 		res := tool.Execute(setGoalCtx(sessionID, "mia"), map[string]any{
-			"definition": "Ship it.",
+			"definition": " ",
 			"criteria":   minimalCriteriaArg(),
 		})
 		if !res.IsError {
-			t.Fatal("want a refusal on a goalless session")
+			t.Fatal("want a validation error for the missing definition")
 		}
-		if !strings.Contains(res.ForLLM, "no active goal") {
-			t.Fatalf("error should name the goalless refusal: %q", res.ForLLM)
+		if !strings.Contains(res.ForLLM, "definition is required") {
+			t.Fatalf("goalless call must name its actual input error, not the retired no-active-goal refusal: %q", res.ForLLM)
 		}
 		if access.writes != 0 {
-			t.Fatalf("must not write on a goalless-session refusal, got %d writes", access.writes)
+			t.Fatalf("invalid goalless input must not write, got %d writes", access.writes)
+		}
+		if access.goalID[sessionID] != "" || access.condition[sessionID] != "" || access.record[sessionID] != "" {
+			t.Fatalf("invalid goalless input must not activate or register a record: %+v", access)
 		}
 	})
 }

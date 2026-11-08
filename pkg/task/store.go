@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	rrule "github.com/teambition/rrule-go"
@@ -511,10 +513,10 @@ func (t *Task) normalize() error {
 	if !IsValidSurface(t.Surface) {
 		return verr("invalid surface %q", t.Surface)
 	}
-	if len(t.Description) > 2000 {
+	if utf8.RuneCountInString(t.Description) > maxDescriptionChars {
 		return verr("description must be 2000 characters or fewer")
 	}
-	if len(t.Prompt) > 10000 {
+	if utf8.RuneCountInString(t.Prompt) > maxPromptChars {
 		return verr("prompt must be 10000 characters or fewer")
 	}
 	if len(t.Result) > 50000 {
@@ -582,6 +584,15 @@ func (t *Task) validateScheduledAgentAssignment() error {
 	}
 	return nil
 }
+
+// maxDescriptionChars and maxPromptChars bound Task.Description and
+// Task.Prompt in characters (runes), never bytes (tool-parity spec r17 D-1:
+// description up to 2000, prompt up to 10000 characters), so a valid
+// non-ASCII text is not refused for its encoded size.
+const (
+	maxDescriptionChars = 2000
+	maxPromptChars      = 10000
+)
 
 // maxTagRunes and maxTagsPerTask bound Task.Tags (spec Part A §B). Also used
 // by the milestone migration (migrate_milestones.go) when sizing the
@@ -1169,13 +1180,13 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 		su.t.Title = trimmedTitle
 	}
 	if su.patch.Description != nil {
-		if len(*su.patch.Description) > 2000 {
+		if utf8.RuneCountInString(*su.patch.Description) > maxDescriptionChars {
 			return nil, true, verr("description must be 2000 characters or fewer")
 		}
 		su.t.Description = *su.patch.Description
 	}
 	if su.patch.Prompt != nil {
-		if len(*su.patch.Prompt) > 10000 {
+		if utf8.RuneCountInString(*su.patch.Prompt) > maxPromptChars {
 			return nil, true, verr("prompt must be 10000 characters or fewer")
 		}
 		su.t.Prompt = *su.patch.Prompt
@@ -1295,6 +1306,42 @@ func (su *storeUpdateLocked) applyAttemptFields() error {
 }
 
 // applyRemainingFields validates and applies the remaining independent patch fields.
+// applyTrigger validates and sets a new trigger (nil clears it). r17 TK-30:
+// the write that changes the trigger invalidates the delivery marker
+// atomically; an identical re-save keeps it.
+//
+// Scheduling state (3), the one shared rule for REST and update_task: a write
+// that adds or changes a trigger whose first occurrence is still in the future
+// stores `inbox` for a task that would otherwise end the write `next`, so the
+// ordinary drain cannot run it before the scheduler fires it. This holds
+// whatever status the caller supplies in the same patch: an explicit `next`
+// still ends `inbox` (the status patch is applied before this runs, so su.t
+// already carries the requested result). An explicit `inbox` stays inbox and
+// an explicit `blocked` is refused earlier (ErrBlockedNotSettable). Untouched:
+// an unchanged-trigger re-save, a manual trigger (no occurrence, state 4), an
+// already-due occurrence (state 5), and every task not ending `next`
+// (running, blocked, terminal, inbox).
+func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
+	if newTrigger != nil {
+		if err := ValidateTrigger(newTrigger); err != nil {
+			return err
+		}
+	}
+	changed := !reflect.DeepEqual(su.t.Trigger, newTrigger)
+	if changed {
+		su.t.LastDeliveredAtMs = nil
+	}
+	su.t.Trigger = newTrigger
+	if changed && su.t.Status == StatusNext &&
+		TriggerAwaitingOccurrence(su.t, time.Now()) {
+		if err := validateTransition(su.t.Status, StatusInbox, false, su.t.Trigger.IsRepeating()); err != nil {
+			return err
+		}
+		su.t.Status = StatusInbox
+	}
+	return nil
+}
+
 func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.Initiator != nil {
 		su.t.Initiator = *su.patch.Initiator
@@ -1341,13 +1388,9 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 		}
 	}
 	if su.patch.Trigger != nil {
-		newTrigger := *su.patch.Trigger
-		if newTrigger != nil {
-			if err := ValidateTrigger(newTrigger); err != nil {
-				return nil, true, err
-			}
+		if err := su.applyTrigger(*su.patch.Trigger); err != nil {
+			return nil, true, err
 		}
-		su.t.Trigger = newTrigger
 	}
 	if su.patch.Due != nil {
 		su.t.Due = *su.patch.Due
@@ -1537,9 +1580,20 @@ var ErrNotRestartable = errors.New("task: not restartable: task is not failed")
 // dependency is not yet `done` — the same dependency recompute Update applies
 // when BlockedBy is patched (DS-5: restart resets a member to "next/blocked").
 //
+// RestartReset is the explicit restart of a person (PlayPlan, the standalone
+// restart route): it lands on `next` even when the task's trigger still has a
+// future occurrence, because the person asked for the run now; the trigger is
+// kept. Automatic resets use AutoRestartReset (trigger_wait.go) instead.
+//
 // Returns ErrNotRestartable when the task is not currently `failed`. Takes
 // the per-task lock once internally.
 func (s *Store) RestartReset(id string) (*Task, error) {
+	return s.restartReset(id, false)
+}
+
+// restartReset is the shared body of RestartReset and AutoRestartReset;
+// automatic selects the TK-30 wait for a future trigger occurrence.
+func (s *Store) restartReset(id string, automatic bool) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1568,6 +1622,11 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.ResumeFromCommit = ""
 	t.StartedAt = ""
 	t.CompletedAt = ""
+	if automatic && TriggerAwaitingOccurrence(t, time.Now()) {
+		// r17 TK-30: wait for the occurrence. recomputeBlockedStateLocked
+		// leaves an inbox task untouched.
+		t.Status = StatusInbox
+	}
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {
@@ -1780,7 +1839,9 @@ func (s *Store) recomputeBlockedStateLocked(t *Task) {
 	switch {
 	case anyUnmet && t.Status == StatusNext:
 		t.Status = StatusBlocked
-	case !anyUnmet && t.Status == StatusBlocked:
+	case !anyUnmet && t.Status == StatusBlocked && !TriggerHoldsPromotion(t, time.Now()):
+		// r17 TK-30: a task whose trigger has not released it stays waiting;
+		// only the scheduler's fire at the occurrence releases it.
 		t.Status = StatusNext
 	}
 }
@@ -1793,6 +1854,17 @@ func (s *Store) recomputeBlockedStateLocked(t *Task) {
 // to spawn a fresh run for once/recurring triggers. Takes the per-task
 // lock once internally.
 func (s *Store) SpawnReset(id string) (*Task, error) {
+	return s.SpawnResetForOccurrence(id, nil)
+}
+
+// SpawnResetForOccurrence is SpawnReset for a scheduler delivery: when
+// occurrenceMs is non-nil, the same write records it as the task's
+// scheduler-delivery marker (r17 TK-30), so the reset and the delivery can
+// never be observed apart. The caller holds the task's coordination lock and
+// has validated the occurrence against the fresh persisted trigger. The marker
+// is written even when the task is already running (the overlap guard): the
+// occurrence was delivered, the run is simply not restarted.
+func (s *Store) SpawnResetForOccurrence(id string, occurrenceMs *int64) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1804,7 +1876,17 @@ func (s *Store) SpawnReset(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	if occurrenceMs != nil {
+		v := *occurrenceMs
+		t.LastDeliveredAtMs = &v
+	}
 	if t.Status == StatusInProgress {
+		if occurrenceMs != nil {
+			t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			if err := s.write(t); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrAlreadyRunning
 	}
 	t.Status = StatusNext
@@ -1848,11 +1930,46 @@ func (s *Store) AdvanceUnblocked(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.Status != StatusBlocked {
+	if t.Status != StatusBlocked || TriggerHoldsPromotion(t, time.Now()) {
+		// r17 TK-30 (deletion-driven promotion): a task still awaiting its
+		// trigger stays waiting exactly as a completed predecessor leaves it.
 		return t, nil
 	}
 	next := StatusNext
 	return s.updateLocked(id, Patch{Status: &next, allowBlockedSet: true})
+}
+
+// PromoteInboxIfReleased moves an `inbox` task to `next` — the plan engine's
+// automatic member promotion — unless its trigger still holds it (r17 TK-30).
+// The status and the trigger are read under the task's lock in the same
+// critical section as the write, never from a caller-side snapshot, so a
+// trigger attached between a plan pass's list and this call keeps the task
+// waiting. promoted is false (and the task unchanged) when it was not inbox
+// or is held.
+func (s *Store) PromoteInboxIfReleased(id string) (t *Task, promoted bool, err error) {
+	if err = validateID(id); err != nil {
+		return nil, false, err
+	}
+	if hook := promoteInboxHook.Load(); hook != nil {
+		(*hook)(id)
+	}
+	mu := s.lock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	cur, err := s.load(id)
+	if err != nil {
+		return nil, false, err
+	}
+	if cur.Status != StatusInbox || TriggerHoldsPromotion(cur, time.Now()) {
+		return cur, false, nil
+	}
+	next := StatusNext
+	updated, err := s.updateLocked(id, Patch{Status: &next})
+	if err != nil {
+		return nil, false, err
+	}
+	return updated, true, nil
 }
 
 // Exists reports whether a task with id exists on disk.

@@ -58,14 +58,17 @@
 //      `test.skip()` — if a feature is missing the test FAILS loud.
 //
 // Real-LLM requirement (per §9.1 "at least one real-LLM run per
-// user-facing flow"): every test depends on OPENROUTER_API_KEY_CI.
-// The global-setup preflight throws immediately if it is unset.
+// user-facing flow"): every test needs the live-model keys — the central
+// primary's and the fallback's (fixtures/e2e-model-keys.ts). The global-setup
+// preflight throws immediately if either is unset.
 
 import { expect, test, type Page } from '@playwright/test'
 import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
 import { freshChat } from './session-setup'
-import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
+import { saveStubCliProgram, stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 import { sessionMessages, type RetainedHistoryMessage } from './session-history'
+import { e2eAgentModelFields } from './e2e-agent-model'
+import { requireLiveModelKeys } from './e2e-model-keys'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,14 +76,12 @@ export const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 // ── T0.1: API key gate ──────────────────────────────────────────────────────
 
+// Checks the keys for the ACTIVE pair: the central primary (or the fallback
+// after a failed job-start check) and the fallback.
 export function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error(
-      'BLOCKED: OPENROUTER_API_KEY_CI not set. Every conformance e2e in this file ' +
-        'requires a real LLM (the spec demands at least one real-LLM run per user-facing ' +
-        'flow). See tests/e2e/README.md prerequisites.',
-    )
-  }
+  requireLiveModelKeys(
+    'the conformance e2e (the spec demands at least one real-LLM run per user-facing flow)',
+  )
 }
 
 // ── Shared helpers (mirror verifier-eval.spec.ts's apiFetch pattern) ────────
@@ -322,6 +323,10 @@ export async function createMainAgent(
     type: 'Main',
     name,
     soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+    // The central live model plus its fallback: the product falls back per
+    // agent only, so an agent without fallback_models fails when the primary
+    // is unavailable.
+    ...e2eAgentModelFields('live'),
   }
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', body)
   if (!res.ok) {
@@ -516,11 +521,22 @@ export async function createPlanWithMembers(
  * LLM on the worker side. Put it on the workspace team like any other assignee.
  */
 export async function createStubCliWorkerAgent(page: Page, name: string, texts: StubCliTexts): Promise<string> {
+  // The program path is Settings-owned (r17 §3.11): save the stub as the
+  // person-chosen claude-code program BEFORE the agent body — an agent request
+  // carrying executor.cli_path is refused 400 ("cli_path cannot be set on an
+  // agent"), and without a saved path the worker is created unable to run.
+  await saveStubCliProgram(page)
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
     type: 'subagent_3p',
     name,
     description: 'Stub external-CLI worker for a conformance e2e: its CLI ignores the prompt and prints a fixed reply.',
-    soul: 'You are a stub. Your CLI process prints a fixed reply regardless of input.',
+    // No `soul` key: AgentCreateRequestSubagent3p has additionalProperties:false
+    // and no soul field ("There is no soul: a third-party agent has no SOUL.md"),
+    // and the create handler decodes variant bodies with
+    // json.Decoder.DisallowUnknownFields (pkg/gateway/rest_agents_create.go), so
+    // a soul key is refused 400 "unknown field \"soul\"" (#1661, CI run
+    // 42279413808). The stub's behaviour rides executor.env_overrides
+    // (stubCliExecutor) — nothing here needs a soul.
     executor: stubCliExecutor(texts),
   })
   if (!res.ok) {

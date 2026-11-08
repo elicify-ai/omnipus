@@ -83,7 +83,7 @@ func TestDispatchOwnership_RefusalNeverKillsTheDispatcher(t *testing.T) {
 func TestDispatchOwnership_DelegatedReplyIsNotRefused(t *testing.T) {
 	delegated := bus.OutboundMessage{
 		Channel: "telegram", AgentID: "ava", WorkspaceID: "W1",
-		OwnershipChecked: true, // send_message applied the rule with turn context
+		Operation: bus.OperationChecked, // send_message applied the rule with turn context
 	}
 	if !allowAgentOriginatedSend(ownershipCfg(), delegated) {
 		t.Fatal("a delegate replying in its parent's conversation must not be refused at " +

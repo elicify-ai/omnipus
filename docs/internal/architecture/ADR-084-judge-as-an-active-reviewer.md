@@ -521,7 +521,8 @@ call's *response*. Verified:
 whether `send_email(to: supplier@…)` satisfies "the supplier was emailed" is a
 natural-language-to-tool-call matcher — **D14 rule 2's retired inference, relocated one tier down**,
 with the same failure mode (a criterion's wording silently deciding what gets checked). The spec
-does not build one. It (a) widens the feed to `{tool, parameters, status, error}`, bounded and
+does not build one. It (a) widens the feed to `{tool, parameters, status, error}` *(amended
+2026-10-30: plus the tool's output, see the amendment under R8-e)*, bounded and
 redacted, so the Judge reads facts rather than a name and a colour (FR-105); (b) keeps tier 1's
 *deciding* power exactly where it already is, a **declared** `KindBehavior` payload (FR-107); and
 (c) gives tier 1 a narrow, closed **contradiction veto** — the one direction D14's second binding
@@ -542,6 +543,8 @@ Two facts make it fixable: the update written is
 `Status` and `Error` are never touched**; and `ContentState == "emptied"` is self-declaring. Spec
 FR-106: build tier-1 facts from the durable quadruple, use `Result` only when `ContentState` is
 empty, and treat `emptied`/`capped` as **inconclusive, never a contradiction**.
+
+> **Amendment 2026-10-30 (issues #1484, #721, #722; landing/t6b commits `e3917fd23`, `42c76a39e`, `f09a027da`).** The Judge now sees the tool results of the run. FR-105's feed is `{tool, parameters, status, error}` **plus the tool's output as the working agent saw it**: `formatTierOneToolCall` (`pkg/agent/judge_evidence_tiers.go`) renders `Result["text"]` as a `[tool_output]` line, redacted and then cut at 2,048 runes with the explicit truncation marker, inside the unchanged 32 KiB oldest-first tier-1 block. FR-106 is amended accordingly: `Result["text"]` is rendered **whatever `ContentState` is**; when it is `emptied` or `capped` the explicit projection marker stays and the text that follows reads as the projected text the agent saw, not the full result and never as "the tool returned nothing". The FR-108 veto still reads `Status` only, so a projected result is still never a contradiction. **Evidence redaction is unconditional** (#721): one scrubber (`judgeEvidenceRedactor`, `pkg/agent/judge_evidence_redact.go`) covers the transcript window (narration, parameters, errors, tool output) and the machine-check evidence — registered credential values at any length, the secret-pattern set, the whole userinfo of any URL that carries a password (user part included, so an email used as a login stays hidden) and the audit credential set (including URL passwords). *Founder decision Q14 B (2026-10-30):* plain email addresses are **not** redacted, so a goal such as "email the order to supplier@x.com" is verifiable from the tool's parameters and output — independent of `tools.filter_sensitive_data` and `filter_min_length`, and always before any truncation; scrubbed spans stay visible as markers. Machine-check evidence also reaches the Judge when there is no task id or the evidence write fails (#722). **Still excluded:** any `Result` shape other than `Result["text"]`; output past 2,048 runes per call; the oldest calls once the block passes 32 KiB (the Judge is told how many were left out); the full output of a projected result; and the redacted values themselves. The Judge's own `inspect_session` still returns no tool result payload (Revision 5 note R5-b), and the scrubbing covers only evidence handed to the Judge, not what it reads with its own tools.
 
 **A related note, because a plausible shortcut is wrong.** Tier 1 must **not** be sourced from the
 spec's FR-030 in-memory capture. That capture holds the **Judge's own** results during the verifier

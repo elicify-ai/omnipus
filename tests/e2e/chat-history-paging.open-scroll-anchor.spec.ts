@@ -134,14 +134,19 @@ test('T16 B09: a real delayed image growing above the reader preserves the visib
   const ready = new Promise<void>((resolve) => { release = resolve; });
   let requested!: () => void;
   const seen = new Promise<void>((resolve) => { requested = resolve; });
-  // Only the external image server is controlled. Production layout/rendering
+  // Only the image response is controlled. Production layout/rendering
   // decides the before/after height; no CSS or ResizeObserver stub is involved.
-  await page.route('https://history-image.invalid/growth.svg', async (route) => {
+  // Same-origin on purpose: the shipped SPA policy is img-src 'self' data:
+  // blob: (pkg/gateway/embed.go::spaBaseContentSecurityPolicy, ADR-083 D-C),
+  // so a foreign image host is refused before any request leaves and only
+  // ever renders "Image unavailable" — it can never grow late.
+  const imageURL = `${history.origin}/history-fixture/growth.svg`;
+  await page.route(imageURL, async (route) => {
     requested(); await ready;
     await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="640"><rect width="800" height="640" fill="navy"/></svg>' });
   });
   try {
-    await history.seed({ label: 'image', start: 0, count: 40, imageURL: 'https://history-image.invalid/growth.svg' });
+    await history.seed({ label: 'image', start: 0, count: 40, imageURL });
     await history.authenticate();
     await history.open();
     await scrollToDistance(page, 0);

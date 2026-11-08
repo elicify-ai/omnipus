@@ -59,18 +59,18 @@ func ProvisionFirstParty(layout Layout) (Manifest, error) {
 			{Import: "pypdf", Version: "6.19.0"},
 		},
 	}
-	if err := os.MkdirAll(layout.Skills, 0o755); err != nil {
+	// Skills spec r15 §11: no skill copy lives under the prefix any more —
+	// document skills run from the registry folder. The asset list is the
+	// first-party files the prefix holds: the compiled probe.
+	if err := installProbeFiles(layout, manifest.Revision); err != nil {
 		return Manifest{}, err
 	}
-	if err := InstallEmbeddedSkills(layout); err != nil {
-		return Manifest{}, err
-	}
-	assets, err := inventoryTree(layout.Prefix, layout.Skills)
+	assets, err := inventoryTree(layout.Prefix, probeDir(layout))
 	if err != nil {
 		return Manifest{}, err
 	}
 	manifest.Assets = assets
-	if err := InstallProbe(layout, manifest); err != nil {
+	if err := writeManifest(layout, manifest); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil

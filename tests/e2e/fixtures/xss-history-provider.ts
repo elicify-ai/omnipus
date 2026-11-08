@@ -1,5 +1,5 @@
 import http, { type ServerResponse } from 'node:http';
-import { E2E_MODEL } from './e2e-model';
+import { E2E_FALLBACK } from './e2e-model';
 
 export const HISTORY_XSS_PAYLOAD = '<script>window.__xss_fired=true;alert(1)</script><img src=x onerror="window.__xss_fired=true;alert(1)">';
 
@@ -10,7 +10,7 @@ export async function startXssHistoryProvider() {
   const failures: string[] = [];
   const held = new Set<ServerResponse>();
   const chunk = (content: string, finish: string | null) => 'data: ' + JSON.stringify({
-    id: 'xss-history-stream', object: 'chat.completion.chunk', model: E2E_MODEL,
+    id: 'xss-history-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
     choices: [{ index: 0, delta: { content }, finish_reason: finish }],
   }) + '\n\n';
   const server = http.createServer((request, response) => {
@@ -20,7 +20,7 @@ export async function startXssHistoryProvider() {
     request.on('end', () => {
       if (request.method === 'GET' && request.url?.includes('/models')) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ object: 'list', data: [{ id: E2E_MODEL, object: 'model' }] }));
+        response.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }));
         return;
       }
       if (request.method !== 'POST' || !request.url?.includes('/chat/completions')) {
@@ -35,7 +35,7 @@ export async function startXssHistoryProvider() {
       }
       if (body.stream !== true) {
         response.writeHead(200, { 'Content-Type': 'application/json' });
-        response.end(JSON.stringify({ id: 'xss-history-probe', object: 'chat.completion', model: E2E_MODEL,
+        response.end(JSON.stringify({ id: 'xss-history-probe', object: 'chat.completion', model: E2E_FALLBACK.model,
           choices: [{ index: 0, message: { role: 'assistant', content: 'ready' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
         return;

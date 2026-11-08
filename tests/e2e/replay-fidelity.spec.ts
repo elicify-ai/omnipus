@@ -670,8 +670,17 @@ test(
   // relaxed to 3s (vs. the deterministic 7s the harness provided).
   //
   // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 9; TDD row 25.
+  //
+  // 360s total / 180s per reply window — sized for the in-suite LLM latency regime
+  // test (d) already documents (90-150s under full-suite model contention). The
+  // 78162a02c CI artifacts show the failure mode when this test keeps the old
+  // 90s/60s budget: BOTH contexts streamed the identical answer in lockstep while
+  // the turn was still active, and the closing nonce had not arrived on either
+  // page when the 60s window expired (`123 × locator resolved to 0 elements` at
+  // :757, retry passing in 20-28s on model speed alone). No event was lost; the
+  // window was shorter than the provider. Verdict: /workspace/logs/t6b/fix-ci-fe/flake-verdict.md
   async ({ page, browser }) => {
-    test.setTimeout(90_000)
+    test.setTimeout(360_000)
 
     // ── Step 1: page1 — fresh session ──
     await page.goto('/')
@@ -754,8 +763,8 @@ test(
         // Page2 first — it attached mid-turn so it's the harder case (FR-I-009).
         const reply1 = assistantMessages(page).filter({ hasText: nonce })
         const reply2 = assistantMessages(page2).filter({ hasText: nonce })
-        await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 60_000 })
-        await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 60_000 })
+        await expect(reply2, 'second context receives one completed assistant answer').toHaveCount(1, { timeout: 180_000 })
+        await expect(reply1, 'first context receives the same completed assistant answer').toHaveCount(1, { timeout: 180_000 })
         await expect(page2.locator('body')).toContainText(nonce, { timeout: 60_000 })
         await expect(page.locator('body')).toContainText(nonce, { timeout: 60_000 })
 

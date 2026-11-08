@@ -9,12 +9,10 @@
 // generation via resumed_from, terminal history immutable) BEFORE any tool
 // runs, so a delegate call in that very turn succeeds.
 //
-// What never passes through here: system wakes — processSystemMessage calls
-// runAgentLoop directly and never reaches processMessage's tail — and every
-// other runAgentLoop caller. The wrapper is hooked only into processMessage,
-// the human-message path, which is what keeps MIN-004 ("system wakes never
-// revive") true structurally: a delegate call in a system wake's turn hits
-// D2's launch backstop instead.
+// Root goal follow-ups also reuse this ordinary admission/completion wrapper.
+// They retain their system origin and use handback revival authority: a finished
+// root may start its next round, but a system wake never resumes a stopped root.
+// Other system messages keep their existing entry paths.
 
 package agent
 
@@ -153,8 +151,8 @@ func (al *AgentLoop) resetUnifiedMetaStatusActive(sessionID string) {
 		map[string]any{"session_id": sessionID})
 }
 
-// runInboundTurnWithRevival prepares a genuine lifecycle-backed human
-// admission before constructing its ordinary turn. Stopped resumes retain the
+// runInboundTurnWithRevival prepares a genuine lifecycle-backed ordinary
+// admission before constructing its turn. Stopped resumes retain the
 // generation; terminal follow-ups use Revive's next generation. Preparation
 // errors are visible and never fall through to an unstamped execution.
 // A session worker retains ownership through its full drain/output tail;

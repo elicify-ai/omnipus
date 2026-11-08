@@ -101,6 +101,8 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 	judgeInst.Provider = &b6ScriptedJudge{metFromCall: 1, reason: "evidenced"}
 
 	ls := session.NewLifecycleStore(filepath.Join(t.TempDir(), "session_lifecycle"))
+	ensureOrdinaryGoalRuntimeForTest(t, al)
+	al.SetSessionMessagingStores(al.GetMessageInboxStore(), ls)
 	al.taskExecutor.SetLifecycleStore(ls)
 
 	tk := &task.Task{

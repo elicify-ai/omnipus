@@ -421,6 +421,14 @@ func (vb *validateBootConfigState) validateSandbox() (error, bool) {
 
 // validatePlanning applies and validates planning defaults and bounds.
 func (vb *validateBootConfigState) validatePlanning() (error, bool) {
+	// Timer pointers retain explicit zero/false. Validate numeric values even
+	// when stalled check-ins are disabled; nil alone means use the default.
+	if value := vb.cfg.Planning.GoalReminderQuietSeconds; value != nil && (*value < MinGoalReminderQuietSeconds || *value > MaxGoalReminderQuietSeconds) {
+		return fmt.Errorf("config error: planning.goal_reminder_quiet_seconds=%d is out of range [%d, %d]", *value, MinGoalReminderQuietSeconds, MaxGoalReminderQuietSeconds), true
+	}
+	if value := vb.cfg.Planning.GoalStalledCheckinMinutes; value != nil && (*value < MinGoalStalledCheckinMinutes || *value > MaxGoalStalledCheckinMinutes) {
+		return fmt.Errorf("config error: planning.goal_stalled_checkin_minutes=%d is out of range [%d, %d]", *value, MinGoalStalledCheckinMinutes, MaxGoalStalledCheckinMinutes), true
+	}
 	// --- ADR-049 D7: Planning bounds (spec Part A §G) ---
 	// Every field, when non-zero, must be >=1; zero applies the documented
 	// default (mirrors PortRange.IsZero's default-apply pattern above).

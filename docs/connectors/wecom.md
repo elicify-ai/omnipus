@@ -131,3 +131,7 @@ Fields can be overridden via environment variables. The parent block uses the pr
 
 - Check whether `allow_from` is blocking the sender.
 - Check that `channels.wecom.bot_id` and `channels.wecom.secret_ref` are set and non-empty, and that the referenced credential exists in the store.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

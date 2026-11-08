@@ -112,7 +112,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	gl.sessionID = gl.opts.TranscriptSessionID
 	gl.args = commands.CommandArgs(msg.Content)
 
-	if gl.args == "" {
+	if gl.args == "" || strings.EqualFold(strings.TrimSpace(gl.args), "status") {
 		return true, true, gl.al.goalStatusReply(gl.sessionID, gl.store)
 	}
 	if isGoalClearVerb(gl.args) {
@@ -552,7 +552,7 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 // goalStatusReply formats `/goal status`'s deterministic reply (FR-069/
 // FR-029): condition, elapsed wall-clock, rounds_used/bound, cumulative
 // token spend (visible-only, NFR-1 — never used to stop the loop), latest
-// judge reason, active loops: N/cap, and — REWRITTEN by ADR-088 (E10/S-39)
+// goal reason, active loops: N/cap, and — REWRITTEN by ADR-088 (E10/S-39)
 // — the record summary (statement + criteria + DoD) once the working agent
 // has registered one via `set_goal`. The old pending-draft/clarification
 // branches are gone (there is no more pending state to report); an
@@ -574,7 +574,7 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 	}
 	reason := rec.LatestReason
 	if reason == "" {
-		reason = "(no round completed yet)"
+		reason = "(no reason recorded)"
 	}
 	// Token spend stays a SESSION statistic (session.UnifiedMeta.Stats) —
 	// ADR-086 relocated the goal's own fields onto the goal record, not the
@@ -587,7 +587,7 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 	}
 	status := fmt.Sprintf(
 		"Goal: %s\nElapsed: %s\nRounds: %d/%d\nToken spend (session, visible-only): %d tokens ($%.4f)\n"+
-			"Latest judge reason: %s\nActive loops: %d/%d",
+			"Latest goal reason: %s\nActive loops: %d/%d",
 		rec.Prompt, elapsed, rec.Round, rec.MaxRounds,
 		tokensTotal, cost, reason, active, capN,
 	)

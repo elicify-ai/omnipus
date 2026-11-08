@@ -14,7 +14,7 @@ import { Copy, Check } from '@phosphor-icons/react'
 import { useMessage } from '@assistant-ui/react'
 import type { SyntaxHighlighterProps, CodeHeaderProps } from '@assistant-ui/react-markdown'
 import { MermaidDiagram } from './mermaid-renderer'
-import { ShikiCodeBlock } from './markdown-shared'
+import { ShikiCodeBlock, clipboardCode } from './markdown-shared'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
 
@@ -55,7 +55,7 @@ export function CopyCodeHeader({ language, code }: Omit<CodeHeaderProps, 'node'>
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(code)
+      await navigator.clipboard.writeText(clipboardCode(code))
       setCopied(true)
       // Clear any existing reset timer before starting a new one
       if (resetTimerRef.current) clearTimeout(resetTimerRef.current)

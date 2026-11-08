@@ -392,6 +392,7 @@ func TestKeeperReachesAQuietTaskWithoutTestWiring(t *testing.T) {
 	const condition = "ship the CSV exporter"
 	tk, _ := seedTaskWithJudgeableGoal(t, al, "t-keeper-1", condition, "webchat", "c1")
 
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)
@@ -525,7 +526,6 @@ func TestClaimScanWatermarkSurvivesATranscriptReadError(t *testing.T) {
 // turn, spending real tokens, every quiet window, forever.
 func TestKeeperDoesNotDispatchAnUncountedPush(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	_, sid := newGoalTestSession(t, al, agentInst.ID)

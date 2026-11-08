@@ -11,6 +11,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -94,6 +95,33 @@ func historyD16NativeStop(t *testing.T, h *historyD16Harness, tool *historyD16To
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.True(t, h.loop.WaitForActiveRequestsContext(ctx), "all actual turn work joined before canonical proof")
+	historyD16AwaitCancelRecord(t, h, sid, turn)
+}
+
+// historyD16AwaitCancelRecord waits, bounded, until the stopped turn's
+// turn_canceled record is saved, before any canonical snapshot or readback.
+// #1524: the turn-end event and the webchat done frame are sent before
+// turnState.Finish appends turn_canceled, and WaitForActiveRequestsContext
+// counts provider calls only, not the session-worker turn, so neither joins
+// that append. The production fix (save the record before done) is tracked
+// in #1524. This waits for at least one record; the readback still requires
+// exactly one, with the hard cancel method, and no rewrite after reopen.
+func historyD16AwaitCancelRecord(t *testing.T, h *historyD16Harness, sid, turn string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		entries, err := h.store.ReadTranscript(sid)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			if entry.Type == session.EntryTypeTurnCancelled && entry.TurnID == turn {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("#1524: stopped turn %s never saved its turn_canceled record within 30s", turn)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func historyD16HeldCancellation(t *testing.T, frames [][]byte) {

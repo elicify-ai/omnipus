@@ -27,6 +27,26 @@ type channelEntry struct {
 	// Revision is the FR-088 token the channel write tools' expected_revision
 	// must carry ("absent" for a channel with no config entry).
 	Revision string `json:"revision,omitempty"`
+	// Outbound is the stored posting setting of a configured entry
+	// (FR-034, S-37); nil for an entry with no config.
+	Outbound *channelOutboundEntry `json:"outbound,omitempty"`
+}
+
+// channelOutboundEntry is list_channels' view of channels.<id>.outbound: the
+// stored policy and canonical targets, {reply_only, []} when absent (FR-034).
+type channelOutboundEntry struct {
+	Policy  string   `json:"policy"`
+	Targets []string `json:"targets"`
+}
+
+// outboundEntry returns ch's list_channels outbound view.
+func outboundEntry(ch config.ChannelInstanceConfig) *channelOutboundEntry {
+	out := &channelOutboundEntry{Policy: string(channels.StartPolicyReplyOnly), Targets: []string{}}
+	if ch.Outbound != nil {
+		out.Policy = ch.Outbound.Policy
+		out.Targets = append(out.Targets, ch.Outbound.Targets...)
+	}
+	return out
 }
 
 // channelDisplayMeta carries presentational-only metadata (Name/Tier/
@@ -496,6 +516,7 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 			if ch, ok := cfg.Channels[c.ID]; ok {
 				e.Enabled = ch.Enabled
 				e.Status = "configured"
+				e.Outbound = outboundEntry(ch)
 				if !channelHasCredentials(ch) {
 					e.Status = "needs_credentials"
 				}
@@ -522,7 +543,8 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 			}
 			ch := cfg.Channels[key]
 			e := channelEntry{ID: key, Name: meta.Name, Tier: meta.Tier, Implementation: meta.Implementation,
-				Enabled: ch.Enabled, Status: "configured", Revision: channelRevision(cfg, key)}
+				Enabled: ch.Enabled, Status: "configured", Revision: channelRevision(cfg, key),
+				Outbound: outboundEntry(ch)}
 			if !channelHasCredentials(ch) {
 				e.Status = "needs_credentials"
 			}

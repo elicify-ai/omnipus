@@ -368,6 +368,7 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	kept, dropped := filterDangerousCLIArgs("claude", opts.CLIArgs)
 	logDroppedCLIArgs("runner/claude", "claude", opts.RunID, dropped)
 	args = append(args, kept...)
+	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
 	return args
 }
 

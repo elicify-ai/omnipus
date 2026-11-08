@@ -11,7 +11,9 @@ import (
 const Sentinel = "WU23_PROTECTED_SENTINEL\n"
 
 // ProtectedRelative enumerates every D2 named class plus the D1 unknown class.
-// A4's acting/root uploads and A7 helper assets are separately positive cases.
+// A4's acting/root uploads are separately positive cases. The helper asset
+// remains a byte fixture, but skills r15 §6.1 requires per-turn folder authority;
+// its existence alone no longer makes it an allowed read.
 func ProtectedRelative() []string {
 	return []string{
 		"master.key", "credentials.json", "config.json", "cli.token", "auth.json",

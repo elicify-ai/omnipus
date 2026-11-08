@@ -110,6 +110,7 @@ const tenAgents = Array.from({ length: 10 }, (_, i) =>
 // directly) so only the ONE test that needs it opts in — every other test
 // in this file keeps the empty default.
 const twelveSkills = Array.from({ length: 12 }, (_, i) => ({
+  has_local_changes: false,
   id: `skill${String(i + 1).padStart(2, '0')}`,
   name: `Skill${String(i + 1).padStart(2, '0')}`,
   version: '1.0',

@@ -1,5 +1,9 @@
 # Issue & Project Board Conventions
 
+Last reviewed: 2026-10-29 — riders, issue hygiene, parking label, trunk-based closing
+
+Process version: 2026-10-29.1
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 How issues are classified and tracked in this repo. **Read this before filing or triaging an issue** — humans and agents alike. The conventions below are enforced partly by automation and partly by discipline; following them keeps the board honest.
@@ -29,16 +33,12 @@ Labels describe orthogonal attributes that can apply to any Type:
 
 - **Priority** (set one): `priority:P0-critical`, `priority:P1-high`, `priority:P2-medium`, `priority:P3-low`
 - **Area** (set one or more): `area:gateway`, `area:agent-loop`, `area:channels`, `area:tools`, `area:credentials`, `area:sandbox`, `area:audit`, `area:memory`, `area:spa`, `area:contracts`, `area:ci`, `area:docs`
-- **Cross-cutting**: `security`, `tech-debt`, `test-coverage`, `documentation`
+- **Cross-cutting**: `security`, `tech-debt`, `test-coverage`, `documentation`, `status:parked` (a feature Epic parked with its parking note; see "Park, never drop" below)
 - **PR/changelog only** (do **not** put on issues): `type:fix`, `type:feature`, `type:performance`, `type:refactor`, `type:breaking-change`, `dependencies`, `github_actions`. These are applied to **pull requests** (auto-derived from conventional-commit titles) and drive `release-drafter`. They are *not* the issue-kind axis — that's Type.
 
 ## Milestones
 
-Assign the release the work belongs to (or leave unset for triage):
-
-`v0.1 — Stabilize` · `v0.2 — Security Hardening` · `v0.3 — Rooms` · `v1.0 — Feature Parity`
-
-When unsure which release, **leave the milestone empty** rather than guessing — an untriaged issue is better than a mis-scoped one.
+Release labels are retired (single v0.1.1 line, 2026-09-25). Leave the milestone empty unless the founder names one — an untriaged issue is better than a mis-scoped one.
 
 ## The project board
 
@@ -48,12 +48,28 @@ Board **#3** auto-tracks issues. Relevant fields:
 - **Priority**: mirrors the priority label.
 - **Sprint** (single-select: `Sprint 1`, `Sprint 2`, …): the planning axis. There is **no iteration field** — sprints are this single-select plus Epic bundling. New sprints are added as options to this field.
 - **Estimate**, **Target date**: optional.
+- **Stage** (single-select, founder decision 2026-10-29): where a *feature* really is in its life — `Idea` → `Requirements` → `Design` → `Spec` → `Ready to build` → `Building` → `In landing queue` → `Landed`. Set on feature Epics (see "Feature epics" below); `Status` stays the work-item flow.
+- **Horizon** (single-select, founder decision 2026-10-29): `Now`, `Next`, `Later`. The founder sets or corrects it (the chief proposes a ranking weekly). At most about five feature Epics are `Now` at once.
 
 ### Automation — what you must NOT do by hand
 
 - **New issues auto-add to the board as `Backlog`.** Do not manually add an issue to the board, and do not set its initial status.
 - **Closing an issue auto-moves it to `Done`.** Do not set `Done` by hand.
 - You *do* set: **Sprint** (when planning), and promote **Status** (`Backlog`→`Ready`→`In Progress`→`In Review`) as work proceeds.
+
+## Feature epics, Stage and Horizon (founder decision 2026-10-29)
+
+The board must show every feature, not only work items. Rules for every team except Team C (Team C keeps its own backlog with the cloud team and is outside this process):
+
+- **One Epic per product feature.** Type = Epic; the title is a plain name ("Skills are folders"), the first lines give the goal in one sentence in plain words. The Epic body links the requirements document, the ADR or spec, the branch and the PR. Bugs and tasks of the feature are sub-issues.
+- **Nothing is written without its Epic.** A requirements document, design, spec or long-lived feature branch exists only with its Epic. Ideas worth keeping get an Epic with Stage `Idea`.
+- **Stage and Horizon are set on the Epic** and kept current by whoever moves the feature (the chief at each stage change). A design that exists on a branch is Stage `Design` or `Spec`, never `Backlog`.
+- **Weekly check (chief):** list requirements/design/spec documents and branches that have no Epic, and Epics with no Stage; fix the gaps. A plain-English backlog report is generated from the board and shared with the founder.
+- **Park, never drop (founder decision 2026-10-29).** Work that stops because priorities change is parked the same day: the Epic gets the label `status:parked` and a parking note in its body (what is built, with branch and commit; what is missing; how far the branch has drifted from the release; the condition to resume; who decides). Features are cut into slices that are useful on their own; a team finishes the slice or parks it with the note. At most about five Epics are Horizon `Now`; moving a new one in moves another out, said explicitly. A branch parked for more than 30 days gets a decision: schedule it, or archive it (tag plus notes). Merged branches are deleted. The weekly stale check lists branches with unmerged commits idle for 7+ days, also `landing/*` branches with unmerged commits idle 7 days, and Epics in `Building` with no activity.
+- **Riders (founder decision 2026-10-29).** Each work package carries the open hardening issues that touch the same files. The chief proposes them, confirms them with the architect before the design is final, and lists them in the train's scope, so they are tested and reviewed once with the package.
+- **Issue hygiene (founder decision 2026-10-29).** A verified-fixed issue is closed without asking, with a comment that cites the commit that fixed it. A bug a team reports is filed (Type, priority and area labels, per "How to file an issue" below) by whoever reports it or by the chief; nobody waits for approval to file a bug. A security finding on the product goes to the founder first, before any issue is filed (root `CLAUDE.md`, "Subagent Workflow").
+- Team meetings (daily standup, weekly planning, weekly review) are run by the chief; runbook: `meetings/README.md` in the coordination repo (`$OMNIPUS_COORDINATION_DIR`).
+- Closing: an Epic is `Landed` only when the feature is on the release branch and a user or agent can use it (Definition of Done: reachable).
 
 ## How to file an issue (agent recipe)
 
@@ -74,8 +90,8 @@ N=${URL##*/}
 NID=$(gh issue view "$N" --repo "$REPO" --json id --jq .id)
 gh api graphql -f query='mutation{updateIssueIssueType(input:{issueId:"'"$NID"'",issueTypeId:"<TYPE_ID>"}){issue{number issueType{name}}}}'
 
-# 3. (Optional) milestone — only if you're confident of the release.
-gh issue edit "$N" --repo "$REPO" --milestone "v0.2 — Security Hardening"
+# 3. (Optional) milestone — only if the founder named one.
+gh issue edit "$N" --repo "$REPO" --milestone "<milestone the founder named>"
 
 # The board auto-adds it as Backlog — do not add it manually.
 ```
@@ -113,6 +129,8 @@ Sprints are tracked this way: a Sprint epic with its work items as sub-issues, a
 
 ## Closing issues via PRs (mandatory)
 
+**Under trunk-based landing (2026-10-29) the cut PR targets the release branch, so keywords only link.** The chief closes each resolved issue after the landing with a comment citing the landed commit; a verified-fixed issue found at any time is closed the same way without asking. Keep the keywords in the cut PR body anyway: they link the issues and carry through to the later `main` merge.
+
 **Every PR that resolves issues MUST auto-close them on merge via closing keywords.** Issues do not get closed by hand after a fix ships — the PR closes them. The only acceptable reason an issue stays open after its fixing PR merges is that the work genuinely isn't complete.
 
 Put the keywords in the **PR description** (the body), with **one keyword per issue**:
@@ -136,4 +154,4 @@ If a PR genuinely can't auto-close (e.g. it must merge into a non-`main` base), 
 - ❌ Don't manually add issues to the board or set initial/`Done` status — automation does it.
 - ❌ Don't encode "kind" in both a label and the Type — Type is authoritative.
 - ❌ Don't open a PR that resolves issues without `Closes #N` (one keyword per issue) in the **PR body** — and remember auto-close only fires on merge to `main`.
-- ✅ Do set: Type (exactly one), a priority label, an area label, and a milestone when confident.
+- ✅ Do set: Type (exactly one), a priority label, an area label, and a milestone only when the founder named one.

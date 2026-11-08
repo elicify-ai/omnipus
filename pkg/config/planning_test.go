@@ -4,7 +4,10 @@
 
 package config
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 // TestPlanningConfig_DefaultsAndValidation exercises validateBootConfig's
 // ADR-049 D7 bounds block (spec Part A §G): each field, when zero, gets its
@@ -155,18 +158,22 @@ func TestPlanningConfig_DefaultsAndValidation(t *testing.T) {
 		if err := validateBootConfig(cfg); err != nil {
 			t.Fatalf("DefaultConfig() must pass validateBootConfig, got %v", err)
 		}
+		quiet, enabled, minutes := 60, true, 30 // C1 fresh-install pointer defaults.
 		want := PlanningConfig{
-			TaskMaxAttempts:         DefaultTaskMaxAttempts,
-			GoalMaxRounds:           DefaultGoalMaxRounds,
-			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,
-			LoopMaxRuns:             DefaultLoopMaxRuns,
-			IdleExpiryDays:          DefaultIdleExpiryDays,
-			GlobalActiveLoopCap:     DefaultGlobalActiveLoopCap,
-			CheckTimeoutSeconds:     DefaultCheckTimeoutSeconds,
-			VerifierWindowTokens:    DefaultVerifierWindowTokens,
-			GoalCompileWindowTokens: DefaultGoalCompileWindowTokens,
+			TaskMaxAttempts:           DefaultTaskMaxAttempts,
+			GoalMaxRounds:             DefaultGoalMaxRounds,
+			PlanJudgeMaxRounds:        DefaultPlanJudgeMaxRounds,
+			LoopMaxRuns:               DefaultLoopMaxRuns,
+			IdleExpiryDays:            DefaultIdleExpiryDays,
+			GlobalActiveLoopCap:       DefaultGlobalActiveLoopCap,
+			CheckTimeoutSeconds:       DefaultCheckTimeoutSeconds,
+			VerifierWindowTokens:      DefaultVerifierWindowTokens,
+			GoalCompileWindowTokens:   DefaultGoalCompileWindowTokens,
+			GoalReminderQuietSeconds:  &quiet,
+			GoalStalledCheckinEnabled: &enabled,
+			GoalStalledCheckinMinutes: &minutes,
 		}
-		if cfg.Planning != want {
+		if !reflect.DeepEqual(cfg.Planning, want) {
 			t.Fatalf("DefaultConfig().Planning = %+v, want %+v", cfg.Planning, want)
 		}
 	})

@@ -499,16 +499,7 @@ func readSetupSessionPipe(session *ProcessSession, r io.Reader) {
 	for {
 		n, readErr := r.Read(buf)
 		if n > 0 {
-			session.mu.Lock()
-			if session.outputBuffer.Len() >= maxOutputBufferSize {
-				if !session.outputTruncated {
-					session.outputBuffer.WriteString(outputTruncateMarker)
-					session.outputTruncated = true
-				}
-			} else {
-				session.outputBuffer.Write(buf[:n])
-			}
-			session.mu.Unlock()
+			session.appendOutput(buf[:n])
 		}
 		if readErr != nil {
 			return
@@ -533,6 +524,7 @@ func readSetupSessionPipe(session *ProcessSession, r io.Reader) {
 func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession, pub setupPublication, notice string, naturalExit bool, finalExitCode int) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	session.recordActivityLocked()
 	session.resultNote = t.setupPollNote(pub)
 	session.publication = pub.outcome
 	if !session.outputTruncated {

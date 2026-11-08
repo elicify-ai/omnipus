@@ -42,7 +42,7 @@
 //     invariant for pkg/sysagent/tools, independent of any single tool's
 //     source. See TestSysagentCatalog_AllToolsAreScopeCore.
 //  3. pkg/sysagent/tools/registry.go's own doc comment on BuildRegistry:
-//     "creates a ToolRegistry containing all 32 system tools" — an
+//     "creates a ToolRegistry containing all 33 system tools" — an
 //     independently-stated count used as the catalog-membership sanity
 //     check in TestSysagentCatalog_AllToolsAreScopeCore, not derived by
 //     counting AllTools' literal entries.
@@ -168,14 +168,14 @@ func TestGeneralBuiltinMetadata_AllToolsHaveKnownScope(t *testing.T) {
 // BuildRegistry doc comment ("creates a ToolRegistry containing all 32
 // system tools"), not from counting AllTools' literal entries — an
 // independent textual source, so a silent catalog-membership drift (a tool
-// added/removed without updating that comment) is itself a finding. (ADR-090 adds get_agent and get_agent_tools to the prior 33; DEL-23 removed the four *_in_workspace task tools; omnipus-system-agent FR-024 added set_agent_permissions.)
+// added/removed without updating that comment) is itself a finding. (ADR-090 added get_agent and get_agent_tools to the prior 33; r17 7.12 retired get_agent_tools and read_agent_metadata, 35 - 2 = 33; DEL-23 removed the four *_in_workspace task tools; omnipus-system-agent FR-024 added set_agent_permissions.)
 //
 // Traces to: pkg/tools/base.go ToolScope doc comment;
 // pkg/sysagent/tools/registry.go BuildRegistry doc comment.
 func TestSysagentCatalog_AllToolsAreScopeCore(t *testing.T) {
 	catalog := systools.AllTools(nil)
-	if len(catalog) != 35 {
-		t.Fatalf("expected systools.AllTools(nil) to return exactly 35 tools (32 after the FR-024 count, +select_secret_version and +list_secrets from WU-5/WU-6, +connect_channel from WU-7), got %d — catalog membership drifted from its own documentation", len(catalog))
+	if len(catalog) != 33 {
+		t.Fatalf("expected systools.AllTools(nil) to return exactly 33 tools (r17 7.12 retired get_agent_tools and read_agent_metadata; skills r15 §10 retired create_skill and remove_skill and added get_skill; channels FR-032 added set_channel_outbound: 34 - 2 + 1 = 33), got %d — catalog membership drifted from its own documentation", len(catalog))
 	}
 
 	for _, tl := range catalog {

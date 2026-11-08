@@ -1,5 +1,5 @@
 import { type Page, expect } from '@playwright/test'
-import { E2E_MODEL } from './e2e-model.js'
+import { E2E_PRIMARY } from './e2e-model.js'
 
 /**
  * select-model.ts — the ONE way a test selects a model in a ModelSelector
@@ -89,7 +89,7 @@ export async function selectCentralModel(
     // Real keystrokes: cmdk's CommandInput is a controlled input, and
     // pressSequentially fires the React synthetic onChange fill() has
     // historically missed in this suite.
-    await searchInput.pressSequentially(E2E_MODEL)
+    await searchInput.pressSequentially(E2E_PRIMARY.model)
 
     // Exact option match: the row must CONTAIN an element whose whole text
     // is the central slug (selectExact, anchored ^slug$) — a superset slug
@@ -100,10 +100,10 @@ export async function selectCentralModel(
     // does not offer it" (fail closed below), two or more is ambiguous and
     // refuses too.
     const modelItem = itemTestIdPrefix
-      ? page.getByTestId(`${itemTestIdPrefix}${E2E_MODEL}`)
+      ? page.getByTestId(`${itemTestIdPrefix}${E2E_PRIMARY.model}`)
       : page
           .getByRole('option')
-          .filter({ has: page.getByText(selectExact(E2E_MODEL)) })
+          .filter({ has: page.getByText(selectExact(E2E_PRIMARY.model)) })
 
     // Fail closed with context when the central model is not offered —
     // e.g. the provider catalog changed and no longer lists the slug the
@@ -114,10 +114,10 @@ export async function selectCentralModel(
     } catch (err) {
       throw new Error(
         `The model picker ("${triggerTestId}") does not offer the central e2e model ` +
-          `"${E2E_MODEL}" (looked for ` +
+          `"${E2E_PRIMARY.model}" (looked for ` +
           (itemTestIdPrefix
-            ? `testid "${itemTestIdPrefix}${E2E_MODEL}"`
-            : `the single option with exact text "${E2E_MODEL}"`) +
+            ? `testid "${itemTestIdPrefix}${E2E_PRIMARY.model}"`
+            : `the single option with exact text "${E2E_PRIMARY.model}"`) +
           `). tests/e2e/e2e-model.json pins the whole suite to it — fix the setting or ` +
           `the provider catalog, never fall back to another model. Underlying wait: ${(err as Error).message}`,
         { cause: err },
@@ -133,19 +133,19 @@ export async function selectCentralModel(
       throw err
     }
     throw new Error(
-      `Could not select the central e2e model "${E2E_MODEL}" in the "${triggerTestId}" picker: ${(err as Error).message}`,
+      `Could not select the central e2e model "${E2E_PRIMARY.model}" in the "${triggerTestId}" picker: ${(err as Error).message}`,
       { cause: err },
     )
   }
 
-  // The chosen model is E2E_MODEL — asserted EXACTLY: the trigger's value
+  // The chosen model is E2E_PRIMARY.model — asserted EXACTLY: the trigger's value
   // span (model-selector.tsx::ModelSelector combobox branch) renders
   // displayValue = value || placeholder as its WHOLE text once a value is
   // set, so exact:true + count-1 pins it. A superset slug left on the
   // trigger (<slug>-preview) cannot pass, and the Unresolved chip and the
   // caret icon never confound the match.
-  const triggerValue = modelTrigger.getByText(E2E_MODEL, { exact: true })
+  const triggerValue = modelTrigger.getByText(E2E_PRIMARY.model, { exact: true })
   await expect(triggerValue).toHaveCount(1, { timeout: 10_000 })
   await expect(triggerValue).toBeVisible({ timeout: 10_000 })
-  return E2E_MODEL
+  return E2E_PRIMARY.model
 }

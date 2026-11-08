@@ -26,7 +26,7 @@ import path from 'node:path';
 import { expect } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { GatewayProcess } from './fixtures/gateway-process';
-import { E2E_MODEL } from './fixtures/e2e-model';
+import { E2E_FALLBACK } from './fixtures/e2e-model';
 import { chatInput, waitForConnected } from './fixtures/selectors';
 import { startTerminalOutcomeProvider, TERMINAL_NARRATION } from './fixtures/terminal-outcome-provider';
 import {
@@ -49,7 +49,7 @@ test.describe('terminal outcome agrees across real surfaces', () => {
       const traffic = recordTerminalTraffic(page);
       try {
         gw = await GatewayProcess.start({
-          apiBase: mock.url, model: E2E_MODEL, adminUsername: 'terminal-acceptance',
+          apiBase: mock.url, model: E2E_FALLBACK.model, adminUsername: 'terminal-acceptance',
           // Lifecycle diagnostics are INFO; the gateway's quiet WARN default
           // deliberately omits them. Enable the real observation surface.
           env: { OMNIPUS_LOG_FILE: logPath, OMNIPUS_LOG_LEVEL: 'info' },

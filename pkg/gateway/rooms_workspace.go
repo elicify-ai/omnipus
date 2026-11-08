@@ -32,7 +32,7 @@ func (rw *restAPIHandleWorkspacePut) persistWorkspaceAndRooms() (saved bool, sav
 // These effects follow the workspace record, not successful room/graph writes.
 // A partial save must not strand removed members' heartbeat jobs or identities.
 func (rw *restAPIHandleWorkspacePut) reconcileSavedWorkspace() {
-	if mainsErr := rw.a.ensureMainsForTeam(rw.ws); mainsErr != nil {
+	if mainsErr := rw.a.ensureMainsForTeamFor(rw.ws, requestUsername(rw.r)); mainsErr != nil {
 		logsafeError("rest: workspace team update: some team mains were not created; each is re-attempted when its chat is opened", "workspace_id", rw.ws.ID, "error", mainsErr)
 	}
 	if rw.mcPresent || rw.coreTeamChanged {

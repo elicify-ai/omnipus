@@ -712,6 +712,19 @@ export class WsConnection {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
+  /**
+   * True while a socket exists whose handshake has not finished (readyState CONNECTING).
+   * `isConnected` is OPEN-only, so on its own it cannot tell a socket that is about to open
+   * from one that is down or waiting out a reconnect backoff - and `send()` returns false
+   * for both. A caller that must not attempt a send on a socket that is merely not open
+   * yet (the workspace entry's attach) uses this to wait for the outcome instead.
+   */
+  get isConnecting(): boolean {
+    // The null check is explicit: with `this.ws?.readyState`, "no socket" reads `undefined`, which
+    // equals a missing `WebSocket.CONNECTING` (a test double that defines only OPEN and CLOSED).
+    return this.ws !== null && this.ws.readyState === WebSocket.CONNECTING
+  }
+
   /** Current attempt count within the active reconnect phase — exposed for tests and UI state. */
   get currentReconnectAttempt(): number {
     return this.inSlowPhase ? this.slowRetryAttempts : this.reconnectAttempts

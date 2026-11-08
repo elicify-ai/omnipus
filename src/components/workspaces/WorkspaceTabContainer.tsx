@@ -6,12 +6,14 @@ import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { useConnectionStore } from '@/store/connection'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
 import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
 import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
+import { ChatHeaderSlot, roomIdOfPath } from '@/components/chat/ChatHeaderSlot'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
@@ -79,6 +81,21 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
+
+  // #1632: browser "online" is not this socket. React Query therefore does not
+  // refetch when the gateway socket comes back, and this shell stayed on the
+  // error until Retry. One refetch on a down-to-up edge, and only while the
+  // list is still in error: subscribe to the boolean so a repeat connected
+  // notification or any other store write does not start another request, and
+  // a screen that already loaded is left mounted (no loader flash).
+  const isConnected = useConnectionStore((s) => s.isConnected)
+  const wasConnectedRef = useRef(isConnected)
+  useEffect(() => {
+    const wasConnected = wasConnectedRef.current
+    wasConnectedRef.current = isConnected
+    if (wasConnected || !isConnected || !workspacesError) return
+    void refetchWorkspaces()
+  }, [isConnected, workspacesError, refetchWorkspaces])
 
   // Resolve 'inbox' alias to the real default workspace id.
   useEffect(() => {
@@ -255,6 +272,9 @@ function WorkspaceTabContainerView({
 }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
+  // #1449 FR-065 / ADR A9.4: "Open browser" acts on the remembered SESSION;
+  // a group page is not that session, so the control is not offered there.
+  const onRoomPage = roomIdOfPath(location.pathname, workspace.id) !== null
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -264,7 +284,10 @@ function WorkspaceTabContainerView({
             `header` CSS selector. @container enables container-query variants
             on children (used by ChatControls' "Open browser" label).
             WorkspaceTabBar measures the remaining flex slot instead of
-            using a fixed container breakpoint.
+            using a fixed container breakpoint. data-header-line marks this
+            row as the line it measures against: the chat title in the slot
+            at the right end is room the strip may take back
+            (useWorkspaceHeaderMode).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment.
@@ -276,6 +299,7 @@ function WorkspaceTabContainerView({
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
+          data-header-line=""
         >
           <SidebarShowButton
             testId="workspace-hamburger"
@@ -286,11 +310,22 @@ function WorkspaceTabContainerView({
               and browser controls keep their natural width at every mode. */}
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
-          {activeSegment === 'chat' && (
+          {activeSegment === 'chat' && !onRoomPage && (
             <div className="flex shrink-0 items-center justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>
           )}
+
+          {/* #1449 D13 (founder 2026-10-28): the chat's own chrome sits at
+              the right end of THIS header line — the same line as the
+              workspace strip, which stays where it is on the left. No new
+              row, no bar, no border, no background: the slot carries the
+              chat label / helper breadcrumb and the chat controls (today
+              "Add participant"; the group chat's Participants button plugs
+              into the same slot later). On a room page the slot stays
+              empty — the room owns its own chrome until the group work
+              lands. */}
+          {activeSegment === 'chat' && <ChatHeaderSlot workspaceId={workspace.id} />}
         </header>
 
         {/* Tab content */}

@@ -214,7 +214,7 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 		"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 		"configure_provider", "list_providers", "test_provider", "list_models",
 		"get_config", "set_config", "run_doctor", "get_usage",
-		"create_agent", "update_agent", "delete_agent", "read_agent_metadata",
+		"create_agent", "update_agent", "delete_agent",
 		// SPEC.md Table (2026-10-22): create_task and management writes remain Off; read-only workspace/session tools do not.
 		"create_task",
 		"create_workspace", "update_workspace", "delete_workspace",

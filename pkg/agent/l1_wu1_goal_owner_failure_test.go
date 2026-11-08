@@ -17,6 +17,9 @@ func TestL1WU1GoalFollowUp_MissingCanonicalOwnerEndsFailedWithVisibleReason(t *t
 	// "Goal status error" means the existing failed pill, not a new wire
 	// state, with exactly "owner agent X no longer exists" as its reason.
 	al, provider := l1WU1Runtime(t)
+	// Supply the real execution runtime, not a goal route or a running stamp.
+	installTestSessionLauncher(t, al)
+	pwWireRuntime(t, al)
 	gs := goal.NewStore(config.OmnipusHomeDir())
 	for _, owner := range []string{"mia", "deleted"} {
 		t.Run(owner, func(t *testing.T) {

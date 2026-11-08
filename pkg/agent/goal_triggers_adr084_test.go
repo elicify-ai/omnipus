@@ -28,7 +28,6 @@ import (
 // output at all; it only ever re-posts (FR-097).
 func TestQuietWindow_MakesZeroJudgeCalls(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	store, sid := newGoalTestSession(t, al, agentInst.ID)

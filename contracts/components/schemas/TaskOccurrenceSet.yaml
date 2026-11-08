@@ -68,7 +68,11 @@ properties:
             - done
             - failed
             - skipped
-          description: The matched run's status.
+            - missed
+          description: >
+            The matched run's status. `missed` marks a scheduled fire that
+            came due while the server was down — recorded at the next boot
+            for the missed instant, never replayed.
           example: "done"
         run_id:
           type: string

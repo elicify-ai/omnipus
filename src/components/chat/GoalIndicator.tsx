@@ -12,13 +12,12 @@
 // (session switch/reset) — mirroring ActivityBar's `empty:hidden` precedent
 // rather than inventing a new one.
 //
-// Also renders a compact `/loop` status line (mode/run/next-delay) when a
-// `loop_status` frame has arrived for the session — LoopStatusFrame.state is
-// an UNCONSTRAINED string on the wire (unlike GoalStatusFrame.state's closed
-// enum), so there is no literal this component can compare against to
-// auto-hide a "stopped" loop the way it once did for a goal; it simply
-// renders whenever `loopStatus` is non-null. Flagged in this wave's report
-// as a contract asymmetry for Wave 2 backend to reconcile.
+// Also renders a compact `/loop` status line (mode/run/next-delay) from the
+// session's latest `loop_status` frame. The existing server emits the
+// terminal state "stopped": hide that line immediately, without clearing
+// the stored frame or affecting the goal branch. The wire state remains an
+// open string, so unfamiliar states still render rather than being guessed
+// terminal; a later active frame restores the line.
 //
 // ADR-053 §Contract Surface — "Pill-state enum"/R§8.10: `GoalStatusFrame.state`
 // was an 8-value pill enum (active/waiting_on_user/
@@ -179,7 +178,7 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
   // via its own dedicated branch below like every other non-active state.
   //
   const showGoal = !!goalStatus
-  const showLoop = !!loopStatus
+  const showLoop = !!loopStatus && loopStatus.state !== 'stopped'
 
   if (!showGoal && !showLoop) return null
 

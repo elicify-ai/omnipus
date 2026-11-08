@@ -4,26 +4,46 @@
 #
 # The real-LLM CI surfaces (Playwright e2e in pr.yml, sandbox-uat.yml, the
 # nightly evals, the Fly CI runner) all consume ONE committed file:
-# tests/e2e/e2e-model.json ({"model": "<vendor>/<model>"}). PR #868 migrated
+# tests/e2e/e2e-model.json, which names a primary and a fallback pair:
+#   {"primary":  {"provider": ..., "model": ..., "api_key_ref": ...},
+#    "fallback": {"provider": ..., "model": ..., "api_key_ref": ...}}
+# Shell consumers read it through scripts/e2e-model.sh. PR #868 migrated
 # most paths to DeepSeek but left the id as scattered literals and missed
 # runci.sh entirely (founder request 2026-09-27). This guard fails any banned
-# model-id literal in the surfaces it scans, so the value cannot scatter
-# again: the old ids must never return, and the CURRENT id must never be
-# re-hardcoded outside the source file either.
+# model-id or provider-id literal in the surfaces it scans, so the value
+# cannot scatter again: the old ids must never return, and the CURRENT ids
+# (both models and the primary provider) must never be re-hardcoded outside
+# the source file either.
 #
 # Switching the model (the ONLY sanctioned procedure — runbook):
-#   1. edit tests/e2e/e2e-model.json to the new {"model": "<vendor>/<model>"}, AND
-#   2. add the new id to PATTERN below. The old id STAYS BANNED — old ids must
-#      never return, and the current id must never be re-hardcoded outside the
-#      source file either.
+#   1. edit tests/e2e/e2e-model.json (BOTH entries, primary and fallback), AND
+#   2. add every new model id AND every new provider id to PATTERN below, AND
+#   3. update the expected ids in the unit-test oracles (evals/**/*_test.go,
+#      tests/e2e/fixtures/*.test.ts) where they pin the central file — the
+#      guard does not police those files, so it will not remind you
+#      (`openrouter` is the one exception: mock specs and docs use it
+#      legitimately, so it cannot be banned). Old ids STAY BANNED — old ids
+#      must never return, and the current ids must never be re-hardcoded
+#      outside the source file either.
 # Any other path (a literal in a workflow, a deploy script, an eval flag
-# default, a TOML, an extensionless file, a comment) fails this guard.
+# default, a TOML, an extensionless file, a comment) fails this guard — with
+# ONE exception: the unit-test files of the guarded trees (below), which may
+# spell the ids as test data.
 #
-# Banned literals (old ids that must never return, plus the current id):
+# Banned literals (old ids that must never return, plus the current ids):
 #   z-ai/glm-5.2, z-ai/glm-5.3-flash, z-ai/glm-5-turbo,
-#   deepseek/deepseek-v4.1-flash,
+#   deepseek/deepseek-v4.1-flash (current fallback),
+#   MiniMax-M3.1-Flash-Preview (current primary — the id the provider catalog
+#     serves) and the earlier MiniMax-M3.1-Flash, which no catalog lists and the
+#     endpoint does not answer as a model: ONE prefix pattern bans both,
+#   minimax-coding-plan (current primary provider),
 #   google/gemini-2.0-flash-001, google/gemini-2.5-flash,
 #   openai/gpt-4o, anthropic/claude-sonnet-4.6, claude-sonnet-4-6
+#
+# Shape check: tests/e2e/e2e-model.json must parse with non-empty
+# .primary.provider, .primary.model, .fallback.provider and .fallback.model.
+# The legacy {"model": ...} document or a missing half exits 2 — a guard that
+# reports green on a broken source file is a false green.
 #
 # Scanned — exactly the surfaces this centralization covers, where a model id
 # would be CONSUMED as the e2e/evals model choice:
@@ -42,6 +62,19 @@
 #   playwright-report) that can appear under tests/e2e at runtime. A comment
 #   is a literal on a scanned surface; it fails like code.
 #
+# Unit-test files are exempt — and ONLY these two shapes, ONLY in these two
+# trees (chief decision Q1 A, 2026-10-28):
+#   evals/**/*_test.go             Go unit tests of the eval-runner
+#   tests/e2e/fixtures/*.test.ts   vitest unit tests of the e2e fixtures
+# Why: a unit test that pins the reader's behaviour must spell the expected
+# ids as its oracle (derived from the spec, not from the code under test);
+# that is test DATA, not the CI model choice, and nothing in CI consumes it
+# as a model to run. pkg/ is already exempt for exactly this reason (see
+# "Deliberately NOT scanned" below). Everything else stays banned: Playwright
+# specs (tests/e2e/*.spec.ts) and every other fixture DO drive real runs; a
+# test-like name outside evals/ and tests/e2e/ (deploy/foo_test.sh, a
+# workflow) is not exempt.
+#
 # Deliberately NOT scanned (and why):
 #   docs/** (incl. ADR-054-* and docs/internal/_archive/**)
 #                            — illustrative prose only, not live config
@@ -57,7 +90,7 @@
 #                              e2e model choice.
 #
 # Exit: 0 clean, 1 offenders found, 2 the check itself could not run — an
-# existence-checked path is missing, OR a grep errored mid-scan (rc > 1,
+# existence-checked path is missing, the source file fails the shape check, OR a grep errored mid-scan (rc > 1,
 # e.g. an unreadable dir/file): a PARTIAL scan refuses a green verdict and
 # shows the grep stderr (finding G2, 2026-09-27).
 
@@ -80,7 +113,30 @@ for p in .github/workflows deploy evals tests/e2e .github/SECRETS.md; do
   fi
 done
 
-PATTERN='z-ai/glm-5\.2|z-ai/glm-5\.3-flash|z-ai/glm-5-turbo|google/gemini-2\.5-flash|google/gemini-2\.0-flash-001|openai/gpt-4o|anthropic/claude-sonnet-4\.6|claude-sonnet-4-6|deepseek/deepseek-v4\.1-flash'
+# Shape check (after the existence checks, before any green verdict).
+MODEL_JSON="tests/e2e/e2e-model.json"
+if ! command -v jq >/dev/null 2>&1; then
+  echo "check-no-hardcoded-e2e-model: jq is required for the $MODEL_JSON shape check and was not found" >&2
+  exit 2
+fi
+if [ ! -f "$MODEL_JSON" ]; then
+  echo "check-no-hardcoded-e2e-model: $MODEL_JSON not found — the single source of truth is missing" >&2
+  exit 2
+fi
+if ! jq -e '
+    def present: type == "string" and (gsub("^\\s+|\\s+$"; "") | length > 0);
+    type == "object"
+    and (.primary | type == "object") and (.fallback | type == "object")
+    and (.primary.provider | present) and (.primary.model | present)
+    and (.fallback.provider | present) and (.fallback.model | present)
+  ' "$MODEL_JSON" >/dev/null 2>&1; then
+  echo "check-no-hardcoded-e2e-model: $MODEL_JSON fails the shape check — it needs non-empty" >&2
+  echo "  .primary.provider, .primary.model, .fallback.provider and .fallback.model" >&2
+  echo "  (the legacy {\"model\": ...} shape is no longer accepted; see scripts/e2e-model.sh)" >&2
+  exit 2
+fi
+
+PATTERN='z-ai/glm-5\.2|z-ai/glm-5\.3-flash|z-ai/glm-5-turbo|google/gemini-2\.5-flash|google/gemini-2\.0-flash-001|openai/gpt-4o|anthropic/claude-sonnet-4\.6|claude-sonnet-4-6|deepseek/deepseek-v4\.1-flash|MiniMax-M3\.1-Flash|minimax-coding-plan'
 
 violations=""
 
@@ -132,17 +188,24 @@ scan() {
   rm -f "$errf" "$rawf"
 }
 
-# .github/workflows/, deploy/ and evals/ — ALL text files, no --include
-# filter (finding G1): a literal in deploy/foo.toml or an extensionless file
-# is an offender like one in a .yml.
-scan ".github/workflows/ deploy/ evals/" '' -rnIE "$PATTERN" .github/workflows/ deploy/ evals/
+# .github/workflows/ and deploy/ — ALL text files, no --include filter
+# (finding G1): a literal in deploy/foo.toml or an extensionless file is an
+# offender like one in a .yml. No unit-test exemption here: deploy/foo_test.sh
+# is banned like any other file.
+scan ".github/workflows/ deploy/" '' -rnIE "$PATTERN" .github/workflows/ deploy/
+
+# evals/ — ALL text files except the Go unit tests (*_test.go; see the header:
+# test data, not the CI model choice).
+scan "evals/" '' -rnIE "$PATTERN" --exclude='*_test.go' evals/
 
 # tests/e2e/**: every text file type (binaries skipped via -I), excluding
-# exactly tests/e2e/e2e-model.json (the single committed source of truth)
-# and the transient node_modules/test-results/playwright-report dirs. The
-# exclusion stays path-exact: the filter removes only lines whose file path
-# is exactly tests/e2e/e2e-model.json.
-scan "tests/e2e/" '^tests/e2e/e2e-model\.json:' -rnIE "$PATTERN" \
+# exactly tests/e2e/e2e-model.json (the single committed source of truth),
+# the fixture unit tests directly under tests/e2e/fixtures/ (*.test.ts; see
+# the header) and the transient node_modules/test-results/playwright-report
+# dirs. The exclusions stay path-exact: the filter removes only lines whose
+# file path is exactly tests/e2e/e2e-model.json or
+# tests/e2e/fixtures/<name>.test.ts — never a spec, never a nested path.
+scan "tests/e2e/" '^tests/e2e/e2e-model\.json:|^tests/e2e/fixtures/[^/]+\.test\.ts:' -rnIE "$PATTERN" \
   --exclude-dir=node_modules --exclude-dir=test-results --exclude-dir=playwright-report \
   tests/e2e/
 
@@ -155,8 +218,9 @@ scan ".github/*.md" '' -HnE "$PATTERN" .github/*.md
 if [ -n "$violations" ]; then
   {
     echo "check-no-hardcoded-e2e-model: FAILED — hardcoded e2e model id(s) found outside tests/e2e/e2e-model.json"
-    echo "  (the single committed source of truth; see this guard's header for the consumer wiring"
-    echo "   and the switch runbook: edit the JSON AND add the new id to PATTERN — the old id stays banned)"
+    echo "  (the single committed source of truth; unit-test files of evals/ and tests/e2e/fixtures/ are exempt;"
+    echo "   see this guard's header for the consumer wiring"
+    echo "   and the switch runbook: edit the JSON (both entries) AND add every new model or provider id to PATTERN — old ids stay banned)"
     printf '%s\n' "$violations" | sed 's/^/  /'
   } >&2
   exit 1

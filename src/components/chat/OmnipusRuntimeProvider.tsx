@@ -154,9 +154,19 @@ export function reattachActiveSession(
   // Re-seed the header/composer agent from the authoritative last-active agent
   // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
   // keep the header on Jim (active_agent_id), not revert to the creating agent.
-  const seedAgentId = resolveLastActiveAgentId(activeSessionId);
-  if (seedAgentId) {
-    useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
+  //
+  // This re-binds the SAME, already active session; it is not an open
+  // (agent-first navigation spec, "Foreground commitment and bounded read" 2).
+  // So it only fills an owner the store does not know yet. It must not go
+  // through setActiveSession: that clears the attached type and title (a main
+  // chat would lose its participant control) and records the session under the
+  // CURRENT workspace - which, while the user is entering another workspace or
+  // after that entry failed, is not this session's workspace, and would replace
+  // that workspace's remembered chat (#1449). A live owner is already the value
+  // resolveLastActiveAgentId returns, so there is nothing to re-seed then.
+  if (useSessionStore.getState().activeAgentId == null) {
+    const seedAgentId = resolveLastActiveAgentId(activeSessionId);
+    if (seedAgentId) useSessionStore.setState({ activeAgentId: seedAgentId });
   }
   // #823 catch-up redesign (BE-DESIGN.md §6.1): send this bucket's own
   // numbered cursor (if any) so the gateway can answer with an incremental

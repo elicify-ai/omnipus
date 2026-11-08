@@ -6,7 +6,9 @@
  * `unavailable_code === 'model_retired'`.
  *
  * Grammar matches `DelegationEventLine.tsx` (muted caption line, Phosphor
- * mark, no card): this is the same family of system event line.
+ * mark, no card): this is the same family of system event line. Unlike a
+ * one-line event, the note WRAPS (never truncates): its reason is the point
+ * of the note and there is no hover tooltip (train 3 hands-on row F6).
  */
 import { ArrowRight } from '@phosphor-icons/react'
 
@@ -32,12 +34,12 @@ export function ProviderFallbackNoteLine({
     >
       <div className="flex min-w-0 items-center gap-[var(--space-1)]">
         <ArrowRight size={12} weight="bold" aria-hidden className="shrink-0" />
-        <span className="min-w-0 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <span className="min-w-0 wrap-break-word text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {noteText}
         </span>
       </div>
       {pickNewModelHint && (
-        <span className="min-w-0 truncate pl-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <span className="min-w-0 wrap-break-word pl-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {MODEL_SETTINGS_HINT}
         </span>
       )}
