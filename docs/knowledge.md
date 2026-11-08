@@ -42,6 +42,8 @@ A **view** is a saved query over one record type, or over every note in scope. A
 
 Numbers with units total per unit, never across them: amounts in two currencies report two totals, not one blended figure.
 
+Saved views are stored in `.omnipus-vault/views/`, but each one belongs to a folder of the knowledge base: a view imported from a `.base` file belongs to the folder that held that `.base` file, as long as that folder still exists and is not a separate knowledge base of its own (deleting only the `.base` file does not move the view); every other view belongs to the knowledge base's top folder. When an agent lists a folder with `list_directory`, each view that belongs there appears as its own line after the folder's files, for example `VIEW: Outstanding (kind summary, view invoices--outstanding, knowledge base Finance vault)`. The kind part is left out when the view file declares no kind. A view whose file cannot be loaded is not shown; `knowledge_describe` still reports it.
+
 ## Reading and searching
 
 Selecting a note opens it in the preview pane as a rendered document, not raw markup, with a side rail listing the outline and the linked mentions. Press **Edit** to see and change the source. Renaming or moving a note rewrites every link that pointed to it, in bodies and properties.

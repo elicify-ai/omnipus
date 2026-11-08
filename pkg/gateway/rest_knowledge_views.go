@@ -78,17 +78,12 @@ func (a *restAPI) handleKnowledgeViews(w http.ResponseWriter, r *http.Request, w
 	// them a view naming a type or property the vault no longer declares
 	// loads clean and queries nothing. With them it is reported unservable —
 	// which is the honest answer this surface exists to give.
-	schemas, _, schemaErr := records.LoadSchemas(col.Root)
-	if schemaErr != nil {
-		logger.ErrorCF("rest", "knowledge: loading record schemas for the views list",
-			map[string]any{"workspace_id": workspaceID, "error": schemaErr.Error()})
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	views, report, viewsErr := records.LoadViews(col.Root, schemas)
-	if viewsErr != nil {
+	// The Library listing's include_views rows load through the same
+	// loadKnowledgeViewSet, so the two surfaces list the same views (#1017 L4).
+	views, report, loadErr := loadKnowledgeViewSet(col.Root)
+	if loadErr != nil {
 		logger.ErrorCF("rest", "knowledge: loading saved views for the views list",
-			map[string]any{"workspace_id": workspaceID, "error": viewsErr.Error()})
+			map[string]any{"workspace_id": workspaceID, "error": loadErr.Error()})
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -96,17 +91,10 @@ func (a *restAPI) handleKnowledgeViews(w http.ResponseWriter, r *http.Request, w
 	loader := records.NewViewFindLoader(views)
 	for _, v := range views.Views() {
 		entry := gen.KnowledgeBaseView{Name: v.Name(), Label: v.DisplayLabel()}
-		if v.Def.Kind != nil && strings.TrimSpace(string(*v.Def.Kind)) != "" {
-			kind := string(*v.Def.Kind)
-			entry.Kind = &kind
-		}
 		// D-13: an imported view names the `.base` it came from; an authored
 		// view has no source, and its absence is precisely the signal this
 		// endpoint exists to carry (the view belongs to the collection).
-		if src := v.DeclaredSource(); src != "" {
-			source := src
-			entry.Source = &source
-		}
+		entry.Kind, entry.Source = savedViewKindAndSource(v)
 		if refusal, refused := loader.ServeRefusal(v.Name()); refused {
 			unservable := true
 			entry.Unservable = &unservable

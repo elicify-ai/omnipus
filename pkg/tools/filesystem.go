@@ -1325,12 +1325,20 @@ func isKnowledgeBaseEntry(handle *PathHandle, entry os.DirEntry) bool {
 // the identical question over the REST listing.
 func formatDirEntries(handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
 	entries = fspolicy.VisibleDirectoryEntries(handle.abs, entries, handle.policy)
-	total := len(entries)
+	// #1017: saved views placed in this folder follow the folder's own
+	// entries as VIEW: lines, inside the same paging.
+	viewLines := placedViewLines(handle)
+	total := len(entries) + len(viewLines)
 	start := min(offset, total)
 	end := min(start+limit, total)
 
 	var result strings.Builder
-	for _, entry := range entries[start:end] {
+	for i := start; i < end; i++ {
+		if i >= len(entries) {
+			result.WriteString(viewLines[i-len(entries)] + "\n")
+			continue
+		}
+		entry := entries[i]
 		switch {
 		case isKnowledgeBaseEntry(handle, entry):
 			result.WriteString("KB:   " + entry.Name() + "\n")
