@@ -458,6 +458,11 @@ export interface ServeWorkspaceResult { // not-wire-format: parsed from ToolCall
   url: string
   /** ISO-8601 token expiry timestamp. */
   expires_at: string
+  /**
+   * ADR-094 FR-023: per-preview `*.localhost` URL (Mode 1) when minted.
+   * Optional — absent on pre-ADR-094 transcripts and Mode-2-only serving.
+   */
+  isolated_url?: string
 }
 
 /**
@@ -489,6 +494,11 @@ export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall
   command: string
   /** Local port the dev server is listening on inside the workspace. */
   port: number
+  /**
+   * ADR-094 FR-023: per-preview `*.localhost` URL (Mode 1) when minted.
+   * Optional — absent on pre-ADR-094 transcripts and Mode-2-only serving.
+   */
+  isolated_url?: string
 }
 
 // ── Wire ToolCall / Message adapters ─────────────────────────────────────────

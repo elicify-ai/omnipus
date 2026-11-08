@@ -22,7 +22,8 @@
  *
  * The toolName passed to makeWebServeUI selects which tool name the component
  * registers under, allowing the same component factory to cover:
- *   web_serve        (canonical)
+ *   serve_web        (canonical — pkg/tools/web_serve.go::ToolNameWebServe)
+ *   web_serve        (legacy form, old transcripts only)
  *   serve_workspace  (back-compat replay alias)
  *   run_in_workspace (back-compat replay alias)
  */
@@ -67,6 +68,13 @@ export interface WebServeResult {
   port?: number
   /** Static-mode: the workspace path that was served. */
   path?: string
+  /**
+   * ADR-094 FR-023: the per-preview `*.localhost` URL (Mode 1) the gateway
+   * minted for this preview, when the serving mode produced one. Forwarded
+   * to IframePreview, which validates + engine-gates it before rendering.
+   * Absent on pre-ADR-094 transcripts and Mode-2-only serving.
+   */
+  isolated_url?: string
 }
 
 interface WebServeArgs {
@@ -220,6 +228,15 @@ export function WebServeBlock({
   const iframeKind =
     isDevMode ? 'run_in_workspace' : 'serve_workspace'
 
+  // ADR-094 FR-023: forward the minted `*.localhost` URL to IframePreview
+  // when present. CONDITIONAL SPREAD, never `isolated_url: undefined` — the
+  // key must be ABSENT (not present-with-undefined) when the field is
+  // absent, so downstream shape checks distinguish "field doesn't exist"
+  // (old transcripts) from "field present but empty" (order-26 control row).
+  const isolatedUrlSpread = typedResult?.isolated_url !== undefined
+    ? { isolated_url: typedResult.isolated_url }
+    : {}
+
   // Build the result shape expected by IframePreview — it uses path + url.
   // Pass path directly; IframePreview.extractPath falls back to url when
   // path is absent, so there is no need to duplicate the fallback logic here.
@@ -231,11 +248,13 @@ export function WebServeBlock({
           expires_at: typedResult.expires_at,
           command: typedResult.command ?? command,
           port: typedResult.port ?? port ?? 0,
+          ...isolatedUrlSpread,
         }
       : {
           path: typedResult.path,
           url: typedResult.url,
           expires_at: typedResult.expires_at,
+          ...isolatedUrlSpread,
         }
     : null
 
@@ -305,6 +324,10 @@ export function makeWebServeUI(toolName: string) {
   })
 }
 
-// ── Canonical registration ────────────────────────────────────────────────────
+// ── Registrations ─────────────────────────────────────────────────────────────
 
+/** Canonical backend name (pkg/tools/web_serve.go::ToolNameWebServe). */
+export const ServeWebUI = makeWebServeUI('serve_web')
+
+/** Legacy form — kept so pre-rename transcripts replay correctly. */
 export const WebServeUI = makeWebServeUI('web_serve')

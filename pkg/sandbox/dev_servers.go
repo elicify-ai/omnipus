@@ -34,6 +34,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
 // DevServerRegistration captures the per-instance state of a running Tier 3
@@ -379,6 +381,33 @@ func (r *DevServerRegistry) LookupByAgent(agentID string) *DevServerRegistration
 			cp := *e
 			return &cp
 		}
+	}
+	return nil
+}
+
+// LookupByLabel resolves a Mode 1 preview label (ADR-094) back to its
+// registration, or nil when no live entry carries that label. Mirrors
+// Lookup's semantics exactly — same expiry check, same LastActivity touch
+// (a label-host hit keeps the dev server's idle timer alive, exactly as a
+// token-path hit does) — so the label is purely an alternative spelling of
+// the token for the host-dispatch mux (FR-008: same store, same lock, same
+// entry). The label is derived from each entry's token under the registry
+// lock; there is no second store, so every Unregister/expiry path retires
+// the label too.
+func (r *DevServerRegistry) LookupByLabel(label string) *DevServerRegistration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	for tok, e := range r.entries {
+		if middleware.PreviewLabelForToken(tok) != label {
+			continue
+		}
+		if now.Sub(e.CreatedAt) > HardTimeout || now.Sub(e.LastActivity) > IdleTimeout {
+			continue
+		}
+		e.LastActivity = now
+		cp := *e
+		return &cp
 	}
 	return nil
 }

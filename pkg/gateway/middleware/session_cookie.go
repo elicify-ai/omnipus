@@ -327,6 +327,12 @@ func ResolveUserFromCookie(r *http.Request, users []config.UserConfig) (*config.
 	if r == nil {
 		return nil, ErrSessionNotFound
 	}
+	if CredentialReadFailed(r.Context()) {
+		// FR-015 (ADR-094): the planted-cookie detector marked this request's
+		// credential read failed — the raw Cookie header carries a duplicated
+		// reserved name, so no cookie value on it can be trusted.
+		return nil, ErrSessionNotFound
+	}
 	cookie, err := r.Cookie(SessionCookieName)
 	if err != nil || cookie == nil || cookie.Value == "" {
 		return nil, ErrSessionNotFound
