@@ -27,88 +27,43 @@ import (
 // these tests may run in parallel: they install the process-wide slog
 // bridge, file sink and credential replacer.
 
-// codeQL1666UnescapeGo decodes the Go escape sequences that can appear in
-// arbitrary log text: n r t a b f v, \\, \", \', \xHH, \uNNNN, \UNNNNNNNN
-// and octal. Invalid or unknown sequences pass through unchanged. This is
-// the reader side of "escaped form": whatever a Go formatter could emit, a
-// log reader can decode.
+// codeQL1666UnescapeGo decodes Go escape sequences in arbitrary text,
+// following Go's grammar exactly by delegating to strconv.UnquoteChar (the
+// standard library's own per-character decoder): \xHH is a BYTE (two hex
+// digits), octal is exactly three digits, \uNNNN four and \UNNNNNNNN eight,
+// and an invalid sequence is left as written — Go's behavior for text that
+// is not a valid literal. Round-4 decision D4: the grammar authority is
+// strconv; the oracle's independence lives in the closure around it
+// (per-field application, both decodings at every layer, dedup, and a depth
+// beyond the product's).
 func codeQL1666UnescapeGo(s string) (string, bool) {
+	if !strings.Contains(s, `\`) {
+		return s, false
+	}
 	var b strings.Builder
 	changed := false
 	for i := 0; i < len(s); {
-		if s[i] != '\\' || i+1 >= len(s) {
-			b.WriteByte(s[i])
-			i++
-			continue
-		}
-		switch e := s[i+1]; e {
-		case 'a':
-			b.WriteByte(7)
-			i += 2
-			changed = true
-		case 'b':
-			b.WriteByte(8)
-			i += 2
-			changed = true
-		case 'f':
-			b.WriteByte(12)
-			i += 2
-			changed = true
-		case 'n':
-			b.WriteByte('\n')
-			i += 2
-			changed = true
-		case 'r':
-			b.WriteByte('\r')
-			i += 2
-			changed = true
-		case 't':
-			b.WriteByte('\t')
-			i += 2
-			changed = true
-		case 'v':
-			b.WriteByte(11)
-			i += 2
-			changed = true
-		case '\\', '"', '\'':
-			b.WriteByte(e)
-			i += 2
-			changed = true
-		case 'x', 'u', 'U':
-			width := map[byte]int{'x': 2, 'u': 4, 'U': 8}[e]
-			if i+2+width <= len(s) && codeQL1666HexDigits(s[i+2:i+2+width]) {
-				value, _ := strconv.ParseUint(s[i+2:i+2+width], 16, 32)
-				b.WriteRune(rune(value))
-				i += 2 + width
+		if s[i] == '\\' {
+			value, multibyte, tail, err := strconv.UnquoteChar(s[i:], '"')
+			if err != nil {
+				// \' is valid only with a single-quote delimiter.
+				value, multibyte, tail, err = strconv.UnquoteChar(s[i:], '\'')
+			}
+			if err == nil {
+				if multibyte {
+					b.WriteRune(value)
+				} else {
+					b.WriteByte(byte(value))
+				}
+				i = len(s) - len(tail)
 				changed = true
-			} else {
-				b.WriteByte(s[i])
-				i++
+				continue
 			}
-		case '0', '1', '2', '3', '4', '5', '6', '7':
-			digits := 1
-			for digits < 3 && i+1+digits < len(s) && s[i+1+digits] >= '0' && s[i+1+digits] <= '7' {
-				digits++
-			}
-			value, _ := strconv.ParseUint(s[i+1:i+1+digits], 8, 8)
-			b.WriteByte(byte(value))
-			i += 1 + digits
-			changed = true
-		default:
-			b.WriteByte(s[i])
-			i++
 		}
+		b.WriteByte(s[i])
+		i++
 	}
 	return b.String(), changed
-}
-
-func codeQL1666HexDigits(s string) bool {
-	for _, r := range s {
-		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
-			return false
-		}
-	}
-	return len(s) > 0
 }
 
 // codeQL1666UnquoteWhole adapts strconv.Unquote to the closure's (string, ok)
@@ -119,14 +74,16 @@ func codeQL1666UnquoteWhole(s string) (string, bool) {
 }
 
 // codeQL1666DecodeClosure returns every string reachable from seed by
-// repeatedly unquoting whole strings and decoding escape sequences, bounded
-// at six levels (the composed fixtures nest at most four). It is the test's
-// model of a log reader unwinding whatever escaping sits over the
+// repeatedly unquoting whole strings and decoding escape sequences. The
+// bound is 16 levels — twice the product's decoding limit — so the oracle
+// can price the boundary: anything the product leaves encoded at eight
+// layers must still be decodable here (round-4 decision D4). It is the
+// test's model of a log reader unwinding whatever escaping sits over the
 // credential.
 func codeQL1666DecodeClosure(seed string) []string {
 	seen := map[string]bool{seed: true}
 	frontier := []string{seed}
-	for level := 0; level < 6 && len(frontier) > 0; level++ {
+	for level := 0; level < 16 && len(frontier) > 0; level++ {
 		var next []string
 		for _, current := range frontier {
 			for _, decode := range []func(string) (string, bool){

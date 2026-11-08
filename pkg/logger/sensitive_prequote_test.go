@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -197,87 +198,43 @@ func scrubberHexSpell(r rune) string {
 	return fmt.Sprintf(`\u%04x`, r)
 }
 
-// scrubberUnescapeGo decodes Go escape sequences in arbitrary text (n r t a
-// b f v, \\, \", \', \xHH, \uNNNN, \UNNNNNNNN, octal); unknown sequences
-// pass through. This is the reader side of "escaped form": whatever a Go
-// formatter emitted, a log reader can decode.
+// scrubberUnescapeGo decodes Go escape sequences in arbitrary text, following
+// Go's grammar exactly by delegating to strconv.UnquoteChar (the standard
+// library's own per-character decoder): \xHH is a BYTE (two hex digits),
+// octal is exactly three digits, \uNNNN four and \UNNNNNNNN eight, and an
+// invalid sequence is left as written — Go's behavior for text that is not a
+// valid literal. Round-4 decision D4: the grammar authority is strconv; the
+// oracle's independence lives in the closure around it (per-field
+// application, both decodings at every layer, dedup, and a depth beyond the
+// product's).
 func scrubberUnescapeGo(s string) (string, bool) {
+	if !strings.Contains(s, `\`) {
+		return s, false
+	}
 	var b strings.Builder
 	changed := false
 	for i := 0; i < len(s); {
-		if s[i] != '\\' || i+1 >= len(s) {
-			b.WriteByte(s[i])
-			i++
-			continue
-		}
-		switch e := s[i+1]; e {
-		case 'a':
-			b.WriteByte(7)
-			i += 2
-			changed = true
-		case 'b':
-			b.WriteByte(8)
-			i += 2
-			changed = true
-		case 'f':
-			b.WriteByte(12)
-			i += 2
-			changed = true
-		case 'n':
-			b.WriteByte('\n')
-			i += 2
-			changed = true
-		case 'r':
-			b.WriteByte('\r')
-			i += 2
-			changed = true
-		case 't':
-			b.WriteByte('\t')
-			i += 2
-			changed = true
-		case 'v':
-			b.WriteByte(11)
-			i += 2
-			changed = true
-		case '\\', '"', '\'':
-			b.WriteByte(e)
-			i += 2
-			changed = true
-		case 'x', 'u', 'U':
-			width := map[byte]int{'x': 2, 'u': 4, 'U': 8}[e]
-			if i+2+width <= len(s) && scrubberHexDigits(s[i+2:i+2+width]) {
-				value, _ := strconv.ParseUint(s[i+2:i+2+width], 16, 32)
-				b.WriteRune(rune(value))
-				i += 2 + width
+		if s[i] == '\\' {
+			value, multibyte, tail, err := strconv.UnquoteChar(s[i:], '"')
+			if err != nil {
+				// \' is valid only with a single-quote delimiter.
+				value, multibyte, tail, err = strconv.UnquoteChar(s[i:], '\'')
+			}
+			if err == nil {
+				if multibyte {
+					b.WriteRune(value)
+				} else {
+					b.WriteByte(byte(value))
+				}
+				i = len(s) - len(tail)
 				changed = true
-			} else {
-				b.WriteByte(s[i])
-				i++
+				continue
 			}
-		case '0', '1', '2', '3', '4', '5', '6', '7':
-			digits := 1
-			for digits < 3 && i+1+digits < len(s) && s[i+1+digits] >= '0' && s[i+1+digits] <= '7' {
-				digits++
-			}
-			value, _ := strconv.ParseUint(s[i+1:i+1+digits], 8, 8)
-			b.WriteByte(byte(value))
-			i += 1 + digits
-			changed = true
-		default:
-			b.WriteByte(s[i])
-			i++
 		}
+		b.WriteByte(s[i])
+		i++
 	}
 	return b.String(), changed
-}
-
-func scrubberHexDigits(s string) bool {
-	for _, r := range s {
-		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
-			return false
-		}
-	}
-	return len(s) > 0
 }
 
 // scrubberUnquoteWhole adapts strconv.Unquote to the closure's (string, ok)
@@ -288,12 +245,14 @@ func scrubberUnquoteWhole(s string) (string, bool) {
 }
 
 // scrubberDecodeClosure returns every string reachable from seed by
-// repeatedly unquoting whole strings and decoding escape sequences, bounded
-// at six levels (the composed fixtures nest at most four).
+// repeatedly unquoting whole strings and decoding escape sequences. The
+// bound is 16 levels — twice the product's decoding limit — so the oracle
+// can price the boundary: anything the product leaves encoded at eight
+// layers must still be decodable here (round-4 decision D4).
 func scrubberDecodeClosure(seed string) []string {
 	seen := map[string]bool{seed: true}
 	frontier := []string{seed}
-	for level := 0; level < 6 && len(frontier) > 0; level++ {
+	for level := 0; level < 16 && len(frontier) > 0; level++ {
 		var next []string
 		for _, current := range frontier {
 			for _, decode := range []func(string) (string, bool){
@@ -396,4 +355,173 @@ func TestScrubber_ComposedNoCredentialStaysByteIdentical(t *testing.T) {
 	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
 	require.Equal(t, field, values[0],
 		"a composed field with no registered credential must reach the sink byte-for-byte")
+}
+
+// --- Round 4: depth limit, fail-safe branch, byte escapes (decisions D1-D4)
+//
+// Rule: a registered credential never reaches a log sink in plain form or in
+// any form a reader can decode back to it. D1 adds: a field the scrubber
+// cannot fully decode within its limit must not survive as it came in; byte
+// identity stays required for fields it CAN fully decode and that hold no
+// credential. D2 adds: the final whole-field defense gets its own
+// regression. D3 adds: a one-byte \xHH echo of a Latin-1 credential must be
+// masked, because external diagnostics carry such text into logs.
+
+// scrubberDeepQuote wraps s in the given number of whole Go quoting layers —
+// the encoding depth a composed diagnostic chain can reach.
+func scrubberDeepQuote(s string, layers int) string {
+	for i := 0; i < layers; i++ {
+		s = strconv.Quote(s)
+	}
+	return s
+}
+
+// scrubberAssertControlFree applies the #1666 record rule to one decoded
+// field value: no C0, DEL, C1 (incl. U+0085), U+2028, U+2029, and valid
+// UTF-8.
+func scrubberAssertControlFree(t *testing.T, s string) {
+	t.Helper()
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == 0x2028 || r == 0x2029 {
+			t.Errorf("field value contains control U+%04X; want a control-free record", r)
+		}
+	}
+	if !utf8.ValidString(s) {
+		t.Errorf("field value is not valid UTF-8; want a control-free record")
+	}
+}
+
+// TestScrubber_DeeplyEncodedCredentialNeverReachesFileSink is decision D1.
+// The oracle boundary is the product's own decode limit: at the limit the
+// credential must be masked (control row, green before and after); one layer
+// beyond, and well beyond, the field must NOT come out as it came in — no
+// decoding path may recover the credential and the mask must stand in.
+func TestScrubber_DeeplyEncodedCredentialNeverReachesFileSink(t *testing.T) {
+	const cred = "qa\"needle-7Q"
+	for _, row := range []struct {
+		name   string
+		layers int
+	}{
+		{name: "depth_at_limit", layers: 8},
+		{name: "depth_first_beyond_limit", layers: 9},
+		{name: "depth_well_beyond_limit", layers: 12},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
+			t.Cleanup(restore)
+			field := scrubberDeepQuote("provider refused: "+cred, row.layers)
+			raw := scrubberLogRawField(t, field)
+			values := scrubberFileStringValues(t, raw)
+			require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+			for _, variant := range scrubberDecodeClosure(values[0]) {
+				require.NotContains(t, variant, cred,
+					"row %s: a reversible spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+					row.name, scrubberMaskToken)
+			}
+			require.Contains(t, values[0], scrubberMaskToken,
+				"row %s: the mask token %s must stand in for the credential", row.name, scrubberMaskToken)
+		})
+	}
+}
+
+// TestScrubber_DeepCredentialFreeFieldStaysByteIdentical is D1's preservation
+// clause: a deeply encoded field the scrubber can fully decode within its
+// limit, holding no credential, must reach the sink byte-for-byte — the
+// depth machinery may not rewrite text it does not mask.
+func TestScrubber_DeepCredentialFreeFieldStaysByteIdentical(t *testing.T) {
+	restore := SetSensitiveValueReplacer(strings.NewReplacer("plain-needle-4K", scrubberMaskToken))
+	t.Cleanup(restore)
+	field := scrubberDeepQuote("provider refused: nothing sensitive here", 8)
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	require.Equal(t, field, values[0],
+		"a credential-free field fully decodable within the limit must reach the sink byte-for-byte")
+}
+
+// TestScrubber_QuoteBoundaryFailSafeMasksWholeField is decision D2: the
+// final whole-field defense gets its own regression, separate from the depth
+// test. The witness: a credential whose first character is a double quote,
+// a field starting with the credential's tail and carrying an escaped copy
+// later — the decoded copy forces masking, and the re-quoted output would
+// match the credential across the opening quote boundary, so only the whole
+// field replacement satisfies the rule. The assertions are the full output
+// (every decoding path clean, control-free, mask present), not a marker.
+func TestScrubber_QuoteBoundaryFailSafeMasksWholeField(t *testing.T) {
+	const cred = "\"edge-9Z"
+	restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
+	t.Cleanup(restore)
+	field := "edge-9Z retry tail \\x22edge-9Z"
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	for _, variant := range scrubberDecodeClosure(values[0]) {
+		require.NotContains(t, variant, cred,
+			"a reversible spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+			scrubberMaskToken)
+	}
+	scrubberAssertControlFree(t, values[0])
+	require.Contains(t, values[0], scrubberMaskToken,
+		"the mask token %s must stand in for the credential", scrubberMaskToken)
+}
+
+// TestScrubber_Latin1ByteEchoCredentialNeverReachesFileSink is decision D3.
+// A credential with a Latin-1 character, echoed by an external system with
+// one-byte \xHH spellings of its UTF-8 bytes, must be masked: provider error
+// previews and onboarding raw detail log external text verbatim. The
+// within-depth row is the byte-grammar regression (green before and after;
+// proven real by the byte-to-rune mutant); the beyond-depth row is the same
+// carrier through the depth rule, and must fail while the limit returns
+// undecoded fields unchanged.
+func TestScrubber_Latin1ByteEchoCredentialNeverReachesFileSink(t *testing.T) {
+	const cred = "token-é-9W"
+	const echo = `provider echoed token-\xc3\xa9-9W at retry`
+	for _, row := range []struct {
+		name   string
+		layers int
+	}{
+		{name: "echo_within_depth", layers: 0},
+		{name: "echo_beyond_depth", layers: 10},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
+			t.Cleanup(restore)
+			field := echo
+			if row.layers > 0 {
+				field = scrubberDeepQuote(echo, row.layers)
+			}
+			raw := scrubberLogRawField(t, field)
+			values := scrubberFileStringValues(t, raw)
+			require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+			for _, variant := range scrubberDecodeClosure(values[0]) {
+				require.NotContains(t, variant, cred,
+					"row %s: a reversible spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+					row.name, scrubberMaskToken)
+			}
+			require.Contains(t, values[0], scrubberMaskToken,
+				"row %s: the mask token %s must stand in for the credential", row.name, scrubberMaskToken)
+		})
+	}
+}
+
+// TestScrubber_EscapeGrammarOctalEchoIsDecoded prices the octal part of the
+// grammar (decision D4): a three-digit octal spelling of the quote character
+// inside a composed field must decode and mask like any other Go escape.
+// Green before and after; it fails if the oracle or the scrubber stops
+// reading exact-three-digit octal.
+func TestScrubber_EscapeGrammarOctalEchoIsDecoded(t *testing.T) {
+	const cred = "qa\"needle-7Q"
+	restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
+	t.Cleanup(restore)
+	field := strconv.Quote(`composed for ` + strconv.Quote("ws-1666qa\\042needle-7Q-ws"))
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	for _, variant := range scrubberDecodeClosure(values[0]) {
+		require.NotContains(t, variant, cred,
+			"a reversible spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+			scrubberMaskToken)
+	}
+	require.Contains(t, values[0], scrubberMaskToken,
+		"the mask token %s must stand in for the credential", scrubberMaskToken)
 }
