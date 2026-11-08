@@ -1840,6 +1840,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
+  // The program, standard parameters and program warning are read-only values
+  // the server derives from Settings → Third-party agents (T11 §4, FR-8). A
+  // Settings change does not move the agent's updated_at, so the editable
+  // `executor` state (held behind the hydration timestamp guard) can keep an
+  // old copy; render these from the latest server response instead.
+  const serverExecutor = agent?.executor
   // runtime panel
   const runtimePanel = (
     <div className="space-y-[var(--space-3)]">
@@ -1869,9 +1875,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <span
                     data-testid="profile-program-path"
                     className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] break-all"
-                    aria-describedby={executor?.program_warning ? 'profile-program-warning' : undefined}
+                    aria-describedby={serverExecutor?.program_warning ? 'profile-program-warning' : undefined}
                   >
-                    {executor?.effective_cli_path ?? 'Not set'}
+                    {serverExecutor?.effective_cli_path ?? 'Not set'}
                   </span>
                   {/* r17 17.6: a link to where the program is set, not a disabled input. */}
                   <ProgramSettingsLink onNavigate={handleCloseAgentSheet} />
@@ -1882,12 +1888,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     data-testid="profile-preset-args"
                     className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] break-all"
                   >
-                    {executor?.effective_preset_args ? executor.effective_preset_args : 'None'}
+                    {serverExecutor?.effective_preset_args ? serverExecutor.effective_preset_args : 'None'}
                   </span>
                 </div>
-                {executor?.program_warning && (
+                {serverExecutor?.program_warning && (
                   <p id="profile-program-warning" data-testid="profile-program-warning" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
-                    {executor.program_warning}
+                    {serverExecutor.program_warning}
                   </p>
                 )}
                 <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">

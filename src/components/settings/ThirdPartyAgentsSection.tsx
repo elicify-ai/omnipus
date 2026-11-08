@@ -50,7 +50,10 @@ export const THIRD_PARTY_AGENTS_QUERY_KEY = ['settings', 'third-party-agents'] a
 // Only the fields a person has edited since the last load or save. An
 // untouched field shows the saved value (or the detection pre-fill when
 // nothing is saved), so a background refetch can update it; a touched field
-// keeps exactly what was typed, including an emptied one.
+// keeps exactly what was typed, including an emptied one. Pre-fill
+// eligibility is tracked separately (touchedPaths below): a save empties this
+// buffer, but a path field a person has edited stays touched, so a cleared
+// path is not pre-filled again on the next whole-section save (spec §4).
 type Drafts = Partial<Record<CliKey, Partial<CliPreset>>> // not-wire-format: SPA-local edit buffer keyed by the generated CLI keys
 
 // A save refusal the server attributed to one row and field
@@ -133,6 +136,10 @@ export function ThirdPartyAgentsSection() {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [drafts, setDrafts] = useState<Drafts>({})
+  // Path fields a person has edited while this section is open. Detection
+  // pre-fills only an untouched field (spec §4); unlike `drafts`, a successful
+  // save does not reset this, so an intentionally cleared path stays empty.
+  const [touchedPaths, setTouchedPaths] = useState<ReadonlySet<CliKey>>(() => new Set())
   const [refusal, setRefusal] = useState<RowRefusal | null>(null)
   const [saveFailure, setSaveFailure] = useState<string | null>(null)
   const [checkingCli, setCheckingCli] = useState<CliKey | null>(null)
@@ -153,12 +160,16 @@ export function ThirdPartyAgentsSection() {
     const draft = drafts[cli]?.[field]
     if (draft !== undefined) return draft
     const saved = view.clis[cli]
-    if (field === 'path') return saved.path !== '' ? saved.path : detectedPrefill(saved)
+    if (field === 'path') {
+      if (saved.path !== '') return saved.path
+      return touchedPaths.has(cli) ? '' : detectedPrefill(saved)
+    }
     return saved.preset_args
   }
 
   function edit(cli: CliKey, field: PresetField, value: string) {
     setDrafts((prev) => ({ ...prev, [cli]: { ...prev[cli], [field]: value } }))
+    if (field === 'path') setTouchedPaths((prev) => (prev.has(cli) ? prev : new Set(prev).add(cli)))
     if (refusal?.cli === cli && refusal.field === field) setRefusal(null)
   }
 
@@ -170,6 +181,12 @@ export function ThirdPartyAgentsSection() {
     },
     onSuccess: (saved, sent) => {
       queryClient.setQueryData(THIRD_PARTY_AGENTS_QUERY_KEY, saved)
+      // Every external-CLI agent's read view reports the effective program,
+      // standard parameters and program_warning from these settings, and a
+      // settings change does not touch the agent's updated_at. Refetch the
+      // agent detail and list queries so Runtime shows the new values (FR-8).
+      void queryClient.invalidateQueries({ queryKey: ['agent'] })
+      void queryClient.invalidateQueries({ queryKey: ['agents'] })
       // Drop only the drafts this save carried; anything typed while the
       // request was in flight stays as an unsaved draft.
       setDrafts((prev) => draftsNotIn(prev, sent))

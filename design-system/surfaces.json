@@ -6412,10 +6412,6 @@
       "lane": 5
     },
     {
-      "source": "src/components/agents/CliPathValidationHint.tsx",
-      "lane": 5
-    },
-    {
       "source": "src/components/agents/CommandPreview.tsx",
       "lane": 5
     },
