@@ -9,7 +9,7 @@ import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vite
 import type { ComponentType } from 'react'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import type {
   CliDetect, CliValidateRequest, CliValidateResponse, ErrorResponse,
   ThirdPartyAgentSettings, ThirdPartyAgentSettingsView,
@@ -229,6 +229,57 @@ describe('FR-7: whole-section save and failures', () => {
     expect(JSON.parse(putCalls()[1].body ?? '')).toEqual(secondSave)
     expect(checkCalls()).toEqual([])
   })
+  it('refreshes existing worker and agent-list caches after saving the program and parameters (FR-8)', async () => {
+    // §4 / FR-8: existing Runtime consumers must receive current Settings.
+    // Read fixtures project the mock server's saved row; they are outside the
+    // Section. QueryObserver, cache invalidation and refetching remain real.
+    const before: Pick<Row, 'path' | 'preset_args'> = { path: '/Users/me/bin/codex-before-save', preset_args: '--model before-save' }
+    const after: Pick<Row, 'path' | 'preset_args'> = { path: '/Users/me/bin/codex-after-save', preset_args: '--model after-save' }
+    stored.clis.codex = { ...stored.clis.codex, ...before }
+    const readSavedRow = (): Pick<Row, 'path' | 'preset_args'> => ({
+      path: stored.clis.codex.path, preset_args: stored.clis.codex.preset_args,
+    })
+    const readWorker = vi.fn(async () => readSavedRow())
+    const readAgents = vi.fn(async () => [readSavedRow()])
+    const workerKey = ['agent', 'settings-save-worker'] as const
+    const agentsKey = ['agents', 'settings-save-workspace'] as const
+    // Fresh initial data prevents a mount/staleness refetch from passing this
+    // test without the successful Settings save refreshing both query families.
+    const worker = new QueryObserver(client, {
+      queryKey: workerKey, queryFn: readWorker, initialData: before, staleTime: Infinity,
+    })
+    const agents = new QueryObserver(client, {
+      queryKey: agentsKey, queryFn: readAgents, initialData: [before], staleTime: Infinity,
+    })
+    const stopWorker = worker.subscribe(() => {})
+    const stopAgents = agents.subscribe(() => {})
+    try {
+      renderSection(); await loaded()
+      expect(client.getQueryData(workerKey)).toEqual(before)
+      expect(client.getQueryData(agentsKey)).toEqual([before])
+      expect(readWorker).not.toHaveBeenCalled()
+      expect(readAgents).not.toHaveBeenCalled()
+
+      fireEvent.change(codexPathInput(), { target: { value: after.path } })
+      fireEvent.change(codexParams(), { target: { value: after.preset_args } })
+      fireEvent.click(saveButton())
+      await waitFor(expectSavedToast)
+      expect(putCalls()).toHaveLength(1)
+      expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave(after.path, after.preset_args))
+      // Do not manually invalidate/refetch or spy on invalidateQueries: both
+      // real consumers must obtain the saved values because the Section saved.
+      await waitFor(() => {
+        expect(client.getQueryData(workerKey)).toEqual(after)
+        expect(client.getQueryData(agentsKey)).toEqual([after])
+      })
+      expect(readWorker).toHaveBeenCalledTimes(1)
+      expect(readAgents).toHaveBeenCalledTimes(1)
+      expect(checkCalls()).toEqual([])
+    } finally {
+      stopWorker()
+      stopAgents()
+    }
+  })
   it('sends one PUT containing all three rows exactly as typed', async () => {
     renderSection(); await loaded()
     fireEvent.change(codexParams(), { target: { value: PRESET } })
@@ -388,6 +439,29 @@ describe('§4: optional Check CLI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check Codex CLI' }))
     await waitFor(() => expectCheckToast('Program not found', ['default', 'warning', 'success']))
     expect(codexPathInput()).toHaveValue('/missing/codex')
+    expect(putCalls()).toEqual([])
+  })
+  it('shows a person-gate Check refusal as an error without a transient or retry suggestion', async () => {
+    // §3.2 / SF-4 intent: a 403 is a lasting person-only refusal. The spec and
+    // user-facing Settings docs prescribe no exact 403 UI sentence, so pin
+    // the error class, not implementation copy or the toast host's role mapping.
+    const refusal: ErrorResponse = { error: 'A signed-in person is required to check a CLI.', code: 'person_session_required' }
+    checkCLI = async () => json(refusal, 403)
+    const typedPath = '/Users/me/bin/person-check-codex'
+    renderSection(); await loaded()
+    fireEvent.change(codexPathInput(), { target: { value: typedPath } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check Codex CLI' }))
+    await waitFor(() => {
+      const notices = useUiStore.getState().toasts
+      expect(notices).toHaveLength(1)
+      expect(notices[0].variant).toBe('error')
+      expect(notices[0].message).toMatch(/\S/)
+      expect(notices[0].message).not.toMatch(/\b(?:retry\w*|try again|temporar\w*|transient)\b|could(?:n['’]t| not) verify/i)
+    })
+    expect(checkCalls()).toHaveLength(1)
+    const expected: CliValidateRequest = { cli: 'codex', cli_path: typedPath }
+    expect(JSON.parse(checkCalls()[0].body ?? '')).toEqual(expected)
+    expect(codexPathInput()).toHaveValue(typedPath)
     expect(putCalls()).toEqual([])
   })
   it('shows a failed Check request instead of a version or saved announcement', async () => {
