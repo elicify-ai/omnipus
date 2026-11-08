@@ -55,7 +55,7 @@ The tool call behind this is hidden in the conversation when it succeeds; a refu
 
 When an agent sends you a file from its workspace, the file card has **Open in Library** next to the download button. It opens the docked Library on that file, asking first if there are unsaved edits. A workspace image gets the same button below it; its own image toolbar is unchanged. A file or image that is not in any Library has no extra button. Files sent over other channels, such as Telegram or email, arrive on their own with no Omnipus link.
 
-A sent file does not expire, so its card and download keep working after a reload. The card does not appear on messages you load further back in the chat, and if Omnipus no longer knows the file, the chat still opens with only that card left out.
+A sent file does not expire, so its card and download keep working after a reload. The card does not appear on messages you load further back in the chat, and if the file is no longer on record, the chat still opens with only that card left out.
 
 ## How to add files
 
