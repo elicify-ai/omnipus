@@ -34,8 +34,12 @@ export interface ProviderWaitingIndicatorProps {
   sentAt: string
   /** ISO timestamp — the client-clock reading at frame receipt. */
   receivedAt: string
-  /** ISO timestamp (server clock) — when the silence limit ends the call; absent when unknown. */
+  /** ISO timestamp (server clock) — when the silence limit ends this attempt; absent when unknown. */
   stallAt?: string
+  /** Issue #1664 B3/B4 — the 1-based attempt of the call (frame `attempt`); absent on frames that do not count it. */
+  attempt?: number
+  /** Issue #1664 B3/B4 — the attempts the loop makes in total (frame `max_attempts`). */
+  maxAttempts?: number
 }
 
 /**
@@ -69,22 +73,41 @@ function formatStallTime(stallAt: string | undefined): string {
   return new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(d)
 }
 
+function isCount(n: number | undefined): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1
+}
+
+/**
+ * The end-of-attempt clause (issue #1664 B4, founder Q2): with a known end
+ * time and an attempt count, an attempt that is not the last says "this
+ * attempt ends (attempt N of M)" and the last says "the call ends (attempt
+ * M of M)". Without a count (frames that do not carry it) the pre-#1664
+ * "the call ends." stays; without an end time there is no clause at all.
+ */
+function stallClauseText(stallAt: string | undefined, attempt: number | undefined, maxAttempts: number | undefined): string {
+  const stallTime = formatStallTime(stallAt)
+  if (stallTime === '') return ''
+  if (!isCount(attempt) || !isCount(maxAttempts)) return ` If nothing arrives by ${stallTime}, the call ends.`
+  const ending = attempt < maxAttempts ? 'this attempt ends' : 'the call ends'
+  return ` If nothing arrives by ${stallTime}, ${ending} (attempt ${attempt} of ${maxAttempts}).`
+}
+
 /** The full line at a given instant — the frozen announcement's builder. */
 function buildWaitingText(
   silentSince: string,
   sentAt: string,
   receivedAt: string,
   stallAt: string | undefined,
+  attempt: number | undefined,
+  maxAttempts: number | undefined,
   nowMs: number,
 ): string {
   const elapsed = waitingElapsedSeconds(silentSince, sentAt, receivedAt, nowMs)
-  const stallTime = formatStallTime(stallAt)
-  const stallClause = stallTime !== '' ? ` If nothing arrives by ${stallTime}, the call ends.` : ''
-  return `The model hasn't responded for ${elapsed}s — still waiting.${stallClause}`
+  return `The model hasn't responded for ${elapsed}s — still waiting.${stallClauseText(stallAt, attempt, maxAttempts)}`
 }
 
 export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
-  const { silentSince, sentAt, receivedAt, stallAt } = props
+  const { silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
 
   useEffect(() => {
@@ -101,14 +124,13 @@ export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
   // new waiting frame replaces it): memoized on the FRAME facts only, never
   // recomputed by the 1-second tick, so a ticking "Ns" never re-announces.
   const announcement = useMemo(
-    () => buildWaitingText(silentSince, sentAt, receivedAt, stallAt, Date.now()),
-    [silentSince, sentAt, receivedAt, stallAt],
+    () => buildWaitingText(silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts, Date.now()),
+    [silentSince, sentAt, receivedAt, stallAt, attempt, maxAttempts],
   )
 
   const elapsedSeconds = waitingElapsedSeconds(silentSince, sentAt, receivedAt, nowMs)
   const visibleText = `The model hasn't responded for ${elapsedSeconds}s — still waiting.`
-  const stallTime = formatStallTime(stallAt)
-  const stallClause = stallTime !== '' ? ` If nothing arrives by ${stallTime}, the call ends.` : ''
+  const stallClause = stallClauseText(stallAt, attempt, maxAttempts)
 
   return (
     <div

@@ -15,6 +15,7 @@ import type {
   ServerFrame,
   LLMError as GeneratedLLMError,
   WorkflowStart,
+  ProviderStatusFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
@@ -469,8 +470,12 @@ export interface ProviderStatusEventData {
   turnId: string
   /** Server clock — the last provider activity (or the round's start). */
   silentSince: string
-  /** Server clock — when the silence limit would end the call; absent when unknown. */
+  /** Server clock — when the silence limit would end this attempt; absent when unknown. */
   stallAt?: string
+  /** Issue #1664 B3 — frame `attempt` (1-based); absent when the frame does not count the call. */
+  attempt?: ProviderStatusFrame['attempt']
+  /** Issue #1664 B3 — frame `max_attempts`; absent when the frame does not count the call. */
+  maxAttempts?: ProviderStatusFrame['max_attempts']
   sentAt: string
   receivedAt: string
 }

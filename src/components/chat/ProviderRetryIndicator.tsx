@@ -67,6 +67,10 @@ export function retryProblemClause(errorCode: string | undefined): string {
       return 'is overloaded or returning server errors'
     case 'stream_interrupted':
       return 'stopped responding mid-answer'
+    // Issue #1664 B5 (founder Q2): a header timeout, or a stall before
+    // anything streamed, made the loop retry the call.
+    case 'no_response':
+      return 'did not start answering in time'
     default:
       return 'ran into a problem'
   }
