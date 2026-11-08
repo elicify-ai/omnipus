@@ -77,6 +77,9 @@ func t11cSaveRefused(t *testing.T, f *t8SettingsFixture, program, check, at stri
 	assert.Equal(t, "clis.claude-code.path", *out.Field)
 	assert.Equal(t, "claude-code", (*out.Details)["cli"])
 	assert.Equal(t, check, (*out.Details)["check"])
+	if check == "agent_writable_location" {
+		at = t11CanonicalFailureElement(t, at)
+	}
 	assert.Equal(t, at, (*out.Details)["at"])
 	reasons := map[string]string{
 		"agent_writable_location": "it is inside a folder agents can write to.",
