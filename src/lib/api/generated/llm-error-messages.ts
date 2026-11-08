@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "provider_empty_reply", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -50,6 +50,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   quota_billing: "The model provider says your account is out of credit.",
   network: "We couldn’t reach the model provider. Check your internet connection and retry.",
   provider_stalled: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details.",
+  provider_empty_reply: "The model provider ended its answer without sending anything. Retry — if it keeps happening, open Verbose chat for details.",
   content_policy: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
   context_too_long: "This turn needed more context than the model can hold, even after trimming older turns automatically. Try a model with a larger context window, or shorten this message.",
   tool_args: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong.",
@@ -84,6 +85,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   quota_billing: "config",
   network: "ambiguous",
   provider_stalled: "provider",
+  provider_empty_reply: "provider",
   content_policy: "provider",
   context_too_long: "product",
   tool_args: "model",

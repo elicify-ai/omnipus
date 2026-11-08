@@ -3483,6 +3483,12 @@ components:
           # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
           message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        provider_empty_reply:
+          # Issue #1664 (founder decision 2026-11-07 Q3 A): the provider ended a streaming
+          # answer with no finish_reason, no text and no tool call, on every attempt.
+          # Same attempt rule as a silent call. Retryable like `provider_stalled`.
+          message: "The model provider ended its answer without sending anything. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
         content_policy:
           message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
           attribution: provider
@@ -3575,6 +3581,7 @@ components:
             - quota_billing
             - network
             - provider_stalled
+            - provider_empty_reply
             - content_policy
             - context_too_long
             - tool_args
@@ -3753,6 +3760,12 @@ components:
           # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
           message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        provider_empty_reply:
+          # Issue #1664 (founder decision 2026-11-07 Q3 A): the provider ended a streaming
+          # answer with no finish_reason, no text and no tool call, on every attempt.
+          # Same attempt rule as a silent call. Retryable like `provider_stalled`.
+          message: "The model provider ended its answer without sending anything. Retry — if it keeps happening, open Verbose chat for details."
+          attribution: provider
         content_policy:
           message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
           attribution: provider
@@ -3845,6 +3858,7 @@ components:
             - quota_billing
             - network
             - provider_stalled
+            - provider_empty_reply
             - content_policy
             - context_too_long
             - tool_args
@@ -5309,8 +5323,9 @@ components:
       title: ProviderRetryFrame
       description: >
         Server → client (provider-messages spec §7.1 item 3). Announces an
-        automatic provider rate-limit retry inside the turn's fallback-chain
-        execution — the candidate about to be re-called, when it will be called
+        automatic provider retry inside the turn's fallback-chain execution,
+        or (issue #1664) the agent loop's own retry of a call that sent no
+        response — the candidate about to be re-called, when it will be called
         (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the
         #711 closure constraint) — built from NAMED FIELDS ONLY, never an
         `error` field or raw provider text; the countdown is computed from
@@ -5368,6 +5383,11 @@ components:
         error_code:
           type: string
           maxLength: 64
+          description: >-
+            The classified provider condition that triggered the retry: the
+            fallback chain's retry causes (rate_limited and the #1280 causes),
+            `no_response` or `empty_reply` (issue #1664, the agent loop's own
+            retry). Plain string, not an enum.
         seq:
           type: integer
           format: int64
@@ -5381,8 +5401,10 @@ components:
       description: >
         Server → client (issues #1478 and #1280). The state of the
         model-provider call a running turn is waiting on: `waiting` (nothing
-        has arrived since silent_since; the silence limit ends the call at
-        stall_at when known), `responding` (data arrives again, or the call
+        has arrived since silent_since; this attempt ends at stall_at when
+        known — the request timeout before the first response byte, the
+        silence limit after it — and attempt/max_attempts count the agent
+        loop's calls, issue #1664), `responding` (data arrives again, or the call
         returned, after a `waiting` notice), `recovered` (the call succeeded
         after `retries` automatic retries). Named fields only, never provider
         text. Keep in sync by hand with
@@ -5422,6 +5444,18 @@ components:
         stall_at:
           type: string
           format: date-time
+        attempt:
+          type: integer
+          minimum: 1
+          description: >-
+            State `waiting` only, when known — the 1-based number of the agent
+            loop's provider call (issue #1664). Sent together with max_attempts.
+        max_attempts:
+          type: integer
+          minimum: 1
+          description: >-
+            State `waiting` only, when known — the total provider calls the
+            agent loop makes before the turn ends with an error (today 3).
         retries:
           type: integer
           minimum: 1

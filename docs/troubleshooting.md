@@ -227,6 +227,12 @@ A provider can stop sending anything in the middle of a reply. Omnipus waits up 
 
 Anything the provider sends counts as a sign of life, including the model's hidden reasoning and the provider's keep-alive messages, so a model that is thinking without showing text does not trigger the notice. A reply that is not streamed (an agent's fallback model is called that way) counts as silent until it arrives. A wait between automatic retries is shown by the retry line, not as silence.
 
+Before the model has sent its first byte, the notice says when **this attempt** ends: the provider's request time limit after the attempt started (`request_timeout`, 120 seconds by default). A call that sends nothing in that time is tried again automatically — **3 attempts in total**, unchanged — and the notice shows which attempt it is (for example "attempt 1 of 3"). The short wait before the next attempt appears as a retry line saying the model did not start answering in time. After the third attempt the turn ends with "The model provider didn’t answer this request in time."
+
+## The model ended its answer without sending anything
+
+Sometimes a provider closes a streamed answer without any text, any tool call or any signal that the answer is finished. Omnipus does not treat that as a valid empty reply. It follows the same rule as a call that never answered: when the agent has a fallback model, the fallback is tried; otherwise the call is tried again, 3 attempts in total, with a retry line in between. If every attempt ends empty, the turn ends with the error `provider_empty_reply`: "The model provider ended its answer without sending anything." Retry; if it keeps happening, open **Verbose chat** for details.
+
 ## The provider rejects your model requests
 
 A `model_route_unavailable` notice means Omnipus could not set up the named provider/model connection from its saved settings. No request was sent to that pair, and a global-default connection was not substituted. Check the provider's API key or sign-in and endpoint settings before trying again. The notice names the pair; scrubbed setup details are available only live under **Verbose chat**.

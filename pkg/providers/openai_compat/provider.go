@@ -584,12 +584,22 @@ func parseStreamResponse(
 	}
 
 	if finishReason == "" {
-		if textContent.Len() > 0 || len(activeTools) > 0 {
-			logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
-			finishReason = "unknown"
-		} else {
-			finishReason = "stop"
+		if textContent.Len() == 0 && len(activeTools) == 0 {
+			// A Stop that closed the body is a cancel, not an empty answer.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			// Issue #1664 (founder decision 2026-11-07 Q3 A): the stream ended
+			// (EOF or [DONE]) with no finish_reason, no content and no tool
+			// call. Nothing that could be an answer arrived, so the attempt
+			// failed — never a synthesized successful empty reply. The usage
+			// the attempt was billed for rides on the error.
+			logger.WarnCF("openai_compat", "provider ended the stream without sending anything; treated as a failed attempt",
+				map[string]any{"reasoning_bytes": totalReasoningBytes, "completion_tokens": completionTokens(usage)})
+			return nil, common.NewEmptyStreamError(usage)
 		}
+		logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
+		finishReason = "unknown"
 	}
 
 	return &LLMResponse{

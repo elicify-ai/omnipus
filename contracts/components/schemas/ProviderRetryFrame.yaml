@@ -1,7 +1,8 @@
 title: ProviderRetryFrame
 description: >
   Server → client (provider-messages spec §7.1 item 3). Announces an automatic
-  provider rate-limit retry inside the turn's fallback-chain execution: the
+  provider retry — inside the turn's fallback-chain execution, or (issue #1664)
+  the agent loop's own retry of a call that sent no response: the
   candidate about to be re-called, when it will be called (retry_at), and which
   attempt of max_attempts this is (C-8). The SPA keys a per-turn projection item
   on turn_id — each newer retry indicator replaces the previous one and the
@@ -68,7 +69,15 @@ properties:
   error_code:
     type: string
     maxLength: 64
-    description: The classified provider condition that triggered the retry (today always rate_limited — C-9 retries only rate-limited candidates). Plain string, not an enum — the spec pins an explicit enum only for unavailable_code, and a renderer must never turn this frame's copy into display text (C-2).
+    description: >-
+      The classified provider condition that triggered the retry. Known values:
+      the fallback chain's retry causes (rate_limited and the #1280 retry-plan
+      causes), `no_response` (issue #1664: the agent loop retries a call that
+      sent no response in time — a response-header timeout, or a stall with
+      nothing streamed yet) and `empty_reply` (issue #1664: the provider ended
+      its stream without sending anything). Plain string, not an enum — the
+      spec pins an explicit enum only for unavailable_code, and a renderer must
+      never turn this frame's copy into display text (C-2).
   seq:
     type: integer
     format: int64

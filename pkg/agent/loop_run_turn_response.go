@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -141,6 +142,11 @@ agentLoopRunTurnResponseCallLLMWithRetriesLoop1:
 
 // handleAttemptFailure handles repair, media downgrade, and exhausted fallback errors for one attempt.
 func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry int) agentLoopRunTurnResponseCallLLMWithRetriesFlow {
+	// Issue #1664 B3: the waiting notice of this call shows "attempt N of
+	// max" — the loop makes at most maxRetries+1 calls.
+	rt := cr.rr.rq.ri.rf.rt
+	rt.providerAttempt, rt.providerMaxAttempts = retry+1, cr.maxRetries+1
+	defer func() { rt.providerAttempt, rt.providerMaxAttempts = 0, 0 }()
 	cr.rr.rq.ri.rf.response, cr.rr.rq.ri.rf.err = cr.rr.rq.ri.rf.callLLM(cr.rr.rq.ri.rf.callMessages, cr.rr.rq.ri.rf.providerToolDefs)
 	if cr.rr.rq.ri.rf.err == nil {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
@@ -571,13 +577,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		cr.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindLLMRetry,
 			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			LLMRetryPayload{
-				Attempt:    retry + 1,
-				MaxRetries: cr.maxRetries,
-				Reason:     "timeout",
-				Error:      cr.rr.rq.ri.rf.err.Error(),
-				Backoff:    backoff,
-			},
+			cr.timeoutRetryPayload(retry, backoff),
 		)
 		// ADR-091 boundary 5 (FR-B-001): a steered
 		// session's retry notice is never the user's audience.
@@ -1017,4 +1017,37 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 
 	rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseTools)
 	return nil
+}
+
+// timeoutRetryPayload is the loop's timeout-retry event (issue #1664 B5): it
+// carries what the provider_retry frame renders — the call ABOUT to be made
+// (the providers.RetryInfo convention, 2..max), the total calls, when the
+// backoff ends (RetryAt = SentAt + Backoff) and the session. Reason
+// "empty_reply" marks an empty stream (common.ErrEmptyStream), "timeout"
+// every other timeout-class failure; the hub maps them to the frame's
+// error_code. Error stays log-only.
+func (cr *agentLoopRunTurnResponseCallLLMWithRetries) timeoutRetryPayload(retry int, backoff time.Duration) LLMRetryPayload {
+	rt := cr.rr.rq.ri.rf.rt
+	reason := "timeout"
+	if errors.Is(cr.rr.rq.ri.rf.err, common.ErrEmptyStream) {
+		reason = "empty_reply"
+	}
+	provider := ""
+	if len(rt.activeCandidates) > 0 {
+		provider = rt.activeCandidates[0].Provider
+	}
+	sentAt := time.Now()
+	return LLMRetryPayload{
+		Attempt:     retry + 2,
+		MaxRetries:  cr.maxRetries,
+		Reason:      reason,
+		Error:       cr.rr.rq.ri.rf.err.Error(),
+		Backoff:     backoff,
+		Provider:    provider,
+		Model:       rt.llmModel,
+		SentAt:      sentAt,
+		RetryAt:     sentAt.Add(backoff),
+		MaxAttempts: cr.maxRetries + 1,
+		SessionID:   string(rt.ts.routingSessionID),
+	}
 }
