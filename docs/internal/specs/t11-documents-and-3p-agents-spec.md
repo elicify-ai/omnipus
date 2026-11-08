@@ -1,6 +1,7 @@
 # Feature Specification: T11 — Shell-guard fix and third-party agent settings
 
-Status: Approved for building (founder 2026-10-29: simple version)
+Status: Approved
+Approval: approved for building by the founder on 2026-10-29 (simple version)
 
 | Header | Value |
 |---|---|
