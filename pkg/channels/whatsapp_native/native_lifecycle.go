@@ -8,6 +8,7 @@ package whatsapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -272,4 +273,30 @@ func (c *WhatsAppNativeChannel) publishNativeRunning(client *whatsmeow.Client) b
 	}
 	c.SetRunning(true)
 	return true
+}
+
+// markReconnectFailed shows an unexpected failure of our managed reconnect
+// (#1687 F1) through the channel's existing status surface: the running flag
+// that publishNativeRunning sets and manager.GetStatus/Availability report.
+// While a reconnect keeps failing the channel reports not running; the loop
+// keeps retrying and its next success re-publishes running. Nothing restarts
+// the channel on this flag: reconnectWithBackoff stays the only reconnect
+// owner, and Send answers ErrNotRunning instead of a temporary error.
+//
+// A conflict (superseded client, or Stop's nativeStopMark) or a cancelled run
+// is intentional, not a failure. The flag is written under the same lock order
+// and currency checks as publishNativeRunning, so it never races Stop's own
+// disposal: once beginNativeStop has set stopping, this writes nothing.
+func (c *WhatsAppNativeChannel) markReconnectFailed(client *whatsmeow.Client, err error) {
+	if errors.Is(err, channels.ErrPairingConflict) || errors.Is(err, context.Canceled) {
+		return
+	}
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != client || c.stopping.Load() || c.runCtx == nil || c.runCtx.Err() != nil {
+		return
+	}
+	c.SetRunning(false)
 }

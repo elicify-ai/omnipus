@@ -693,11 +693,14 @@ func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
 		logger.InfoCF("whatsapp", "WhatsApp reconnecting", map[string]any{"backoff": backoff.String()})
 		err := c.connectNative(client)
 		if err == nil {
+			// Clears a failure markReconnectFailed showed on an earlier attempt.
+			c.publishNativeRunning(client)
 			logger.InfoC("whatsapp", "WhatsApp reconnected")
 			return
 		}
 
 		logger.WarnCF("whatsapp", "WhatsApp reconnect failed", map[string]any{"error": err.Error()})
+		c.markReconnectFailed(client, err)
 
 		select {
 		case <-c.runCtx.Done():
