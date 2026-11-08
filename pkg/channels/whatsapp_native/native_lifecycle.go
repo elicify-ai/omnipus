@@ -174,6 +174,7 @@ func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *
 		if resource.err == nil && c.client == client {
 			c.client, c.container = nil, nil
 		}
+		c.reconnectFailing.Store(false) // a stopped channel is not reconnecting
 		c.SetRunning(false)
 		// gate r4 R4-T2: an attempt-scoped teardown that completed cleanly
 		// leaves the connector idle but alive — its successor attempt must be
@@ -271,8 +272,28 @@ func (c *WhatsAppNativeChannel) publishNativeRunning(client *whatsmeow.Client) b
 			return false
 		}
 	}
+	// Running first, then the window clears: a lock-free Send never sees
+	// not-running with the window already closed.
 	c.SetRunning(true)
+	c.reconnectFailing.Store(false)
 	return true
+}
+
+// reconnectingReason is the availability reason while our managed reconnect is
+// failing (#1687 founder Q3 B). People read it inside "Saved, but the
+// connection is not running: …." and the agent's Channels block "(…)", so it
+// is a lower-case fragment with no final full stop (omnipus-voice: neutral
+// voice outside a chat, what happened plus what Omnipus is doing, no jargon).
+const reconnectingReason = "the connection to WhatsApp was lost and is being re-established automatically"
+
+// NotRunningReason implements channels.NotRunningReasoner: the WhatsApp
+// reconnect reason while our managed reconnect is failing, else empty (the
+// manager then uses its shared reasons).
+func (c *WhatsAppNativeChannel) NotRunningReason() string {
+	if c.reconnectFailing.Load() && !c.stopping.Load() && !c.IsRunning() {
+		return reconnectingReason
+	}
+	return ""
 }
 
 // markReconnectFailed shows an unexpected failure of our managed reconnect
@@ -281,7 +302,9 @@ func (c *WhatsAppNativeChannel) publishNativeRunning(client *whatsmeow.Client) b
 // While a reconnect keeps failing the channel reports not running; the loop
 // keeps retrying and its next success re-publishes running. Nothing restarts
 // the channel on this flag: reconnectWithBackoff stays the only reconnect
-// owner, and Send answers ErrNotRunning instead of a temporary error.
+// owner. In this window (reconnectFailing) Send keeps the temporary class the
+// manager retries (founder Q1 B) and Availability carries reconnectingReason
+// (founder Q3 B).
 //
 // A conflict (superseded client, or Stop's nativeStopMark) or a cancelled run
 // is intentional, not a failure. The flag is written under the same lock order
@@ -298,5 +321,8 @@ func (c *WhatsAppNativeChannel) markReconnectFailed(client *whatsmeow.Client, er
 	if c.client != client || c.stopping.Load() || c.runCtx == nil || c.runCtx.Err() != nil {
 		return
 	}
+	// The window opens before running drops: a lock-free Send never sees
+	// not-running without it.
+	c.reconnectFailing.Store(true)
 	c.SetRunning(false)
 }

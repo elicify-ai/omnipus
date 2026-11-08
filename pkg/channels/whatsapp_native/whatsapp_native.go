@@ -74,6 +74,11 @@ type WhatsAppNativeChannel struct {
 	keepAliveFailedSince time.Time
 	stopping             atomic.Bool    // set once Stop begins; prevents new wg.Add calls
 	wg                   sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+	// reconnectFailing marks the window in which our managed reconnect failed
+	// and keeps retrying (#1687): written under reconnectMu and mu together
+	// with the running flag (markReconnectFailed, publishNativeRunning,
+	// disposeNative), read lock-free by Send and NotRunningReason.
+	reconnectFailing atomic.Bool
 
 	// connectsInFlight counts connectNative calls inside client.ConnectContext;
 	// nativeStopMark names the run context a stop has begun for. They pair
@@ -796,7 +801,11 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 }
 
 func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
-	if !c.IsRunning() {
+	// While our managed reconnect is failing (#1687 founder Q1 B) the channel
+	// reports not running, but a send keeps the temporary class the manager
+	// retries: it falls through to the connection guard below. Once Stop has
+	// begun, not running is final again.
+	if !c.IsRunning() && (!c.reconnectFailing.Load() || c.stopping.Load()) {
 		return channels.ErrNotRunning
 	}
 	select {
