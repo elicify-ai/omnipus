@@ -79,8 +79,8 @@
 //     test representative of real behavior (project files,
 //     AGENTS.md/CLAUDE.md/opencode.json context) — that directory is
 //     NEVER removed by this handler. Otherwise (agent_id omitted, blank, or
-//     naming an agent that doesn't resolve — e.g. the create wizard before
-//     the agent has been saved) falls back to a fresh, dedicated ephemeral
+//     naming an agent that doesn't resolve, such as a stale or deleted id)
+//     falls back to a fresh, dedicated ephemeral
 //     scratch directory under $OMNIPUS_HOME/executor-smoke-test-runs,
 //     removed (defer os.RemoveAll) once the run ends, success or failure. See
 //     runExecutorSmokeTest's isEphemeralWorkspace local for how the two paths
@@ -91,9 +91,9 @@
 //     carry operator-sensitive content; a boolean outcome + the CLI identity
 //     is enough for an audit trail's purpose here.
 //
-// Note: this endpoint is reachable before an agent exists (create wizard) or
-// is saved, and for opencode specifically this means one click grants the
-// CLI's fully-bypassed permission mode (opencode's own always-on
+// Note: this endpoint accepts a request with no saved agent id, and for
+// opencode specifically this means one click grants the CLI's
+// fully-bypassed permission mode (opencode's own always-on
 // --dangerously-skip-permissions, ADR-032 fix D — see driver_opencode.go) on
 // a real, credentialed subprocess — bounded by the rate limiter, the
 // smokeTestTimeoutSeconds timeout, and the smokeTestMaxTurns cap, but a
@@ -360,9 +360,8 @@ func (a *restAPI) runExecutorSmokeTest(
 	// override real dispatch applies (pkg/agent/loop.go's runTurn,
 	// pkg/agent/external_dispatch.go's runExternalCLISubTurn), so the smoke
 	// test stays representative of where a genuine turn would actually run.
-	// Otherwise (agentID empty, or naming an agent that no longer resolves —
-	// e.g. the create wizard before the agent has been saved, or a
-	// stale/deleted id) fall back to a disposable ephemeral scratch
+	// Otherwise (agentID empty, or naming an agent that no longer resolves,
+	// such as a stale or deleted id) fall back to a disposable ephemeral scratch
 	// directory, exactly as before this feature existed.
 	//
 	// isEphemeralWorkspace is set EXACTLY ONCE, right here, at the point
