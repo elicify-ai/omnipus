@@ -19,7 +19,7 @@
  * provided by global-setup.ts unless stated otherwise.
  */
 
-import { errors, expect, type Page } from '@playwright/test'
+import { errors, expect, type BrowserContext, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { test as canonicalTest } from './fixtures/canonical-history'
 import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
@@ -384,6 +384,203 @@ function recordFor(mock: HeldStreamProvider, prompt: string) {
   return record!
 }
 
+// ─── Bug-3-a step helpers (round 6, CHECK R3-F2 function-budget fix) ─────────
+// The Bug-3-a test body exceeded the 240-line function budget; its steps are
+// extracted into these named helpers. Comments travel with their code
+// verbatim; no assertion, poll budget or timeout is touched.
+
+/** The Bug-3-a mock: tab A answered with the exact scripted text, tab B held
+ * open — the shared fixture's scripts branch (no fork). */
+async function startBug3aMock(): Promise<HeldStreamProvider> {
+  return startHeldStreamProvider({
+    // The fixture's `scripts` branch branches the reply PER PROMPT (the
+    // shared fixture, extended in round 5 — not a fork): tab A answered
+    // with the exact scripted text, tab B held open. promptIncludes stays
+    // required by the option type; with scripts set, matching walks the
+    // scripts (last user message backwards), not promptIncludes.
+    promptIncludes: BUG3A_MARKER_TAB_B,
+    chunkIntervalMs: 20,
+    scripts: [
+      { promptIncludes: BUG3A_MARKER_TAB_A, behavior: 'answer', answerText: BUG3A_ANSWER_TAB_A },
+      { promptIncludes: BUG3A_MARKER_TAB_B, behavior: 'hold' },
+    ],
+  })
+}
+
+/** An isolated gateway pointed at the mock provider. */
+async function startBug3aGateway(mock: HeldStreamProvider): Promise<GatewayProcess> {
+  return GatewayProcess.start({
+    apiBase: mock.url,
+    model: E2E_FALLBACK.model,
+    adminPassword: 'admin1234',
+  })
+}
+
+/** Tab 1 logs in through the UI; tab 2 shares the context's cookies, so no
+ * second login (and the session-token slot stays single). Returns tab B's page. */
+async function openBug3aTabs(context: BrowserContext, page: Page, gw: GatewayProcess): Promise<Page> {
+  await loginToGateway(page, gw)
+  await awaitWorkspaceChrome(page)
+  const page2 = await context.newPage()
+  await page2.goto(gw.baseURL)
+  await awaitWorkspaceChrome(page2)
+  return page2
+}
+
+/** Fresh chats on both tabs — two genuinely distinct, empty sessions of the
+ * same agent (freshChat, fixtures/session-setup.ts: public REST + the SPA's
+ * own deep-link route; the agent-row "New chat" button is gone by founder
+ * decision D7). */
+async function freshBug3aChats(page: Page, page2: Page): Promise<void> {
+  const tabA = await freshChat(page)
+  const tabB = await freshChat(page2)
+  expect(
+    tabA.sessionId,
+    'the two tabs must chat in two DISTINCT sessions for the concurrency property to mean anything',
+  ).not.toBe(tabB.sessionId)
+  await expect(settledReplies(page)).toHaveCount(0, { timeout: 10_000 })
+  await expect(settledReplies(page2)).toHaveCount(0, { timeout: 10_000 })
+}
+
+/** Send on tab B FIRST, and do not send tab A until the mock has RECEIVED and
+ * held B's request. This is what turns the later assertions into a real
+ * overlap proof (CHECK F1): a gateway that services one session at a time
+ * cannot pass, because A is only sent once B is verifiably in flight, and A's
+ * completion is only accepted while that SAME B request is still open. The
+ * marker inside each message is what the MOCK branches on (hold B, answer A) —
+ * no call counter, which could never tell the two tabs' streaming calls apart
+ * on a shared agent. */
+async function sendTabBAndAwaitHeld(page2: Page, mock: HeldStreamProvider): Promise<void> {
+  const input2 = chatInput(page2)
+  await input2.fill(`${BUG3A_MARKER_TAB_B} — Bug-3 mock concurrent test, tab B`)
+  await input2.press('Enter')
+
+  // 0. B's request must arrive at the mock BEFORE A is sent. From here
+  //    on, "B in flight" is an observed fact, not an assumption.
+  await expect
+    .poll(() => recordFor(mock, BUG3A_MARKER_TAB_B).held, {
+      timeout: 30_000,
+      intervals: [250, 500, 1_000],
+    })
+    .toBe(true)
+}
+
+/** Send tab A (the mock answers A with a final "stop"-finished answer carrying
+ * no tool calls, so A's turn ends on its first model call), then the
+ * deterministic overlap proof at the mock. */
+async function sendTabAAndAwaitOverlap(page: Page, mock: HeldStreamProvider): Promise<void> {
+  const input1 = chatInput(page)
+  await input1.fill(`${BUG3A_MARKER_TAB_A} — Bug-3 mock concurrent test, tab A`)
+  await input1.press('Enter')
+
+  // 1. Deterministic overlap proof at the mock: A's request ANSWERED
+  //    while the SAME B request observed above is STILL OPEN. The
+  //    fixture's per-prompt record has no per-request ids, so continuity
+  //    is pinned by requests === 1: exactly ONE B request has ever
+  //    arrived and it is still the one held — close/reopen churn would
+  //    push requests ≥ 2 and fail this poll exactly as the old seq pin
+  //    did.
+  await expect
+    .poll(
+      () => {
+        const a = recordFor(mock, BUG3A_MARKER_TAB_A)
+        const b = recordFor(mock, BUG3A_MARKER_TAB_B)
+        return {
+          tabAAnswered: a.answered >= 1,
+          tabBStillOpen: b.held && !b.clientClosed && b.requests === 1,
+        }
+      },
+      { timeout: 30_000, intervals: [250, 500, 1_000] },
+    )
+    .toEqual({ tabAAnswered: true, tabBStillOpen: true })
+}
+
+/** 2. Tab A's settled reply is visible NOW — while tab B's request is still
+ * open at the mock — and it is A's ONLY settled reply, with its body EXACTLY
+ * the scripted text (toHaveText, not a substring check — CHECK F2). The B-open
+ * re-read immediately after the DOM assertion pins the overlap to the same
+ * moment: A's reply was settled while B had not even closed its held request. */
+async function assertTabASettledWhileBHeld(page: Page, mock: HeldStreamProvider): Promise<void> {
+  await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
+  await expect(settledReplies(page)).toHaveCount(1)
+  const tabBHeld = recordFor(mock, BUG3A_MARKER_TAB_B)
+  expect(
+    tabBHeld.held && tabBHeld.requests === 1,
+    'the held tab-B request observed before tab A was sent must STILL be the one open request at the moment tab A’s reply is settled in the DOM',
+  ).toBe(true)
+}
+
+/** 3–5. Tab B has NO reply yet and is still streaming; the user stops tab B —
+ * foregrounding the tab first (a background tab throttles its renderer and
+ * queues the click past any budget) — and the wire-level cancel proof pins
+ * WHICH side closed B's held request. */
+async function stopTabBAndAwaitCancel(page2: Page, mock: HeldStreamProvider): Promise<void> {
+  // 3. Tab B has NO reply yet: no settled row (a running placeholder
+  //    wouldn't pass this locator, and neither would an interrupted one),
+  //    and its turn is still streaming (the Stop button is up).
+  await expect(settledReplies(page2)).toHaveCount(0)
+  // Stop is clicked in the tab the user is viewing: bring tab B to the
+  // foreground first. A BACKGROUND tab throttles its renderer, and the
+  // click can otherwise sit in Chromium's input-dispatch queue past any
+  // reasonable budget — observed with every actionability check already
+  // green ("visible, enabled and stable" → "performing click action" →
+  // stall; the queued click eventually landed and cancelled the turn,
+  // receipt bug3a-run2). Foregrounding the tab is what a human does; a
+  // realism fix, not a timeout increase.
+  await page2.bringToFront()
+  await expect(page2.getByTestId('stop-btn')).toBeVisible({ timeout: 15_000 })
+
+  // 4. Stop on tab B — the user action under test.
+  await page2.getByTestId('stop-btn').click({ timeout: 5_000 })
+
+  // 5. Deterministic cancel proof at the wire: the gateway canceled B's
+  //    provider call, so B's held request is no longer open at the mock
+  //    (the client closed it — the same cancel that the gateway logs as
+  //    turn_canceled). clientClosed is incremented in the same close
+  //    event that clears held, and never by a fixture-side finish
+  //    (release() is not used here), so open:false together with
+  //    cancelledByClient pins WHICH side closed B — the gateway's cancel.
+  await expect
+    .poll(
+      () => {
+        const b = recordFor(mock, BUG3A_MARKER_TAB_B)
+        return { open: b.held, cancelledByClient: b.clientClosed >= 1 }
+      },
+      { timeout: 15_000, intervals: [250, 500, 1_000] },
+    )
+    .toEqual({ open: false, cancelledByClient: true })
+}
+
+/** 6. Tab B ends CANCELLED: an interrupted-status row carrying the product's
+ * "(interrupted)" suffix — and still no settled reply. An
+ * interrupted/incomplete message is data-status="incomplete"
+ * (buildMessageStatus maps the store's interrupted status there), which the
+ * settledReplies oracle never admits. */
+async function assertTabBCancelled(page2: Page): Promise<void> {
+  await expect(interruptedReplyRow(page2)).toBeVisible({ timeout: 30_000 })
+  await expect(settledReplies(page2)).toHaveCount(0)
+}
+
+/** 7. Tab A unaffected by B's cancel: its settled reply is still there, still
+ * its only one, and the mock answered A exactly once (no re-send, no second
+ * streaming call for A's turn). The body equality check (R3-F1) fails on any
+ * text appended to A by B's Stop — a gap the previous substring/count pair
+ * could not see. */
+async function assertTabAUnaffectedByBCancel(page: Page, mock: HeldStreamProvider): Promise<void> {
+  await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
+    timeout: 15_000,
+  })
+  await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
+  await expect(settledReplies(page)).toHaveCount(1)
+  expect(
+    recordFor(mock, BUG3A_MARKER_TAB_A).answered,
+    'tab A must have been answered exactly once at the mock',
+  ).toBe(1)
+}
+
 // ─── Bug-3: Concurrent sessions both respond ──────────────────────────────────
 
 test.describe('Bug-3: Concurrent sessions both respond', () => {
@@ -422,19 +619,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       //
       // Traces to: Bug-3 (concurrent sessions both respond); issue #1661.
 
-      const mock = await startHeldStreamProvider({
-        // The fixture's `scripts` branch branches the reply PER PROMPT (the
-        // shared fixture, extended in round 5 — not a fork): tab A answered
-        // with the exact scripted text, tab B held open. promptIncludes stays
-        // required by the option type; with scripts set, matching walks the
-        // scripts (last user message backwards), not promptIncludes.
-        promptIncludes: BUG3A_MARKER_TAB_B,
-        chunkIntervalMs: 20,
-        scripts: [
-          { promptIncludes: BUG3A_MARKER_TAB_A, behavior: 'answer', answerText: BUG3A_ANSWER_TAB_A },
-          { promptIncludes: BUG3A_MARKER_TAB_B, behavior: 'hold' },
-        ],
-      })
+      const mock = await startBug3aMock()
       let gw: GatewayProcess | null = null
       // Hoisted so the finally can close every page this test opened BEFORE
       // stopping the gateway (round-3 cleanup-order fix, diag D1): a page left
@@ -448,154 +633,34 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       let bodyFailed = false
       let bodyError: unknown
       try {
-        gw = await GatewayProcess.start({
-          apiBase: mock.url,
-          model: E2E_FALLBACK.model,
-          adminPassword: 'admin1234',
-        })
+        gw = await startBug3aGateway(mock)
+        page2 = await openBug3aTabs(context, page, gw)
+        await freshBug3aChats(page, page2)
 
-        // Tab 1 logs in through the UI; tab 2 shares the context's cookies, so
-        // no second login (and the session-token slot stays single).
-        await loginToGateway(page, gw)
-        await awaitWorkspaceChrome(page)
-        page2 = await context.newPage()
-        await page2.goto(gw.baseURL)
-        await awaitWorkspaceChrome(page2)
+        // B is sent FIRST and A only once the mock has RECEIVED and held B's
+        // request (CHECK F1) — the overlap proof's premise; full rationale on
+        // sendTabBAndAwaitHeld.
+        await sendTabBAndAwaitHeld(page2, mock)
 
-        // Fresh chats on both tabs — two genuinely distinct, empty sessions of
-        // the same agent (freshChat, fixtures/session-setup.ts: public REST +
-        // the SPA's own deep-link route; the agent-row "New chat" button is
-        // gone by founder decision D7).
-        const tabA = await freshChat(page)
-        const tabB = await freshChat(page2)
-        expect(
-          tabA.sessionId,
-          'the two tabs must chat in two DISTINCT sessions for the concurrency property to mean anything',
-        ).not.toBe(tabB.sessionId)
-        await expect(settledReplies(page)).toHaveCount(0, { timeout: 10_000 })
-        await expect(settledReplies(page2)).toHaveCount(0, { timeout: 10_000 })
+        // Now send tab A (A's turn ends on its first model call) and prove
+        // the overlap at the mock; see sendTabAAndAwaitOverlap.
+        await sendTabAAndAwaitOverlap(page, mock)
 
-        // Send on tab B FIRST, and do not send tab A until the mock has
-        // RECEIVED and held B's request. This is what turns the later
-        // assertions into a real overlap proof (CHECK F1): a gateway that
-        // services one session at a time cannot pass, because A is only sent
-        // once B is verifiably in flight, and A's completion is only accepted
-        // while that SAME B request is still open. The marker inside each
-        // message is what the MOCK branches on (hold B, answer A) — no call
-        // counter, which could never tell the two tabs' streaming calls apart
-        // on a shared agent.
-        const input2 = chatInput(page2)
-        await input2.fill(`${BUG3A_MARKER_TAB_B} — Bug-3 mock concurrent test, tab B`)
-        await input2.press('Enter')
+        // 2. A's reply settled while B is still open at the mock (step 2 in
+        //    assertTabASettledWhileBHeld, with the exact-body check).
+        await assertTabASettledWhileBHeld(page, mock)
 
-        // 0. B's request must arrive at the mock BEFORE A is sent. From here
-        //    on, "B in flight" is an observed fact, not an assumption.
-        await expect
-          .poll(() => recordFor(mock, BUG3A_MARKER_TAB_B).held, {
-            timeout: 30_000,
-            intervals: [250, 500, 1_000],
-          })
-          .toBe(true)
+        // 3–5. The user action under test: stop tab B; the wire-level cancel
+        // proof pins WHICH side closed B (stopTabBAndAwaitCancel).
+        await stopTabBAndAwaitCancel(page2, mock)
 
-        // Now send tab A. (The mock answers A with a final "stop"-finished
-        // answer carrying no tool calls, so A's turn ends on its first model
-        // call.)
-        const input1 = chatInput(page)
-        await input1.fill(`${BUG3A_MARKER_TAB_A} — Bug-3 mock concurrent test, tab A`)
-        await input1.press('Enter')
+        // 6. Tab B ends CANCELLED (assertTabBCancelled).
+        await assertTabBCancelled(page2)
 
-        // 1. Deterministic overlap proof at the mock: A's request ANSWERED
-        //    while the SAME B request observed above is STILL OPEN. The
-        //    fixture's per-prompt record has no per-request ids, so continuity
-        //    is pinned by requests === 1: exactly ONE B request has ever
-        //    arrived and it is still the one held — close/reopen churn would
-        //    push requests ≥ 2 and fail this poll exactly as the old seq pin
-        //    did.
-        await expect
-          .poll(
-            () => {
-              const a = recordFor(mock, BUG3A_MARKER_TAB_A)
-              const b = recordFor(mock, BUG3A_MARKER_TAB_B)
-              return {
-                tabAAnswered: a.answered >= 1,
-                tabBStillOpen: b.held && !b.clientClosed && b.requests === 1,
-              }
-            },
-            { timeout: 30_000, intervals: [250, 500, 1_000] },
-          )
-          .toEqual({ tabAAnswered: true, tabBStillOpen: true })
-
-        // 2. Tab A's settled reply is visible NOW — while tab B's request is
-        //    still open at the mock — and it is A's ONLY settled reply, with
-        //    its body EXACTLY the scripted text (toHaveText, not a substring
-        //    check — CHECK F2). The B-open re-read immediately after the DOM
-        //    assertion pins the overlap to the same moment: A's reply was
-        //    settled while B had not even closed its held request.
-        await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
-          timeout: 15_000,
-        })
-        await expect(settledReplyBodies(page)).toHaveText([BUG3A_ANSWER_TAB_A])
-        await expect(settledReplies(page)).toHaveCount(1)
-        const tabBHeld = recordFor(mock, BUG3A_MARKER_TAB_B)
-        expect(
-          tabBHeld.held && tabBHeld.requests === 1,
-          'the held tab-B request observed before tab A was sent must STILL be the one open request at the moment tab A’s reply is settled in the DOM',
-        ).toBe(true)
-
-        // 3. Tab B has NO reply yet: no settled row (a running placeholder
-        //    wouldn't pass this locator, and neither would an interrupted one),
-        //    and its turn is still streaming (the Stop button is up).
-        await expect(settledReplies(page2)).toHaveCount(0)
-        // Stop is clicked in the tab the user is viewing: bring tab B to the
-        // foreground first. A BACKGROUND tab throttles its renderer, and the
-        // click can otherwise sit in Chromium's input-dispatch queue past any
-        // reasonable budget — observed with every actionability check already
-        // green ("visible, enabled and stable" → "performing click action" →
-        // stall; the queued click eventually landed and cancelled the turn,
-        // receipt bug3a-run2). Foregrounding the tab is what a human does; a
-        // realism fix, not a timeout increase.
-        await page2.bringToFront()
-        await expect(page2.getByTestId('stop-btn')).toBeVisible({ timeout: 15_000 })
-
-        // 4. Stop on tab B — the user action under test.
-        await page2.getByTestId('stop-btn').click({ timeout: 5_000 })
-
-        // 5. Deterministic cancel proof at the wire: the gateway canceled B's
-        //    provider call, so B's held request is no longer open at the mock
-        //    (the client closed it — the same cancel that the gateway logs as
-        //    turn_canceled). clientClosed is incremented in the same close
-        //    event that clears held, and never by a fixture-side finish
-        //    (release() is not used here), so open:false together with
-        //    cancelledByClient pins WHICH side closed B — the gateway's cancel.
-        await expect
-          .poll(
-            () => {
-              const b = recordFor(mock, BUG3A_MARKER_TAB_B)
-              return { open: b.held, cancelledByClient: b.clientClosed >= 1 }
-            },
-            { timeout: 15_000, intervals: [250, 500, 1_000] },
-          )
-          .toEqual({ open: false, cancelledByClient: true })
-
-        // 6. Tab B ends CANCELLED: an interrupted-status row carrying the
-        //    product's "(interrupted)" suffix — and still no settled reply.
-        //    An interrupted/incomplete message is data-status="incomplete"
-        //    (buildMessageStatus maps the store's interrupted status there),
-        //    which the settledReplies oracle never admits.
-        await expect(interruptedReplyRow(page2)).toBeVisible({ timeout: 30_000 })
-        await expect(settledReplies(page2)).toHaveCount(0)
-
-        // 7. Tab A unaffected by B's cancel: its settled reply is still there,
-        //    still its only one, and the mock answered A exactly once (no
-        //    re-send, no second streaming call for A's turn).
-        await expect(settledReplyWithText(page, BUG3A_ANSWER_TAB_A)).toBeVisible({
-          timeout: 15_000,
-        })
-        await expect(settledReplies(page)).toHaveCount(1)
-        expect(
-          recordFor(mock, BUG3A_MARKER_TAB_A).answered,
-          'tab A must have been answered exactly once at the mock',
-        ).toBe(1)
+        // 7. Tab A unaffected by B's cancel — its reply body is still EXACTLY
+        //    the scripted text after the cancel (R3-F1), its only settled
+        //    reply, answered exactly once at the mock.
+        await assertTabAUnaffectedByBCancel(page, mock)
       } catch (err) {
         bodyFailed = true
         bodyError = err
