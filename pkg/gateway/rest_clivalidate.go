@@ -138,11 +138,14 @@ func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request
 	}
 	defer cliValidateInflight.release(key)
 
-	// Trim leading/trailing whitespace on the path (D-3.5) before classifying,
-	// but keep the RAW requested value for the audit record (M-1 — forensics need
-	// exactly what the caller asked for, including a no-spawn classification).
+	// The path is checked exactly as given, never trimmed: Save stores and
+	// every run checks the literal bytes, and a trimmed spelling could name a
+	// different program. A blank or whitespace-only path is classified as
+	// missing inside validateCLI. The audit record keeps the same raw value
+	// (M-1 — forensics need exactly what the caller asked for, including a
+	// no-spawn classification).
 	rawPath := req.CliPath
-	resp := a.validateCLI(r.Context(), string(req.Cli), strings.TrimSpace(rawPath))
+	resp := a.validateCLI(r.Context(), string(req.Cli), rawPath)
 
 	// Audit exactly one event per call (FR-013 / M-1), including the no-spawn
 	// classifications (unknown-cli / empty / non-regular). The authenticated
@@ -164,10 +167,11 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 	if !isSupportedCLI(cli) {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonUnknownCli, nil, nil)
 	}
-	// 2. Empty path — short-circuit to missing-binary; NEVER a silent $PATH
-	//    fallback (FR-014). This MUST stay before the LookPath resolve below so an
-	//    empty path never triggers a $PATH search for the default binary name.
-	if cliPath == "" {
+	// 2. Blank path (empty or whitespace-only) — short-circuit to
+	//    missing-binary; NEVER a silent $PATH fallback (FR-014). This MUST stay
+	//    before the program check below. Any other path is checked literally,
+	//    surrounding whitespace included.
+	if strings.TrimSpace(cliPath) == "" {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
 	}
 	// 3. Shared program-file check BEFORE any spawn (T11 spec §3.2, FR-5;
