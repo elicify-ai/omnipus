@@ -125,6 +125,8 @@ func piRedNewGuardHarness(t *testing.T) *piRedGuardHarness {
 	api.devServers = reg
 	devEntry, regErr := reg.Register(piRedGuardAgent, upstreamPort(t, upstream.URL), 0, "npm run dev", 10)
 	require.NoError(t, regErr)
+	require.NotNil(t, devEntry, "Register must return the dev registration")
+	require.NotEmpty(t, devEntry.Token, "Register must mint a non-empty token")
 	h.devToken = devEntry.Token
 
 	mainMux := http.NewServeMux()
@@ -216,6 +218,31 @@ func piRedMode2CSPTemplate(origin, wsOrigin, prefix string) string {
 		"base-uri 'none';\n" +
 		"object-src 'none';\n" +
 		"frame-ancestors 'none';\n"
+}
+
+// piRedDevGuardLabel returns the Mode 1 label of the harness's OWN dev
+// registration (review F1, FR-008: a label serves only its own registration,
+// so a request reaches the dev upstream only through the dev entry's label).
+// It checks what Register really returned instead of calling the Linux-only
+// dev tool: the entry exists under its token, the label is valid, splits
+// into the 2-part <label>.localhost host and resolves back to this entry.
+func piRedDevGuardLabel(t *testing.T, h *piRedGuardHarness) string {
+	t.Helper()
+	entry := h.api.devServers.Lookup(h.devToken)
+	require.NotNil(t, entry, "the dev registration must exist under its own token")
+	require.Equal(t, piRedGuardAgent, entry.AgentID)
+	labelURL := middleware.PreviewIsolatedURL("http://localhost:"+h.port, h.devToken)
+	require.NotEmpty(t, labelURL, "the dev mint must produce an isolated_url (FR-001/FR-022)")
+	u := strings.TrimSuffix(strings.TrimPrefix(labelURL, "http://"), "/")
+	parts := strings.SplitN(u, ".", 2)
+	require.Len(t, parts, 2, "isolated_url must be <label>.localhost[:port], got %q", labelURL)
+	label := parts[0]
+	require.Equal(t, middleware.PreviewLabelForToken(h.devToken), label)
+	require.True(t, middleware.IsValidPreviewLabel(label), "invalid preview label %q", label)
+	byLabel := h.api.devServers.LookupByLabel(label)
+	require.NotNil(t, byLabel, "the label must resolve to a dev registration")
+	require.Equal(t, h.devToken, byLabel.Token, "the label must resolve to THIS dev registration")
+	return label
 }
 
 // piRedMintGuardLabel mints a Mode 1 label through the serve_web tool.

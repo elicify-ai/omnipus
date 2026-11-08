@@ -266,7 +266,7 @@ func TestFix3Mode2Redirect_PercentEncodedAgentIDEmitted(t *testing.T) {
 
 func TestFix3Mode1ServiceWorker_NotRefused(t *testing.T) {
 	h := piRedNewGuardHarness(t)
-	label := piRedMintGuardLabel(t, h)
+	label := piRedDevGuardLabel(t, h)
 
 	t.Run("mode1_sw_request_reaches_the_app", func(t *testing.T) {
 		h.upstreamHits.Store(0)
