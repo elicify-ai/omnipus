@@ -144,13 +144,29 @@ func TestSend_WhileReconnectFailsKeepsTheTemporaryRetryClass(t *testing.T) {
 		"after recovery a send must pass the connection guard (the temporary class the window's retries relied on) and reach the real send path")
 }
 
+// w7ApprovedReconnectReason is the exact, founder-approved wording of the
+// availability reason while the managed reconnect is failing (issue #1687,
+// founder decision Q3 B): a lower-case fragment with no final full stop.
+//
+// It is written out here byte for byte ON PURPOSE: it is the test's oracle.
+// The production constant (native_lifecycle.go::reconnectingReason), the
+// channel's NotRunningReason accessor and the manager's Availability result
+// must each equal it. Never replace it by a reference to production code: a
+// test that reads its expected text from the code under test passes for any
+// wrong wording (CHECK round 2, F3 — with the constant changed to "the
+// connection to WhatsApp is permanently unavailable" the old test stayed
+// green).
+const w7ApprovedReconnectReason = "the connection to WhatsApp was lost and is being re-established automatically"
+
 // TestAvailability_WhileReconnectFailsIsTheWhatsAppReconnectReason pins
 // founder Q3 B: in the failing-managed-reconnect window the availability API
 // answers not_running with a WhatsApp-specific reason — the connection was
 // lost and is being re-established — never the shared "not started" (nor any
-// other shared reason value). The wording belongs to the developer under the
-// omnipus-voice rules; the test pins distinctness, not text. A recovered
-// channel answers running with an empty reason again.
+// other shared reason value). The reason is pinned to the exact approved
+// wording, w7ApprovedReconnectReason, on all three surfaces that carry it:
+// the production constant, the channel's NotRunningReason accessor and the
+// manager's Availability result. A recovered channel answers running with an
+// empty reason again.
 func TestAvailability_WhileReconnectFailsIsTheWhatsAppReconnectReason(t *testing.T) {
 	mb := bus.NewMessageBus()
 	t.Cleanup(mb.Close)
@@ -173,13 +189,17 @@ func TestAvailability_WhileReconnectFailsIsTheWhatsAppReconnectReason(t *testing
 	avail := m.Availability(instance)
 	require.Equal(t, channels.AvailabilityNotRunning, avail.State,
 		"instrument: the window reports not running; the founder pins the reason, not the state")
-	// Round-8 strengthening: the reason is pinned as a distinct VALUE —
-	// exactly the channel's reconnecting reason constant — not merely "not
-	// one of the shared strings".
-	require.Equal(t, reconnectingReason, avail.Reason,
-		"founder Q3 B: in the failing managed reconnect window the availability reason is exactly the WhatsApp reconnect reason (the channel's reconnectingReason constant)")
-	require.Equal(t, reconnectingReason, f.ch.NotRunningReason(),
-		"founder Q3 B: the channel's NotRunningReasoner accessor carries the same reason the manager reports through Availability")
+	// The reason is pinned to the founder-approved wording itself, never to
+	// anything the code under test defines: every assertion below expects the
+	// literal w7ApprovedReconnectReason. The production constant, the
+	// accessor and the manager's result must each equal it, so a wrong
+	// constant cannot pass by agreeing with itself (CHECK round 2, F3).
+	require.Equal(t, w7ApprovedReconnectReason, reconnectingReason,
+		"founder Q3 B: the channel's reconnect-reason constant (native_lifecycle.go::reconnectingReason) must be exactly the founder-approved wording")
+	require.Equal(t, w7ApprovedReconnectReason, f.ch.NotRunningReason(),
+		"founder Q3 B: in the failing managed reconnect window the channel's NotRunningReasoner accessor must return exactly the founder-approved wording")
+	require.Equal(t, w7ApprovedReconnectReason, avail.Reason,
+		"founder Q3 B: in the failing managed reconnect window the availability reason the manager reports must be exactly the founder-approved wording")
 	require.NotEqual(t, "not started", avail.Reason,
 		"founder Q3 B: in the failing managed reconnect window the availability reason must be the WhatsApp reconnect reason, not the shared \"not started\"")
 	require.NotEqual(t, "not running", avail.Reason,
