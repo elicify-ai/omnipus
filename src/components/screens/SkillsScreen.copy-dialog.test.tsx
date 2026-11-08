@@ -167,3 +167,33 @@ describe('SkillsScreen — S-6.4 built-in copy flow', () => {
     }
   })
 })
+
+// CHECK finding 3 (round 4): nothing rendered the Skills "No MCP servers
+// connected" branch, so CHECK's paragraph mutant there was inconclusive.
+// The branch must render the real kit Empty — the dashed-border root, the
+// aria-hidden icon media and the sentence in the description slot — the
+// same structure the notification panel is locked to. The file's existing
+// mocks already return fetchMcpServers: [] (no loading, no error), so the
+// branch is reached by opening the MCP Servers tab.
+describe('SkillsScreen — the MCP empty state is the kit Empty structure (CHECK F3)', () => {
+  it('renders "No MCP servers connected." as the kit Empty, not just the sentence', async () => {
+    const user = userEvent.setup()
+    await renderSkillsScreen()
+    await user.click(screen.getByRole('tab', { name: 'MCP Servers' }))
+
+    const sentence = screen.getByText('No MCP servers connected.')
+    const description = sentence.closest('[data-slot="empty-description"]')
+    expect(description).not.toBeNull()
+    const empty = description!.closest('[data-slot="empty"]')
+    expect(empty).not.toBeNull()
+    expect(empty).toHaveClass('border-dashed')
+    const media = empty!.querySelector('[data-slot="empty-media"]')
+    expect(media).not.toBeNull()
+    expect(media).toHaveAttribute('aria-hidden', 'true')
+    expect(media).toHaveAttribute('data-variant', 'icon')
+    expect(media!.querySelector('svg')).not.toBeNull()
+    // The empty branch replaces the server cards; the "Add Server" button
+    // lives above the branch and stays.
+    expect(screen.getByRole('button', { name: 'Add Server' })).toBeInTheDocument()
+  })
+})

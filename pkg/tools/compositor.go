@@ -185,9 +185,25 @@ func resolveEffectivePolicyWith(
 	// honor it identically. The override stays non-destructive: only the local
 	// g is replaced — cfg.Policies / cfg.GlobalPolicies are NOT mutated, so
 	// clearing cfg.GodMode restores the prior decision exactly.
-	if cfg.GodMode {
+	//
+	// Always-ask exception (channels FR-036, T-10, founder Q22 B): a tool in
+	// AlwaysAskTools never receives the floor. Its stored layers are merged
+	// deny-first exactly as below, and an allow verdict then becomes ask, so
+	// the verdict is always ask or deny and a stored deny survives God Mode.
+	alwaysAsk := IsAlwaysAsk(toolName)
+	if cfg.GodMode && !alwaysAsk {
 		g = config.ToolPolicyAllow
 	}
+	verdict := mergeStoredPolicyLayers(toolName, g, a)
+	if alwaysAsk && verdict == config.ToolPolicyAllow {
+		return config.ToolPolicyAsk
+	}
+	return verdict
+}
+
+// mergeStoredPolicyLayers is the strictest-wins global x agent merge
+// (deny > ask > allow) behind resolveEffectivePolicyWith.
+func mergeStoredPolicyLayers(toolName string, g, a config.ToolPolicy) config.ToolPolicy {
 	switch {
 	case g == "" && a == "":
 		// Structurally impossible once boot/write-time coverage validation is
@@ -246,7 +262,9 @@ func ResolveEffectivePolicyIfCovered(cfg *ToolPolicyCfg, toolName string) (strin
 	if cfg == nil {
 		return "", false
 	}
-	if !cfg.GodMode &&
+	// God Mode covers every tool except an always-ask one, which never
+	// receives the floor (FR-036) and so is covered only by a stored layer.
+	if (!cfg.GodMode || IsAlwaysAsk(toolName)) &&
 		resolveFromMap(toolName, cfg.GlobalPolicies, buildWildcardIndex(cfg.GlobalPolicies)) == "" &&
 		resolveFromMap(toolName, cfg.Policies, buildWildcardIndex(cfg.Policies)) == "" {
 		return "", false

@@ -228,7 +228,8 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 // approvals skipped, writes and network open, internal files still protected
 // (L1 amendment §2.2 D7 floor), and started programs see the gateway
 // environment including API keys (accepted risk).
-const omnipusGodModeNote = "God Mode is active: approvals are skipped — post the plan summary as an ordinary message and proceed without the Go question and without tool approvals, including changes another agent asked for. Clarification questions for genuinely missing information still appear. You can write anywhere on this machine and use the network, and programs you start see the gateway environment, including API keys. Omnipus's internal files stay protected."
+// channels-spec-r8 FR-036 adds the one always-ask exception clause.
+const omnipusGodModeNote = "God Mode is active: approvals are skipped — post the plan summary as an ordinary message and proceed without the Go question and without tool approvals — except set_channel_outbound, which always asks for approval —, including changes another agent asked for. Clarification questions for genuinely missing information still appear. You can write anywhere on this machine and use the network, and programs you start see the gateway environment, including API keys. Omnipus's internal files stay protected."
 
 // wireModeNoteInjectors installs the per-turn mode-note callback: Omnipus gets
 // the God Mode note while GodModeActive reads true for the live config, and no
