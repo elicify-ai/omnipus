@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"path/filepath"
@@ -180,8 +181,21 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// second one. Without this, the SPA receives two media frames for
 	// one image and the user sees the screenshot twice.
 	sent := sendFileResultText(ctx, channel, filename, resolved)
+	// A reused ref must get the sent-file lifetime too: a ref from an
+	// unpinned scope (the person's upload) would otherwise expire and take
+	// the sent card with it. A store that cannot pin, or a ref that expired
+	// before the pin, gets a fresh pinned ref below instead.
 	if existingRef, ok := t.mediaStore.RefByPath(resolved); ok {
-		return MediaResult(sent, []string{existingRef})
+		pinner, canPin := t.mediaStore.(sentFilePinner)
+		if canPin {
+			pinErr := pinner.PinRef(existingRef, scope)
+			if pinErr == nil {
+				return MediaResult(sent, []string{existingRef})
+			}
+			if !errors.Is(pinErr, media.ErrNotFound) {
+				return ErrorResult(fmt.Sprintf("failed to keep the sent file available: %v", pinErr))
+			}
+		}
 	}
 
 	ref, err := t.mediaStore.Store(resolved, media.MediaMeta{
@@ -195,6 +209,12 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	return MediaResult(sent, []string{ref})
+}
+
+// sentFilePinner is the media store's optional PinRef (FileMediaStore
+// implements it), kept out of media.MediaStore so no other store has to.
+type sentFilePinner interface {
+	PinRef(ref, scope string) error
 }
 
 // sendFileByNameNote tells the agent how to refer to a file it sent over a

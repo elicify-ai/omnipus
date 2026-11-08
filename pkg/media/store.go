@@ -172,6 +172,19 @@ type FileMediaStore struct {
 	// held while acquiring any other lock.
 	succMu    sync.Mutex
 	successor *FileMediaStore
+
+	// failedRefs holds registry rows whose file LoadRegistry could not inspect
+	// for a reason other than "does not exist" (permission, I/O). They are not
+	// live refs: resolving one returns its kept cause, never ErrNotFound, and
+	// SaveRegistry keeps writing the row so it is not lost. Guarded by mu.
+	failedRefs map[string]failedRegistryRef
+}
+
+// failedRegistryRef is one registry row LoadRegistry kept with its inspection
+// error instead of loading it.
+type failedRegistryRef struct {
+	rec registryRecord
+	err error
 }
 
 // saveDebounce is the coalescing window for SaveRegistry. Calls landing
@@ -284,6 +297,61 @@ func (s *FileMediaStore) forwardToSuccessors(ref, localPath string, meta MediaMe
 		succ.succMu.Unlock()
 		succ = next
 	}
+}
+
+// PinRef moves ref into scope unless it already sits in a pinned scope (see
+// isPinnedScope), so an existing ref that send_file reuses gets the sent-file
+// lifetime instead of expiring with its original scope (for example the
+// person's upload). The ref ID, path and metadata do not change. Returns
+// ErrNotFound when ref is not registered, e.g. it expired before the pin. The
+// change is persisted and forwarded down the handover chain like Store.
+func (s *FileMediaStore) PinRef(ref, scope string) error {
+	if !isPinnedScope(scope) {
+		return fmt.Errorf("media store: pin %s: scope %q is not a pinned scope", ref, scope)
+	}
+	if err := s.pinRef(ref, scope); err != nil {
+		return err
+	}
+	s.scheduleSave()
+	s.succMu.Lock()
+	succ := s.successor
+	s.succMu.Unlock()
+	for succ != nil {
+		// pinRef's only error is ErrNotFound: a successor that never received
+		// this ref has nothing to pin.
+		if err := succ.pinRef(ref, scope); err == nil {
+			succ.scheduleSave()
+		}
+		succ.succMu.Lock()
+		next := succ.successor
+		succ.succMu.Unlock()
+		succ = next
+	}
+	return nil
+}
+
+func (s *FileMediaStore) pinRef(ref, scope string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.refs[ref]; !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
+	old := s.refToScope[ref]
+	if isPinnedScope(old) {
+		return nil
+	}
+	if refs, ok := s.scopeToRefs[old]; ok {
+		delete(refs, ref)
+		if len(refs) == 0 {
+			delete(s.scopeToRefs, old)
+		}
+	}
+	if s.scopeToRefs[scope] == nil {
+		s.scopeToRefs[scope] = make(map[string]struct{})
+	}
+	s.scopeToRefs[scope][ref] = struct{}{}
+	s.refToScope[ref] = scope
+	return nil
 }
 
 // RefByPath returns the most-recently-registered ref pointing at localPath,
@@ -418,6 +486,9 @@ func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, e
 
 	entry, ok := s.refs[ref]
 	if !ok {
+		if failed, isFailed := s.failedRefs[ref]; isFailed {
+			return "", MediaMeta{}, fmt.Errorf("media store: %s: registered file could not be inspected when the registry loaded: %w", ref, failed.err)
+		}
 		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
 	return entry.path, entry.meta, nil
@@ -668,7 +739,7 @@ func (s *FileMediaStore) Stop() {
 //     ID, forwardToSuccessors), so the live store resolves them and, being
 //     the only store with saves armed, persists them.
 //
-// Only the five ref-state maps are copied; dst keeps its own cleaner config,
+// Only the ref-state maps (including failedRefs) are copied; dst keeps its own cleaner config,
 // cleanup goroutine, workspace-library provider and save machinery. A ref
 // whose file was deleted externally stays handled exactly as before the swap
 // (it resolves to a path that fails on open) — handover preserves the old
@@ -726,12 +797,24 @@ func (s *FileMediaStore) HandoverTo(dst *FileMediaStore) {
 	dst.refToScope = copyStringMap(s.refToScope)
 	dst.refToPath = copyStringMap(s.refToPath)
 	dst.pathStates = copyPathStates(s.pathStates)
+	dst.failedRefs = copyFailedRefs(s.failedRefs)
 	dst.mu.Unlock()
 	s.mu.Unlock()
 
 	// Persist the handed-over state on dst: saves on s are retired from this
 	// point, so dst's save machinery is the only path to registry.json.
 	dst.scheduleSave()
+}
+
+func copyFailedRefs(src map[string]failedRegistryRef) map[string]failedRegistryRef {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]failedRegistryRef, len(src))
+	for ref, failed := range src {
+		dst[ref] = failed
+	}
+	return dst
 }
 
 func copyRefEntries(src map[string]mediaEntry) map[string]mediaEntry {
