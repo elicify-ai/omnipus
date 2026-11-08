@@ -124,5 +124,6 @@ The catalog changes over time. Use the provider and model lists in **Settings �
 
 - [Agents](agents.md) — choose the main model and fallback models for each agent.
 - [Settings](settings.md) — find the Providers tab and other installation controls.
+- [Custom endpoint](custom-endpoint.md) — connect Azure OpenAI or another unlisted service in the setup wizard.
 - [Tools](tools.md) — understand the tools sent with every model request.
 - [Troubleshooting](troubleshooting.md) — diagnose connection and credential failures.

@@ -78,5 +78,6 @@ The check on screen 4 runs when you pick a model, or when you press its Check co
 - [agents](agents.md) — the built-in chat colleagues and workers, and how to add your own
 - [concepts](concepts.md) — the mental model behind agents, workspaces, and connectors
 - [settings](settings.md) — changing providers, models, and limits after the install
+- [custom endpoint](custom-endpoint.md) — connect Azure OpenAI or another unlisted provider in the wizard
 - [connectors](connectors.md) — reaching your agents from Telegram, Discord, and other apps
 - [troubleshooting](troubleshooting.md) — the first stop when something does not start
