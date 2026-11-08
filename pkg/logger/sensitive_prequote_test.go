@@ -525,3 +525,78 @@ func TestScrubber_EscapeGrammarOctalEchoIsDecoded(t *testing.T) {
 	require.Contains(t, values[0], scrubberMaskToken,
 		"the mask token %s must stand in for the credential", scrubberMaskToken)
 }
+
+// scrubberSingleByteSpellings returns the one-escaped-byte spelling (\xHH)
+// of every code point U+00A0..U+00FF in s — the spelling a diagnostic source
+// outside this process may use for an accented character, writing its code
+// point instead of the character's UTF-8 bytes.
+func scrubberSingleByteSpellings(s string) []string {
+	var out []string
+	for _, r := range s {
+		if r >= 0xa0 && r <= 0xff {
+			out = append(out, fmt.Sprintf(`\x%02x`, r))
+		}
+	}
+	return out
+}
+
+// scrubberByteSpelled spells every byte of an ASCII value as \xHH, for the
+// control row.
+func scrubberByteSpelled(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		fmt.Fprintf(&b, `\x%02x`, s[i])
+	}
+	return b.String()
+}
+
+// TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink extends the
+// echo regressions to the one-byte code-point reading (round-5 decision on
+// the developer's round-4 open question): a diagnostic source outside this
+// process may spell an accented character of a registered value as ONE
+// escaped byte of its code point (U+00A0..U+00FF), inside a quoted field,
+// within the decode limit. The rule is unchanged — the value must not reach
+// the sink in that or any other recoverable spelling, and the mask must
+// stand in. The ASCII row shows the existing byte-spelling masking is
+// unchanged: an ASCII value spelled byte-for-byte is masked today and must
+// stay masked.
+func TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink(t *testing.T) {
+	t.Run("code_point_within_depth", func(t *testing.T) {
+		const cred = "token-é-9W"
+		restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
+		t.Cleanup(restore)
+		field := strconv.Quote(`provider echoed token-\xe9-9W at retry`)
+		raw := scrubberLogRawField(t, field)
+		values := scrubberFileStringValues(t, raw)
+		require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+		for _, variant := range scrubberDecodeClosure(values[0]) {
+			require.NotContains(t, variant, cred,
+				"a recoverable spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+				scrubberMaskToken)
+		}
+		for _, spelling := range scrubberSingleByteSpellings(cred) {
+			require.NotContains(t, values[0], spelling,
+				"the one-byte escaped spelling %s of the registered character survives the file sink; want %s",
+				spelling, scrubberMaskToken)
+		}
+		require.Contains(t, values[0], scrubberMaskToken,
+			"the mask token %s must stand in for the credential", scrubberMaskToken)
+	})
+
+	t.Run("ascii_bytes_control", func(t *testing.T) {
+		const cred = "token-9W"
+		restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
+		t.Cleanup(restore)
+		field := strconv.Quote("provider echoed " + scrubberByteSpelled(cred) + " at retry")
+		raw := scrubberLogRawField(t, field)
+		values := scrubberFileStringValues(t, raw)
+		require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+		for _, variant := range scrubberDecodeClosure(values[0]) {
+			require.NotContains(t, variant, cred,
+				"a recoverable spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+				scrubberMaskToken)
+		}
+		require.Contains(t, values[0], scrubberMaskToken,
+			"the mask token %s must stand in for the credential", scrubberMaskToken)
+	})
+}
