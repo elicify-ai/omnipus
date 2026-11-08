@@ -60,6 +60,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
@@ -1389,6 +1390,20 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills/", stg.api.withAuth(stg.api.HandleSkills))
 	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/commands", stg.api.withAuth(stg.api.HandleListCommands))
 	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/doctor", stg.api.withAuth(stg.api.HandleDoctor))
+
+	// Founder decision 2026-11-08 (Q8 B): workspaces whose delegation store
+	// saved an explicit edge depth of 3 under the OLD shipped default (raised
+	// to 10 by the founder ruling of 2026-10-27) are migrated ONCE to 10,
+	// before any surface can read a store. The store cannot tell an old-default
+	// 3 from a deliberate 3 (no provenance field) — the founder accepted
+	// rewriting both, once, guarded by a marker file inside the agent-unreachable
+	// store directory (pkg/workspace/delegation_depth_migration.go, which states
+	// the risks). Best-effort, same posture as ensureDefaultWorkspace below: a
+	// failure is logged and boot continues; the next boot re-runs the migration
+	// unless the marker was written.
+	if _, mErr := workspace.MigrateDelegationDepthDefaultOnce(stg.homePath); mErr != nil {
+		slog.Error("gateway: delegation depth default migration failed", "error", mErr)
+	}
 
 	// Ensure the default workspace exists (FR-1.6). Best-effort: a failure
 	// is logged but does not abort gateway startup.

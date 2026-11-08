@@ -271,7 +271,7 @@ How much work one agent can hand to another is bounded in two ways: a Performanc
 
 - A workspace **Team** edge can set a tighter depth for a particular agent pair. When both a global value and an edge value exist, the smaller one wins.
 - With nothing set, the code still caps a chain at **ten** levels.
-- The depth caps how deep a chain of delegations can go, not how many helpers one agent may start — a ten-level chain can still start many helpers. A workspace already saved with an explicit depth of 3 keeps that 3 until it is changed.
+- The depth caps how deep a chain of delegations can go, not how many helpers one agent may start — a ten-level chain can still start many helpers. If a workspace was saved while the default was still 3, the first start after upgrading raises that stored 3 to the new default **10** once, with one line in the log. A depth of 3 set after that is a deliberate choice and is kept until it is changed.
 
 ### How many agents run at once
 

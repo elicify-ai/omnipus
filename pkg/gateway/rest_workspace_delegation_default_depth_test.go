@@ -7,6 +7,12 @@
 // The explicit-config path (fixture cap 3) stays covered in
 // rest_workspace_delegation_test.go; everything here uses the config left
 // UNSET with LITERAL expected numbers, so a moved default fails loudly.
+//
+// Founder decision 2026-11-08 (Q8 B): a delegation store that saved an
+// explicit edge depth of 3 under the OLD shipped default is migrated ONCE to
+// 10 at boot (workspace.MigrateDelegationDepthDefaultOnce, called by
+// gateway_boot before any surface reads a store); a 3 saved AFTER that
+// migration is a deliberate choice and persists.
 
 package gateway
 
@@ -66,16 +72,16 @@ func TestWorkspaceDelegation_PutRoundTrip_UnsetConfigShipsTen(t *testing.T) {
 		"an inherit edge must still be inherit after the round-trip")
 }
 
-// TestWorkspaceDelegation_ExplicitDepthThreePersists: operator data saved with
-// an explicit edge depth of 3 keeps 3 when the RESOLVED default is the shipped
-// 10. The fixture leaves performance.max_delegation_depth UNSET, so "kept 3"
-// can only come from preserving the stored value — a fixture cap of 3 would
-// make a regression that rewrites a saved 3 to the resolved default invisible
-// (the default would be 3 too; mutation-verified). The delegation store is
-// seeded directly BEFORE the first read, so both the plain read-back and a PUT
-// round-trip must preserve the operator's 3, while default_depth keeps
-// exposing the shipped 10 — never the stored edge depth, never an upgrade of
-// operator data to the shipped default.
+// TestWorkspaceDelegation_ExplicitDepthThreePersists: the one-time boot
+// migration (founder decision 2026-11-08, Q8 B) raises a stored explicit edge
+// depth of 3 — the value the OLD shipped default materialized — to the shipped
+// 10 exactly once, and a 3 an operator saves AFTER that migration is a
+// deliberate choice that persists unchanged. The fixture leaves
+// performance.max_delegation_depth UNSET, so the migration's effect cannot
+// hide behind a fixture cap (the resolved default is the shipped 10
+// throughout; mutation-verified in rounds 3–4). The delegation store is seeded
+// directly BEFORE the first read, and the boot migration runs exactly as
+// gateway_boot runs it — before any surface reads the store.
 func TestWorkspaceDelegation_ExplicitDepthThreePersists(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPIWithPerf(t, 0) // cap UNSET → default_depth is the shipped 10
 	seed := []storedDelegationEdge{{
@@ -87,21 +93,31 @@ func TestWorkspaceDelegation_ExplicitDepthThreePersists(t *testing.T) {
 	require.NoError(t, saveWorkspaceDelegation(api.homePath, id, seed),
 		"seed the delegation store BEFORE the first read, so the GET below serves persisted operator data")
 
-	// First read: the stored explicit 3 comes back unchanged, and default_depth
-	// exposes the shipped 10 — the stored 3 is neither promoted to the default
-	// nor rewritten to it.
+	// Boot: the one-time migration runs before any surface reads the store —
+	// the same call gateway_boot makes, so the REST surface below sees exactly
+	// what a real upgraded install sees after its first post-upgrade boot.
+	mRes, err := workspace.MigrateDelegationDepthDefaultOnce(api.homePath)
+	require.NoError(t, err)
+	require.True(t, mRes.Ran, "the first migration call must run and write the once-marker")
+	require.Equal(t, 1, mRes.EdgesMigrated, "the stored old-default 3 is migrated once")
+
+	// First read: the stored 3 now reads as the shipped 10 — the one-time
+	// migration, not a read-time rewrite (the marker below keeps every later
+	// run a no-op). default_depth keeps exposing the shipped 10, never the
+	// stored edge depth.
 	w := getDelegation(t, api, id)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	got := decodeDelegation(t, w.Body.Bytes())
 	require.Len(t, got.Edges, 1)
 	require.NotNil(t, got.Edges[0].Depth)
-	assert.Equal(t, 3, *got.Edges[0].Depth,
-		"the stored explicit edge depth 3 must survive a read back unchanged")
+	assert.Equal(t, 10, *got.Edges[0].Depth,
+		"the stored old-default 3 must read as the shipped default 10 after the one-time migration")
 	assert.Equal(t, 10, got.DefaultDepth,
 		"default_depth must expose the shipped default 10, never the stored edge depth")
 
-	// PUT round-trip: resubmitting the explicit graph keeps 3, still against a
-	// default_depth of 10 — the explicit 3 is operator data, not the default.
+	// The operator now deliberately saves an explicit 3 (post-migration — the
+	// marker exists), and it persists: a later migration run is a no-op and no
+	// read or write ever upgrades a deliberate 3.
 	body := `{"edges":[{"from_agent":"jim","to_agent":"ava","modes":["direct"],"depth":3}]}`
 	w = putDelegation(t, api, id, body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -109,15 +125,20 @@ func TestWorkspaceDelegation_ExplicitDepthThreePersists(t *testing.T) {
 	require.Len(t, put.Edges, 1)
 	require.NotNil(t, put.Edges[0].Depth)
 	assert.Equal(t, 3, *put.Edges[0].Depth,
-		"explicit edge depth 3 must survive the PUT response unchanged")
+		"a deliberate edge depth 3 saved after the migration must survive the PUT response unchanged")
 	assert.Equal(t, 10, put.DefaultDepth,
-		"the PUT response must expose the shipped default 10, not upgrade the edge depth into the default")
+		"the PUT response must expose the shipped default 10, not absorb the edge depth into the default")
+
+	// A second migration run (the next boot) must not rewrite the deliberate 3.
+	mRes2, err := workspace.MigrateDelegationDepthDefaultOnce(api.homePath)
+	require.NoError(t, err)
+	assert.False(t, mRes2.Ran, "the once-marker must make every later migration run a no-op")
 
 	got2 := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
 	require.Len(t, got2.Edges, 1)
 	require.NotNil(t, got2.Edges[0].Depth)
 	assert.Equal(t, 3, *got2.Edges[0].Depth,
-		"explicit edge depth 3 must survive the PUT round-trip unchanged")
+		"a deliberate edge depth 3 must survive the PUT round-trip and a later boot's no-op migration")
 	assert.Equal(t, 10, got2.DefaultDepth,
 		"GET after the PUT must still expose the shipped default 10")
 }

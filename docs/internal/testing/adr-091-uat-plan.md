@@ -166,6 +166,10 @@ exists to fix.*
 **Setup.** Read the depth cap from Lane P (default is **10**). Create one more level
 than the cap: for a configured cap of 3, create `uat-b-d1` … `uat-b-d4`, each permitted
 to delegate to the next; with the default (10) you need 11 levels (`uat-b-d1` … `uat-b-d11`).
+Note (founder decision 2026-11-08): an install upgraded from before the default was
+raised migrates any stored edge depth 3 to 10 once at first boot, so an edge that used
+to read 3 reads 10 after the upgrade; a 3 set after that migration is deliberate and
+stays.
 
 **Steps.**
 1. Open a chat with `uat-b-d1`.
