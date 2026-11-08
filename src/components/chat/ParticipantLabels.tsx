@@ -18,7 +18,7 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { AgentMark } from '@/components/agents/AgentMark'
 import type { AgentIdentity } from '@/components/agents/AgentMark'
 import { fetchAgents, fetchWorkspaces } from '@/lib/api'
@@ -88,8 +88,13 @@ export function ParticipantNameLabel({ label, testId }: { label: TruncatedLabel;
   )
   if (!label.truncated) return span
   return (
-    <Tooltip content={label.full} side="top" data-testid="participant-label-tooltip">
-      {span}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} data-testid="participant-label-tooltip" className="inline-flex min-w-0">
+          {span}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label.full}</TooltipContent>
     </Tooltip>
   )
 }
@@ -159,10 +164,15 @@ export function ReplyHeaderView({ header }: { header: NonNullable<ReturnType<typ
           copy/paste, textContent and screen readers alike. */}
       <span className="shrink-0">{header.author} → </span>
       {header.targetTruncated ? (
-        <Tooltip content={header.targetFull} side="top" data-testid="reply-target-tooltip">
-          <span data-testid="reply-target-trigger" className="min-w-0 max-w-full truncate">
-            {target}
-          </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={0} data-testid="reply-target-tooltip" className="inline-flex min-w-0">
+              <span data-testid="reply-target-trigger" className="min-w-0 max-w-full truncate">
+                {target}
+              </span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top">{header.targetFull}</TooltipContent>
         </Tooltip>
       ) : (
         target
