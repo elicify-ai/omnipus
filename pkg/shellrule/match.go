@@ -203,12 +203,21 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 		v.Blind = true
 		v.BlindReason = string(blindReason)
 		v.Action = ActionAsk
+		// A wrapper's own Ask stays a matched rule (nil when none matched),
+		// so it still forces a rule approval under an Allow tool policy.
+		v.MatchedRule = own.rule
 		return v
 	}
 
 	v = evaluateUnwrapped(v, seg, finalSeg, finalHead, finalArgs, wrapped, rules, opts, resolve)
-	if actionRank(own.action) > actionRank(v.Action) {
+	switch {
+	case actionRank(own.action) > actionRank(v.Action):
 		return own.apply(v)
+	case own.action == ActionAsk && v.Action == ActionAsk && v.MatchedRule == nil:
+		// The unwrapped command gave only an unmatched Ask (for example an
+		// inner program that does not resolve): keep the wrapper's own Ask
+		// rule on it, for the same reason as above.
+		v.MatchedRule = own.rule
 	}
 	return v
 }
