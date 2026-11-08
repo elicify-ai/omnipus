@@ -370,21 +370,6 @@ func (r *DevServerRegistry) Lookup(token string) *DevServerRegistration {
 	return &cp
 }
 
-// LookupByAgent returns the active registration for agentID, or nil if none.
-// Used by web_serve dev mode to enforce the per-agent cap with a clear error
-// before attempting Register.
-func (r *DevServerRegistry) LookupByAgent(agentID string) *DevServerRegistration {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, e := range r.entries {
-		if e.AgentID == agentID {
-			cp := *e
-			return &cp
-		}
-	}
-	return nil
-}
-
 // LookupByLabel resolves a Mode 1 preview label (ADR-094) back to its
 // registration, or nil when no live entry carries that label. Mirrors
 // Lookup's semantics exactly — same expiry check, same LastActivity touch

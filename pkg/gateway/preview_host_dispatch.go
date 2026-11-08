@@ -405,14 +405,13 @@ func (a *restAPI) previewLabelResolves(label string) bool {
 
 // servePreviewByLabel resolves a dispatched label to its registration and
 // serves it — the Mode 1 half of HandlePreview. The lookup ORDER mirrors the
-// Mode 2 path (dev registry first, then the static registry), but the
-// dev-preference inside the static branch — a static registration whose
-// agent has a live dev server proxies to the dev server — is Mode-1-only
-// serving behaviour: Mode 2's HandlePreview static branch (rest_preview.go)
-// serves the static files directly, with no dev re-check. A static
-// registration whose agent also has a live dev server therefore serves
-// dev-server content through a Mode 1 label URL and static content through
-// its Mode 2 URL.
+// Mode 2 path (dev registry first, then the static registry), and a label
+// serves ONLY the registration whose token it was derived from (FR-008,
+// S-2.4): a static label serves its static directory and nothing else, even
+// while the same agent also has a live dev server under a different token.
+// There is deliberately no by-agent substitution — the label is a capability
+// for one registration, so its URL and the token URL always name the same
+// content (review F1).
 //
 // FR-026 (redaction): the label NEVER enters logs or audit details — the
 // static branch audits with an empty token (token_prefix "<invalid>") and
@@ -434,13 +433,6 @@ func (a *restAPI) servePreviewByLabel(w http.ResponseWriter, r *http.Request, la
 	if a.servedSubdirs != nil {
 		if entry := a.servedSubdirs.LookupByLabel(label); entry != nil {
 			a.previewLabelLimiter().promote(label)
-			if a.devServers != nil {
-				if reg := a.devServers.LookupByAgent(entry.AgentID); reg != nil {
-					remaining := strings.TrimPrefix(r.URL.Path, "/")
-					a.proxyDevRequest(w, r, reg, remaining, reg.AgentID, reg.Token, startedAt)
-					return
-				}
-			}
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				writeDevProxyError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return

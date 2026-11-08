@@ -411,12 +411,15 @@ func TestPreviewCredentialFilter_OneCodePath(t *testing.T) {
 			"drives the SAME request under the label Host and asserts the same filtered set")
 	_ = isoRaw
 
-	// Post-GREEN (kept compilable, reached only after the mint exists):
-	// drive the row-1 request under the label Host.
 	labelURL, _ := isoRaw.(string)
 	require.NotEmpty(t, labelURL)
-	host := strings.TrimPrefix(labelURL, "http://")
-	host = strings.TrimSuffix(host, "/")
+
+	// Drive the row-1 request under the label Host of the harness's DEV
+	// registration — the registration whose upstream records the forwarded
+	// headers. The static mint above has its own label, which serves only
+	// its static directory (FR-008, review F1) and never reaches this
+	// upstream.
+	host := middleware.PreviewLabelForToken(h.devToken) + ".localhost:" + h.port
 
 	cookieIn := "omnipus-session=s1; myapp_session=y; csrf=c1; __Host-csrf=h1; CSRF=lower-mismatch"
 	req, err := http.NewRequest(http.MethodGet, h.srv.URL+"/anything", nil)

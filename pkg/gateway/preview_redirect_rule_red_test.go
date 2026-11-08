@@ -23,10 +23,10 @@
 //     (ModifyResponse touches only CSP headers and reserved Set-Cookies) —
 //     the 8 verdict rows (502 / re-root / deletion) RED at that; the 5
 //     pass-through rows are pins ACROSS the change. Order 13's Mode 1 label
-//     is minted through the STATIC mint (piRedRedirectLabel: static mode, no
-//     dev spawn — platform-independent), and the file's dev entries come
-//     from the store-level DevServerRegistry.Register, not the tool's
-//     Linux-gated dev mint — no tier3 platform split applies in this file.
+//     is the label of the harness's own dev registration (piRedRedirectLabel;
+//     review F1), and the file's dev entries come from the store-level
+//     DevServerRegistry.Register, not the tool's Linux-gated dev mint — no
+//     tier3 platform split applies in this file.
 //   - Known gaps: none at this layer; the alias set (rows 10–11) is asserted
 //     behaviorally through both loopback alias forms.
 //   - Mutations: M-x (post-GREEN, CHECK): re-root to the wrong prefix, skip
@@ -36,13 +36,10 @@
 package gateway
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,9 +48,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // piRedRedirectAgent is the dev registration's agent id for this file.
@@ -237,49 +233,28 @@ func TestPreviewRedirectRule(t *testing.T) {
 // order 13 — DS-2b: Mode 1 passes every Location through unchanged
 // ---------------------------------------------------------------------------
 
-// piRedRedirectLabel mints through the serve_web tool (static mode) and
-// returns the Mode 1 label — the only label source that exists.
+// piRedRedirectLabel returns the Mode 1 label of the harness's OWN dev
+// registration (review F1): the label is derived from the dev token through
+// the store-level derivation the registries resolve with, so the request
+// reaches the dev upstream because the label names THAT registration — not
+// through a static label of the same agent (FR-008: a label serves only its
+// own registration). The dev entry comes from the store-level
+// DevServerRegistry.Register, so no tool-level, Linux-gated dev mint is
+// needed.
 func piRedRedirectLabel(t *testing.T, h *piRedRedirectHarness) string {
 	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(dir, "index.html"), []byte("x"), 0o644))
-
-	tool := tools.NewWebServeTool(
-		dir,
-		piRedRedirectAgent,
-		func() *config.Config { return h.api.agentLoop.GetConfig() },
-		h.api.servedSubdirs,
-		nil, // static mode — no dev spawn on this platform
-		tools.WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
-		nil, nil, 60, 86400,
-	)
-	result := tool.Execute(tools.WithAgentID(context.Background(), piRedRedirectAgent),
-		map[string]any{"path": "."})
-	require.False(t, result.IsError, "web_serve must succeed: %s", result.ForLLM)
-
-	var parsed map[string]any
-	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
-	isoRaw, has := parsed["isolated_url"]
-	require.True(t, has,
-		"RED (FR-001/FR-022): no isolated_url mint exists yet — the Mode 1 surface of the "+
-			"redirect rule cannot be driven pre-GREEN; post-GREEN this test binds the label host "+
-			"to the harness's dev upstream and asserts the three DS-2b rows pass through unchanged")
-	labelURL, _ := isoRaw.(string)
-	u := strings.TrimPrefix(labelURL, "http://")
-	u = strings.TrimSuffix(u, "/")
-	parts := strings.SplitN(u, ".", 2)
-	require.Len(t, parts, 2, "isolated_url must be <label>.localhost[:port], got %q", labelURL)
-	return parts[0]
+	label := middleware.PreviewLabelForToken(h.devToken)
+	require.True(t, middleware.IsValidPreviewLabel(label),
+		"the dev registration's label must be a valid preview label, got %q", label)
+	return label
 }
 
 // TestPreviewRedirectRule_Mode1Passthrough pins DS-2b: under a label Host
 // every Location is emitted unchanged — the Mode 2 out-of-prefix 502 and the
 // non-redirect deletion do NOT apply (the app owns its host's navigation,
-// US-5 AC4). RED today at the missing mint. Fixture note (mechanism-neutral,
-// A-2): the drive binds the label host to the harness's registered dev
-// upstream and asserts the upstream was REACHED — if GREEN's label→upstream
-// resolution differs, the FIXTURE adapts; the DS-2b assertions stand.
+// US-5 AC4). The drive uses the label of the harness's actual dev
+// registration and asserts the upstream was REACHED (review F1: it no longer
+// relies on a static label being substituted by the agent's dev server).
 func TestPreviewRedirectRule_Mode1Passthrough(t *testing.T) {
 	h := piRedNewRedirectHarness(t)
 	label := piRedRedirectLabel(t, h)

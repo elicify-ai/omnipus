@@ -298,11 +298,11 @@ func TestPreviewCSPHeaderSet(t *testing.T) {
 	})
 
 	t.Run("mode1_proxied_header_set", func(t *testing.T) {
-		// Fixture note (mechanism-neutral, A-2): the drive binds the label host
-		// to the harness's dev upstream via the registry; if GREEN resolves
-		// label→upstream differently the FIXTURE adapts, the assertions stand.
+		// Fixture: the label of the harness's own dev registration (review
+		// F1 — a static label serves only its static directory and never
+		// reaches the agent's dev upstream, FR-008).
 		h.upstreamHits.Store(0)
-		label := piRedMintGuardLabel(t, h)
+		label := middleware.PreviewLabelForToken(h.devToken)
 		resp := h.piRedGuardGet(t, label+".localhost:"+h.port, "/", http.MethodGet, nil)
 		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, int32(1), h.upstreamHits.Load(),
