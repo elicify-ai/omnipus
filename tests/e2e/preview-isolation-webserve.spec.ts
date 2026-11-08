@@ -1,117 +1,106 @@
 /**
  * preview-isolation-webserve.spec.ts — ADR-094 (#798 preview isolation) TDD
- * Plan orders 24, 30, 31 and 32 — the E2E half of the RED pack.
+ * Plan orders 24, 30, 31 and 32 — the E2E half, reconciled with the current
+ * contracts and the real auth model in the #950 fix round (review F4, plus
+ * F2's browser positive controls).
  *
  * Traces to: docs/internal/specs/adr-094-preview-isolation-spec.md
- *   Order 24 (S-2.1, S-2.2, S-8.1): Mode 1 Chromium+Firefox open the full app
- *     with working storage; the S-2.2 controls hold in a real browser; the
- *     WebKit card falls back to Mode 2 (FR-024).
- *   Order 30 (S-2.13, RED then GREEN): the #798 attack — script inside a
- *     served /preview/ document reads document.cookie for the csrf value and
- *     POSTs to /api/v1 with the echoed X-Csrf-Token. On TODAY's code the state
- *     change LANDS (RED — proving hole and instrument); after implementation
- *     no state change lands (GREEN). Both serving paths: static AND dev-proxy.
- *   Order 31 (S-3.6, S-3.7): Mode 2 renders fully while isolated — HMR over
- *     ws://, form POST inside the prefix, popup and download all work.
- *   Order 32 (S-4.4): planted-cookie recovery in a real browser — a
- *     Domain=localhost omnipus-session plant (including the trailing-slash
- *     /api/ form) leads to exactly one remaining cookie, a successful retry
- *     and no forced logout.
+ *   Order 24 (S-2.1, S-2.2, S-8.1): Mode 1 Chromium+Firefox open the agent's
+ *     app on its label origin with working storage; the S-2.2 controls hold
+ *     in a real browser; the WebKit card falls back to Mode 2 (FR-024).
+ *   Order 30 (S-2.13, US-2 AC3): the #798 attack from a served /preview/
+ *     document — static AND dev-proxy — must not change server state. Mode 2
+ *     must BLOCK the forbidden reads and writes; the test never requires a
+ *     forbidden read to succeed.
+ *   Order 31 (S-3.6, S-3.7) + US-3 AC1: Mode 2 renders a real bundle while
+ *     isolated — linked stylesheet, module script, fetch('./data.json'),
+ *     a working ws:// connection through the dev proxy, a form POST inside
+ *     the prefix, popup and download — and out-of-prefix requests stay
+ *     blocked.
+ *   Order 32 (S-4.4): planted-cookie recovery in a real browser — one toast,
+ *     Retry succeeds, exactly one omnipus-session remains, no forced logout.
  *
- * ORACLE INDEPENDENCE: every expectation below is transcribed from the spec —
- * the S-2.13 attack shape, the Mode 2 CSP template (spec §"Mode 2 response
- * headers"), FR-024's engine rule, S-4.4's recovery outcome, FR-015's reserved
- * cookie names and Q4's exact toast message. Nothing is derived from running
- * the implementation.
+ * ORACLES — transcribed from the spec, never from running the code:
+ *   - ${PREFIX} is /preview/{agent}/{token}/ WITH the trailing slash (the
+ *     "Mode 2 response headers" template), so CHILD resources are in scope
+ *     and a sibling token that merely shares the string prefix is not.
+ *   - Authentication is the HttpOnly omnipus-session cookie
+ *     (src/lib/api/http.ts::buildHeaders; src/store/auth.ts keeps no
+ *     JS-visible token). Node-side calls ride the browser context's cookie
+ *     jar via page.request, plus the X-CSRF-Token header for state changes.
+ *   - History is the generated SessionHistoryResponse envelope, read through
+ *     tests/e2e/fixtures/session-history.ts::sessionMessages (generated Zod
+ *     parse), never a hand-written wire type.
+ *   - Q4's exact toast message; FR-015's reserved cookie name.
  *
- * RED SEMANTICS (current failure mode, per row — see each test's comment):
- *   Mode 1 rows fail TODAY at the mint step: `isolated_url` does not exist
- *   (FR-001/FR-011 unimplemented) — the failure names the missing spec
- *   element (loud BLOCKED-style failure, never a skip).
- *   Order 30's rows fail TODAY on the security expectation itself: the attack
- *   lands (the state change occurs server-side) — the literal RED the spec
- *   prescribes.
- *   Order 31's rows and the WebKit fallback row are PINS (green today) that
- *   must survive GREEN unchanged; they are labelled as pins in comments.
- *   Order 32 fails TODAY: no planted-cookie detector exists (FR-015), so the
- *   expected recovery toast never appears.
+ * Server-observed vs browser-observed: the attack rows' decisive oracle is
+ * server state (the library directory never appears), with an instrument
+ * check that the same oracle DOES see a directory a legitimate call creates.
+ * CSP violations and rejected fetches are browser-side corroboration.
  *
- * MINT MECHANISM (judgment call, flagged to squad-lead): web_serve
- * registrations are tool-only — there is no REST endpoint that creates one
- * (pkg/gateway/gateway_boot.go wires ServedSubdirs/DevServerRegistry into the
- * tool config; pkg/gateway/rest_preview.go only reads them) — so a real
- * served /preview/ document requires a real agent turn through the composer.
- * This introduces an LLM dependency into the LLM-free isolation shard; the
- * spec's own regression table plans Mode 1 minting on this shard's gateway
- * (port 6083, loopback public_url), so the dependency is intended by the
- * spec. Dev-proxy minting additionally requires Linux (Tier3UnsupportedMessage:
- * dev servers are Linux only) — on other platforms the row fails loudly at
- * the mint step, never skips.
+ * MINT MECHANISM: serve_web registrations are tool-only (no REST endpoint
+ * creates one), so a real agent turn writes the fixture files and calls
+ * serve_web. The fixture content lives in
+ * tests/e2e/fixtures/preview-isolation/webserve-bundle.ts (unit-checked by
+ * its vitest companion). Dev-proxy minting requires Linux; elsewhere the row
+ * fails loudly at the mint step, never skips.
+ *
+ * NOT RUN on the authoring pod (no live model, no browser): this file is
+ * typechecked and linted there; browser execution belongs to CI's
+ * preview-isolation shard.
  */
 
-import * as fs from 'node:fs'
-import * as path from 'node:path'
 import { expect, type Page } from '@playwright/test'
+import { z } from 'zod'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 import { freshChat, seedAndOpenSession } from './fixtures/session-setup'
+import { sessionMessages } from './fixtures/session-history'
+import {
+  DATA_OK_VALUE,
+  MODULE_RAN_VALUE,
+  PROBE_LETTER_SPACING,
+  WS_HELLO,
+  childOfPrefix,
+  devBundleFiles,
+  isolatedUrlFor,
+  mintPrompt,
+  siblingTokenUrl,
+  staticBundleFiles,
+  type BundleFiles,
+} from './fixtures/preview-isolation/webserve-bundle'
+import {
+  LibraryEntry,
+  LibraryWorkspaceNode,
+  ValidateTokenResponse,
+} from '../../src/lib/api/generated/schemas'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 /** Q4's exact human message (S-4.2; order 27 pins the SPA side of it). */
 const Q4_MESSAGE = 'Omnipus cleared cookies set by a preview — please retry'
-/** MINT_TIMEOUT covers one real agent turn (5-25 s typical, GLM flash). */
-const MINT_TIMEOUT = 180_000
+/** MINT_TIMEOUT covers one real agent turn that writes a few files. */
+const MINT_TIMEOUT = 240_000
 
-// ── Auth plumbing (session-setup's proven pattern; not exported there) ───────
+// ── Auth plumbing: the HttpOnly session cookie rides page.request ───────────
 
-function authFilePath(): string {
-  return process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(path.dirname(new URL(import.meta.url).pathname), '.auth/admin.json')
-}
-
-function storedAuthToken(): string | null {
-  try {
-    const raw = fs.readFileSync(authFilePath(), 'utf-8')
-    const state = JSON.parse(raw) as {
-      origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>
-    }
-    for (const origin of state.origins ?? []) {
-      for (const item of origin.localStorage ?? []) {
-        if (item.name === 'omnipus_auth_token') return item.value
-      }
-    }
-  } catch {
-    // Auth file may not exist on first run — the caller's error is louder.
-  }
-  return null
-}
-
-/** Bearer + CSRF headers for Node-context API calls (the SPA's own shape). */
-async function authedHeaders(page: Page): Promise<Record<string, string>> {
-  const cookies = await page.context().cookies()
+/** CSRF header for a Node-side state-changing call (the SPA's own shape). */
+async function csrfHeader(page: Page): Promise<Record<string, string>> {
+  const cookies = await page.context().cookies(BASE_URL)
   const csrf = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
-  const token = storedAuthToken()
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(csrf ? { 'X-CSRF-Token': csrf.value } : {}),
-  }
+  if (!csrf) throw new Error('no csrf cookie in the browser context — the app must be loaded and signed in first')
+  return { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.value }
 }
 
 /** The SPA's live session id — ChatScreen stamps it on the chat surface. */
 async function activeSessionId(page: Page): Promise<string> {
   const el = page.locator('[data-active-session-id]').first()
-  await expect(el, 'chat surface must be bound to a session').toBeVisible({
-    timeout: 15_000,
-  })
+  await expect(el, 'chat surface must be bound to a session').toBeVisible({ timeout: 15_000 })
   const sid = await el.getAttribute('data-active-session-id')
   if (!sid) throw new Error('data-active-session-id present but empty')
   return sid
 }
 
-/** The /api/v1/about mock (web-serve-canonical's pattern): schema realism
- * for the SPA render path; the href assertions do not depend on it. */
+/** The /api/v1/about mock (web-serve-canonical's pattern). */
 async function mockAbout(page: Page): Promise<void> {
   await page.route(`${BASE_URL}/api/v1/about`, async (route) => {
     let base: Record<string, unknown> = {}
@@ -119,7 +108,7 @@ async function mockAbout(page: Page): Promise<void> {
       const real = await route.fetch()
       if (real.ok()) base = (await real.json()) as Record<string, unknown>
     } catch {
-      // Gateway not reachable — stub is sufficient for the SPA render path.
+      // Gateway not reachable — the stub alone is sufficient for the render path.
     }
     await route.fulfill({
       status: 200,
@@ -129,28 +118,16 @@ async function mockAbout(page: Page): Promise<void> {
   })
 }
 
-interface WireToolCall {
-  id: string
-  tool: string
-  status: string
-  parameters?: Record<string, unknown>
-  result?: Record<string, unknown>
-}
-
-interface WireMessage {
-  id: string
-  role: string
-  tool_calls?: WireToolCall[]
-}
-
 /**
- * Drive one REAL agent turn through the composer and wait until the
- * transcript (via the sessions API) carries a successful serve_web call for
- * `dirName`. Returns the tool result exactly as the gateway persisted it.
+ * Drive one REAL agent turn: write `files` under `dirName` and call
+ * serve_web. Polls the generated SessionHistoryResponse (via sessionMessages)
+ * until a successful serve_web call for `dirName` is persisted and returns
+ * its result exactly as the gateway stored it.
  */
 async function mintWebServeViaAgent(
   page: Page,
   dirName: string,
+  files: BundleFiles,
   dev: boolean,
 ): Promise<Record<string, unknown>> {
   await page.goto('/')
@@ -158,398 +135,548 @@ async function mintWebServeViaAgent(
   await waitForConnected(page, { timeout: 15_000 })
   await freshChat(page)
 
-  // The agent-facing tool name is serve_web, not "web_serve" — pinned by the
-  // spec (adr-094-preview-isolation-spec.md: "The agent-facing tool name is
-  // serve_web") and by pkg/tools/web_serve.go::ToolNameWebServe. A literal
-  // "web_serve" here made the CI model ToolSearch an unknown tool, then
-  // improvise bash on the dev prompt's "Run npm run dev" — the Ask-gated
-  // approval hung the turn for its full 600 s escalation window and the
-  // approval dialog replaced the app shell for every later test in the shard
-  // (2026-09-27 CI, run 36341209887).
-  const commandLine = dev
-    ? `Call the serve_web tool with path "${dirName}" and command "npm run dev"`
-    : `Call the serve_web tool with path "${dirName}" and duration_seconds 1800`
-  const prompt = dev
-    ? `Do exactly three things with tools, in this order, then stop: ` +
-      `(1) Create directory ${dirName} in your workspace. ` +
-      `(2) In it create package.json with exactly this content: ` +
-      `{"scripts":{"dev":"python3 -m http.server $PORT"}} — and a file ` +
-      `index.html whose full content is: <title>${dirName}</title>dev-e2e. ` +
-      `Use your file tools for steps 1 and 2, never shell commands. ` +
-      `(3) ${commandLine} (omit the port parameter; the tool assigns one). ` +
-      `Report the URL.`
-    : `Do exactly two things with tools, in this order, then stop: ` +
-      `(1) Create directory ${dirName} in your workspace with a file ` +
-      `index.html whose full content is: <title>${dirName}</title>static-e2e. ` +
-      `Use your file tools, never shell commands. ` +
-      `(2) ${commandLine}. Report the URL.`
-
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
-  await input.fill(prompt)
+  await input.fill(mintPrompt(dirName, files, dev))
   await input.press('Enter')
 
   const sid = await activeSessionId(page)
   const deadline = Date.now() + MINT_TIMEOUT
-  let lastBody = 'never polled'
+  let last = 'never polled'
   while (Date.now() < deadline) {
-    const resp = await page.request.get(`${BASE_URL}/api/v1/sessions/${sid}/messages`, {
-      headers: await authedHeaders(page),
-    })
-    if (resp.ok()) {
-      const messages = (await resp.json()) as WireMessage[]
-      for (const msg of messages) {
-        for (const call of msg.tool_calls ?? []) {
+    let entries: Awaited<ReturnType<typeof sessionMessages>> | undefined
+    try {
+      entries = await sessionMessages(page, BASE_URL, sid)
+    } catch (err) {
+      // A read can race the turn's first persist; the last failure is carried
+      // into the final error below if it never recovers.
+      last = `history read failed: ${String(err)}`
+    }
+    if (entries) {
+      for (const entry of entries) {
+        for (const call of entry.tool_calls ?? []) {
+          const result = call.result as Record<string, unknown> | undefined
+          const params = call.parameters as Record<string, unknown> | undefined
           if (
             call.tool === 'serve_web' &&
             call.status === 'success' &&
-            (call.parameters?.path === dirName ||
-              (call.result && typeof call.result === 'object' &&
-                String((call.result as Record<string, unknown>).path ?? '').includes(dirName)))
+            (params?.path === dirName || String(result?.path ?? '').includes(dirName))
           ) {
-            return call.result as Record<string, unknown>
+            if (!result) throw new Error(`serve_web succeeded for ${dirName} but persisted no result`)
+            return result
           }
         }
       }
-      lastBody = `polled ${messages.length} messages, no serve_web success for ${dirName}`
-    } else {
-      lastBody = `messages API ${resp.status()}`
+      last = `read ${entries.length} history entries, no serve_web success for ${dirName}`
     }
     await page.waitForTimeout(2_000)
   }
   throw new Error(
-    `mint failed: no successful serve_web result for "${dirName}" within ` +
-      `${MINT_TIMEOUT} ms (last: ${lastBody}). The agent turn is the only ` +
-      `product surface that registers a preview — a failure here is loud, ` +
-      `never a skip.`,
+    `mint failed: no successful serve_web result for "${dirName}" within ${MINT_TIMEOUT} ms ` +
+      `(last: ${last}). The agent turn is the only product surface that registers a preview — ` +
+      'a failure here is loud, never a skip.',
   )
 }
 
-// ── The #798 attack script (S-2.13, verbatim shape) ──────────────────────────
-//
-// Runs INSIDE the served preview document. Reads document.cookie for the csrf
-// value, enumerates workspaces over the same-origin API, and POSTs a mkdir.
-// Returns a report the test verifies SERVER-SIDE (ground truth, the harness
-// rule): what the script could read and what landed.
+function mode2UrlOf(result: Record<string, unknown>): string {
+  const url = String(result.url ?? '')
+  expect(url, 'mint must return the Mode 2 url').toContain('/preview/')
+  return url
+}
+
+// ── In-page probes (self-contained: page.evaluate serialises them) ──────────
+
+/** Starts recording CSP violations on the current document. */
+async function recordViolations(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __e2eViolations?: string[] }
+    w.__e2eViolations = []
+    document.addEventListener('securitypolicyviolation', (e) => {
+      w.__e2eViolations!.push(`${e.effectiveDirective || e.violatedDirective} ${e.blockedURI}`)
+    })
+  })
+}
+
+async function violations(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as unknown as { __e2eViolations?: string[] }).__e2eViolations ?? [])
+}
+
+interface BundlePositives {
+  letterSpacing: string
+  moduleRan: unknown
+  data: unknown
+}
+
+/**
+ * US-3 AC1 positive controls, each a CHILD of the prefix: a linked
+ * stylesheet's computed effect, a module script that runs, and a relative
+ * data fetch. Fails (loudly, via the returned values) under a slashless,
+ * exact-file CSP source.
+ */
+async function probeBundlePositives(page: Page): Promise<BundlePositives> {
+  return page.evaluate(async () => {
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = './style.css'
+    await new Promise<void>((resolve) => {
+      link.onload = () => resolve()
+      link.onerror = () => resolve()
+      document.head.appendChild(link)
+    })
+    const probe = document.getElementById('probe')
+    const letterSpacing = probe ? getComputedStyle(probe).letterSpacing : 'no #probe element'
+
+    const script = document.createElement('script')
+    script.type = 'module'
+    script.src = './app.js'
+    await new Promise<void>((resolve) => {
+      script.onload = () => resolve()
+      script.onerror = () => resolve()
+      document.head.appendChild(script)
+    })
+    const moduleRan = (window as unknown as { __e2eModuleRan?: unknown }).__e2eModuleRan
+
+    let data: unknown
+    try {
+      const r = await fetch('./data.json')
+      data = r.ok ? ((await r.json()) as { ok?: unknown }).ok : `HTTP ${r.status}`
+    } catch (err) {
+      data = `threw: ${String(err)}`
+    }
+    return { letterSpacing, moduleRan, data }
+  })
+}
+
+function expectBundlePositives(p: BundlePositives, what: string): void {
+  expect(p.letterSpacing, `${what}: the linked ./style.css must apply (style-src covers the prefix directory)`).toBe(
+    PROBE_LETTER_SPACING,
+  )
+  expect(p.moduleRan, `${what}: the module ./app.js must run (script-src covers the prefix directory)`).toBe(
+    MODULE_RAN_VALUE,
+  )
+  expect(p.data, `${what}: fetch('./data.json') must succeed (connect-src covers the prefix directory)`).toBe(
+    DATA_OK_VALUE,
+  )
+}
+
+interface BundleNegatives {
+  apiFetch: 'blocked' | 'allowed'
+  siblingFetch: 'blocked' | 'allowed'
+  siblingStyleViolation: boolean
+  siblingScriptViolation: boolean
+  violations: string[]
+}
+
+/**
+ * Out-of-prefix negative controls: the gateway API and a sibling token that
+ * shares the string prefix. A fetch blocked by CSP REJECTS; a fetch the
+ * policy allowed resolves even on a 404, so "allowed" here means the policy
+ * let it out. Stylesheet/script attempts are judged by the violation event.
+ */
+async function probeBundleNegatives(
+  page: Page,
+  sibling: { data: string; css: string; js: string },
+): Promise<BundleNegatives> {
+  return page.evaluate(async (s) => {
+    const seen: string[] = []
+    document.addEventListener('securitypolicyviolation', (e) => {
+      seen.push(`${e.effectiveDirective || e.violatedDirective} ${e.blockedURI}`)
+    })
+    const attempt = async (u: string): Promise<'blocked' | 'allowed'> => {
+      try {
+        await fetch(u, { credentials: 'include' })
+        return 'allowed'
+      } catch {
+        return 'blocked'
+      }
+    }
+    const apiFetch = await attempt('/api/v1/agents')
+    const siblingFetch = await attempt(s.data)
+    const link = document.createElement('link')
+    link.rel = 'stylesheet'
+    link.href = s.css
+    document.head.appendChild(link)
+    const script = document.createElement('script')
+    script.type = 'module'
+    script.src = s.js
+    document.head.appendChild(script)
+    await new Promise((r) => setTimeout(r, 1_000))
+    return {
+      apiFetch,
+      siblingFetch,
+      siblingStyleViolation: seen.some((v) => v.startsWith('style-src') && v.includes(s.css)),
+      siblingScriptViolation: seen.some((v) => v.startsWith('script-src') && v.includes(s.js)),
+      violations: seen,
+    }
+  }, sibling)
+}
+
+function expectBundleNegatives(n: BundleNegatives, what: string): void {
+  const detail = ` (violations: ${JSON.stringify(n.violations)})`
+  expect(n.apiFetch, `${what}: fetch('/api/v1/agents') must be blocked by connect-src${detail}`).toBe('blocked')
+  expect(n.siblingFetch, `${what}: a sibling-token fetch must be blocked — the source is a directory, not a string prefix${detail}`).toBe('blocked')
+  expect(n.siblingStyleViolation, `${what}: a sibling-token stylesheet must violate style-src${detail}`).toBe(true)
+  expect(n.siblingScriptViolation, `${what}: a sibling-token module must violate script-src${detail}`).toBe(true)
+}
+
+function siblingTargets(mode2URL: string): { data: string; css: string; js: string } {
+  return {
+    data: siblingTokenUrl(mode2URL, 'data.json'),
+    css: siblingTokenUrl(mode2URL, 'style.css'),
+    js: siblingTokenUrl(mode2URL, 'app.js'),
+  }
+}
+
+// ── The #798 attack (S-2.13) with independently provisioned target state ────
+
+interface AttackTarget {
+  wsId: string
+  attackPath: string
+}
+
+async function listLibraryRoot(page: Page, wsId: string): Promise<Array<z.infer<typeof LibraryEntry>>> {
+  const res = await page.request.get(`${BASE_URL}/api/v1/library/${wsId}/entries?path=`)
+  expect(res.ok(), `library listing must be readable (oracle): HTTP ${res.status()}`).toBe(true)
+  return z.array(LibraryEntry).parse(await res.json())
+}
+
+async function libraryHas(page: Page, wsId: string, name: string): Promise<boolean> {
+  return (await listLibraryRoot(page, wsId)).some((e) => e.name === name || e.path === name)
+}
+
+/**
+ * Provisions the attack target from Node (never from the preview): a
+ * workspace id and a fresh directory name that must not exist. Proves the
+ * oracle can see a landed mkdir by creating and deleting a control directory
+ * through a legitimate call first.
+ */
+async function provisionAttackTarget(page: Page, tag: string): Promise<AttackTarget> {
+  const wsRes = await page.request.get(`${BASE_URL}/api/v1/library/workspaces`)
+  expect(wsRes.ok(), `GET /api/v1/library/workspaces: HTTP ${wsRes.status()}`).toBe(true)
+  const workspaces = z.array(LibraryWorkspaceNode).parse(await wsRes.json())
+  expect(workspaces.length, 'a workspace with a work tree must exist (attack target)').toBeGreaterThan(0)
+  const wsId = workspaces[0].id
+
+  const control = `attack-control-${tag}`
+  const mk = await page.request.post(`${BASE_URL}/api/v1/library/${wsId}/mkdir`, {
+    headers: await csrfHeader(page),
+    data: { path: control },
+  })
+  expect(mk.ok(), `instrument check: a legitimate mkdir must succeed (HTTP ${mk.status()})`).toBe(true)
+  expect(await libraryHas(page, wsId, control), 'instrument check: the oracle must see a directory that landed').toBe(true)
+  const del = await page.request.delete(
+    `${BASE_URL}/api/v1/library/${wsId}/entries?path=${encodeURIComponent(control)}`,
+    { headers: await csrfHeader(page) },
+  )
+  expect(del.ok(), `control cleanup: HTTP ${del.status()}`).toBe(true)
+
+  const attackPath = `attack-${tag}`
+  expect(await libraryHas(page, wsId, attackPath), 'baseline: the attack directory must not exist before the attack').toBe(false)
+  return { wsId, attackPath }
+}
 
 interface AttackReport {
   csrfFound: boolean
-  csrfName: string
-  listed: boolean
-  wsId: string
-  attackPath: string
+  listFetch: 'blocked' | 'allowed'
+  mkdirFetch: 'blocked' | 'allowed'
   mkdirStatus: number
+  violations: string[]
 }
 
-async function runAttackInPreview(page: Page, tag: string): Promise<AttackReport> {
-  return page.evaluate(
-    async ({ tag }: { tag: string }) => {
-      const report: AttackReport = {
-        csrfFound: false,
-        csrfName: '',
-        listed: false,
-        wsId: '',
-        attackPath: `attack-${tag}`,
-        mkdirStatus: 0,
+/**
+ * Runs INSIDE the served preview document: reads document.cookie for the
+ * csrf value (S-2.13's first step), then attempts a workspace read and the
+ * mkdir POST with the echoed X-Csrf-Token. Under a correct Mode 2 policy
+ * both fetches are BLOCKED; nothing here requires them to succeed.
+ */
+async function runAttackInPreview(page: Page, target: AttackTarget): Promise<AttackReport> {
+  return page.evaluate(async (t) => {
+    const seen: string[] = []
+    document.addEventListener('securitypolicyviolation', (e) => {
+      seen.push(`${e.effectiveDirective || e.violatedDirective} ${e.blockedURI}`)
+    })
+    let csrfValue = ''
+    const pairs = document.cookie.split(/;\s*/)
+    for (const name of ['__Host-csrf', 'csrf']) {
+      const pair = pairs.find((p) => p.startsWith(`${name}=`))
+      if (pair) {
+        csrfValue = pair.slice(name.length + 1)
+        break
       }
-      let csrfValue = ''
-      const pairs = document.cookie.split(/;\s*/)
-      for (const name of ['__Host-csrf', 'csrf']) {
-        const pair = pairs.find((p) => p.startsWith(name + '='))
-        if (pair) {
-          report.csrfFound = true
-          report.csrfName = name
-          csrfValue = pair.slice(name.length + 1)
-          break
-        }
-      }
-      if (!report.csrfFound) return report
-      const wsRes = await fetch('/api/v1/workspaces', { credentials: 'include' })
-      if (!wsRes.ok) return report
-      const wsList = (await wsRes.json()) as
-        | Array<{ id: string }>
-        | { workspaces?: Array<{ id: string }> }
-      const first = Array.isArray(wsList) ? wsList[0] : wsList.workspaces?.[0]
-      if (!first) return report
-      report.listed = true
-      report.wsId = first.id
-      const mkdirRes = await fetch(`/api/v1/library/${first.id}/mkdir`, {
+    }
+    const report: AttackReport = {
+      csrfFound: csrfValue !== '',
+      listFetch: 'blocked',
+      mkdirFetch: 'blocked',
+      mkdirStatus: 0,
+      violations: seen,
+    }
+    try {
+      await fetch('/api/v1/library/workspaces', { credentials: 'include' })
+      report.listFetch = 'allowed'
+    } catch {
+      report.listFetch = 'blocked'
+    }
+    try {
+      const res = await fetch(`/api/v1/library/${t.wsId}/mkdir`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Csrf-Token': csrfValue,
-        },
-        body: JSON.stringify({ path: report.attackPath }),
+        headers: { 'Content-Type': 'application/json', 'X-Csrf-Token': csrfValue },
+        body: JSON.stringify({ path: t.attackPath }),
       })
-      report.mkdirStatus = mkdirRes.status
-      return report
-    },
-    { tag },
-  )
+      report.mkdirFetch = 'allowed'
+      report.mkdirStatus = res.status
+    } catch {
+      report.mkdirFetch = 'blocked'
+    }
+    await new Promise((r) => setTimeout(r, 300))
+    return report
+  }, target)
 }
 
-// ── Mode 2 header facts the attack rows assert (spec §"Mode 2 response
-//    headers", lines 291/360-365; FR-014) — the attack-relevant subset, not
-//    the byte-identical tripwire (that is order 14, the backend pack). ────────
+/**
+ * The form vector (US-2 AC3 row 2): a form POST to /api/v1 must be stopped
+ * by form-action. Observed as: the browser never navigates out of the
+ * prefix, a form-action violation fires, and (server-side, by the caller) no
+ * directory lands.
+ */
+async function attemptApiFormPost(page: Page, target: AttackTarget): Promise<{ urlAfter: string; violations: string[] }> {
+  await recordViolations(page)
+  const before = page.url()
+  await page.evaluate((t) => {
+    const form = document.createElement('form')
+    form.method = 'POST'
+    form.action = `/api/v1/library/${t.wsId}/mkdir`
+    const field = document.createElement('input')
+    field.name = 'path'
+    field.value = `${t.attackPath}-form`
+    form.appendChild(field)
+    document.body.appendChild(form)
+    form.submit()
+  }, target)
+  await page.waitForTimeout(2_000)
+  const urlAfter = page.url()
+  return { urlAfter, violations: urlAfter === before ? await violations(page) : ['(navigated away)'] }
+}
+
+async function expectAttackDenied(page: Page, mode2URL: string, target: AttackTarget, what: string): Promise<void> {
+  await page.goto(mode2URL)
+  await expect(page.locator('#probe')).toBeVisible()
+
+  // Positive control in the SAME document: in-prefix fetch works, so a
+  // blocked API fetch below is the policy, not a broken page or fetch.
+  const positives = await probeBundlePositives(page)
+  expect(positives.data, `${what}: in-prefix fetch('./data.json') must work (positive control)`).toBe(DATA_OK_VALUE)
+
+  const report = await runAttackInPreview(page, target)
+  expect(
+    report.csrfFound,
+    `${what}: instrument check — a same-origin Mode 2 document CAN read the csrf cookie, so stopping ` +
+      'the attack is the job of the request controls, not of cookie absence',
+  ).toBe(true)
+  expect(report.listFetch, `${what}: GET /api/v1/library/workspaces must be blocked by connect-src (US-2 AC3)`).toBe('blocked')
+  expect(
+    report.mkdirFetch,
+    `${what}: the mkdir POST must be blocked by connect-src (got HTTP ${report.mkdirStatus}; ` +
+      `violations ${JSON.stringify(report.violations)})`,
+  ).toBe('blocked')
+  expect(
+    report.violations.some((v) => v.startsWith('connect-src')),
+    `${what}: the browser must report a connect-src violation (corroboration)`,
+  ).toBe(true)
+
+  const form = await attemptApiFormPost(page, target)
+  expect(form.urlAfter, `${what}: a form POST to /api/v1 must not navigate (form-action)`).not.toContain('/api/v1/')
+  expect(
+    form.violations.some((v) => v.startsWith('form-action')),
+    `${what}: the browser must report a form-action violation (got ${JSON.stringify(form.violations)})`,
+  ).toBe(true)
+
+  // Decisive, server-observed oracle.
+  expect(
+    await libraryHas(page, target.wsId, target.attackPath),
+    `S-2.13 (${what}): the #798 attack LANDED — a fetch from the served /preview/ document created ` +
+      `${target.attackPath} in workspace ${target.wsId}.`,
+  ).toBe(false)
+  expect(
+    await libraryHas(page, target.wsId, `${target.attackPath}-form`),
+    `S-2.13 (${what}): the form-POST variant of the attack LANDED.`,
+  ).toBe(false)
+}
+
+// ── Mode 2 header facts (attack-relevant subset; order 14 owns the full
+//    byte-identical tripwire in the backend pack) ───────────────────────────
 
 function expectMode2AttackHeaders(csp: string, what: string): void {
-  expect(
-    csp.includes('frame-ancestors \'none\''),
-    what + ': frame-ancestors must be \'none\' (the served doc must not be embeddable)',
-  ).toBe(true)
-  expect(
-    /(^|;)\s*sandbox\b/.test(csp),
-    what + ': no sandbox directive may exist in the web_serve model (FR-004)',
-  ).toBe(false)
+  expect(csp.includes("frame-ancestors 'none'"), `${what}: frame-ancestors must be 'none'`).toBe(true)
+  expect(/(^|;)\s*sandbox\b/.test(csp), `${what}: no sandbox directive may exist in the web_serve model (FR-004)`).toBe(false)
   expect(
     /connect-src[^;]*'self'/.test(csp),
-    what + ': connect-src must not carry \'self\' — that is the whole-origin ' +
-      'grant that lets the attack fetch reach /api/v1',
+    `${what}: connect-src must not carry 'self' — the whole-origin grant that lets the attack reach /api/v1`,
   ).toBe(false)
 }
 
-test.describe('order 30 — S-2.13 the #798 attack (RED then GREEN)', () => {
-  test('static path: the attack from a served /preview/ document must not drive an authenticated state change', async ({ page }) => {
-    test.setTimeout(300_000)
+test.describe('order 30 — S-2.13 the #798 attack is denied (US-2 AC3)', () => {
+  test('static path: a served /preview/ document cannot drive an authenticated state change', async ({ page }) => {
+    test.setTimeout(360_000)
     const dirName = `e2e-srv-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, false)
-    const mode2URL = String(result.url ?? '')
-    expect(mode2URL, 'mint must return the Mode 2 url').toContain('/preview/')
-
-    // The served document: same origin as the gateway — that IS the hole.
-    await page.goto(mode2URL)
-    await expect(page.locator('body')).not.toBeEmpty()
-
-    // The attack, then the server-side oracle: the mkdir must NOT land.
-    const report = await runAttackInPreview(page, dirName)
-    expect(
-      report.csrfFound,
-      'instrument check: the document must see the csrf cookie while the ' +
-        'hole exists (S-2.13 prescribes the cookie-read step)',
-    ).toBe(true)
-    expect(
-      report.listed,
-      'instrument check: the document must be able to list workspaces via ' +
-        'the same-origin API while the hole exists',
-    ).toBe(true)
-    const entriesRes = await page.request.get(
-      `${BASE_URL}/api/v1/library/${report.wsId}/entries?path=`,
-      { headers: await authedHeaders(page) },
-    )
-    expect(entriesRes.ok(), 'library listing must be readable (oracle setup)').toBe(true)
-    const entries = (await entriesRes.json()) as Array<{ name?: string; path?: string }>
-    const landed = entries.some((e) =>
-      (e.path ?? e.name ?? '').includes(report.attackPath),
-    )
-    expect(
-      landed,
-      'S-2.13 RED/GREEN: the #798 attack LANDED — script inside the served ' +
-        `/preview/ document POSTed /api/v1/library/${report.wsId}/mkdir with ` +
-        `the echoed X-Csrf-Token (HTTP ${report.mkdirStatus}) and the state ` +
-        'change occurred server-side. ADR-094 requires the state change NOT ' +
-        'to land (Mode 1 origin separation / Mode 2 connect-src + form-action ' +
-        'confinement).',
-    ).toBe(false)
-
-    // Mode 2 browser-level blocks (order 30: CSP-confined fetch/form,
-    // frame-ancestors 'none') — asserted on the response the document got.
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, staticBundleFiles(dirName), false))
+    const target = await provisionAttackTarget(page, dirName)
+    await expectAttackDenied(page, mode2URL, target, 'static path')
     const served = await page.request.get(mode2URL)
-    const csp = served.headers()['content-security-policy'] ?? ''
-    expectMode2AttackHeaders(csp, 'static path')
+    expectMode2AttackHeaders(served.headers()['content-security-policy'] ?? '', 'static path')
   })
 
-  test('dev-proxy path: the attack from a dev-served /preview/ document must not drive an authenticated state change', async ({ page }) => {
-    test.setTimeout(300_000)
+  test('dev-proxy path: a dev-served /preview/ document cannot drive an authenticated state change', async ({ page }) => {
+    test.setTimeout(360_000)
     const dirName = `e2e-dev-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, true)
-    const mode2URL = String(result.url ?? '')
-    expect(mode2URL, 'dev mint must return the proxied Mode 2 url').toContain('/preview/')
-
-    await page.goto(mode2URL)
-    await expect(page.locator('body')).not.toBeEmpty()
-
-    const report = await runAttackInPreview(page, dirName)
-    expect(
-      report.csrfFound,
-      'instrument check: the proxied document must see the csrf cookie while ' +
-        'the hole exists (the dev proxy must not leak gateway credentials to ' +
-        'the upstream, but the DOCUMENT is same-origin with the gateway)',
-    ).toBe(true)
-    expect(report.listed, 'instrument check: workspaces listed via the API').toBe(true)
-    const entriesRes = await page.request.get(
-      `${BASE_URL}/api/v1/library/${report.wsId}/entries?path=`,
-      { headers: await authedHeaders(page) },
-    )
-    expect(entriesRes.ok(), 'library listing must be readable (oracle setup)').toBe(true)
-    const entries = (await entriesRes.json()) as Array<{ name?: string; path?: string }>
-    const landed = entries.some((e) =>
-      (e.path ?? e.name ?? '').includes(report.attackPath),
-    )
-    expect(
-      landed,
-      'S-2.13 (dev-proxy path) RED/GREEN: the attack LANDED through the ' +
-        `proxied document (HTTP ${report.mkdirStatus}) — the dev-proxy path ` +
-        'is exercised, not only static serving.',
-    ).toBe(false)
-
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, devBundleFiles(dirName), true))
+    const target = await provisionAttackTarget(page, dirName)
+    await expectAttackDenied(page, mode2URL, target, 'dev-proxy path')
     const served = await page.request.get(mode2URL)
-    const csp = served.headers()['content-security-policy'] ?? ''
-    expectMode2AttackHeaders(csp, 'dev-proxy path')
+    expectMode2AttackHeaders(served.headers()['content-security-policy'] ?? '', 'dev-proxy path')
   })
 })
 
-test.describe('order 31 — S-3.6/S-3.7 Mode 2 renders fully while isolated (pins)', () => {
-  test('S-3.6: a hot-reload ws:// connection inside the preview prefix is not CSP-blocked', async ({ page }) => {
+test.describe('order 31 — US-3 AC1 / S-3.6 / S-3.7 Mode 2 renders a real bundle while isolated', () => {
+  test('US-3 AC1 (static): stylesheet, module script and relative data fetch work; out-of-prefix stays blocked', async ({ page }) => {
     test.setTimeout(300_000)
-    const dirName = `e2e-hmr-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, true)
-    const mode2URL = String(result.url ?? '')
-    expect(mode2URL).toContain('/preview/')
-
+    const dirName = `e2e-bnd-${Date.now()}`
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, staticBundleFiles(dirName), false))
     await page.goto(mode2URL)
-    await expect(page.locator('body')).not.toBeEmpty()
-
-    // The connection attempt targets the ws-scheme form of THIS document's own
-    // prefix (S-3.6: "connect-src carries the ws-scheme form of the prefix").
-    // The oracle is the browser's own CSP enforcement: a blocked connection
-    // fires a `securitypolicyviolation` with violatedDirective=connect-src; an
-    // allowed-but-failing handshake (python http.server speaks no WS) errors
-    // at the protocol level WITHOUT any CSP violation. That distinction is the
-    // instrument — it needs no real WS upstream.
-    const violations = await page.evaluate(
-      () =>
-        new Promise<string[]>((resolve) => {
-          const seen: string[] = []
-          document.addEventListener('securitypolicyviolation', (e) => {
-            seen.push(e.violatedDirective + ' ' + e.blockedURI)
-          })
-          const prefix = location.pathname
-          const ws = new WebSocket(
-            (location.protocol === 'https:' ? 'wss://' : 'ws://') +
-              location.host + prefix,
-          )
-          ws.onerror = () => {
-            /* handshake failure is EXPECTED — python speaks no WS */
-          }
-          setTimeout(() => resolve(seen), 1_500)
-        }),
-    )
-    expect(
-      violations.filter((v) => v.startsWith('connect-src')),
-      'S-3.6: the ws-scheme form of the prefix must be allowed by ' +
-        'connect-src — got violations: ' + JSON.stringify(violations),
-    ).toHaveLength(0)
+    await expect(page).toHaveTitle(dirName)
+    expectBundlePositives(await probeBundlePositives(page), 'static bundle')
+    expectBundleNegatives(await probeBundleNegatives(page, siblingTargets(mode2URL)), 'static bundle')
   })
 
-  test('S-3.7: a form POST inside the preview prefix works (no CSP form-action block)', async ({ page }) => {
+  test('US-3 AC1 (dev proxy): stylesheet, module script and relative data fetch work; out-of-prefix stays blocked', async ({ page }) => {
     test.setTimeout(300_000)
-    const dirName = `e2e-form-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, false)
-    const mode2URL = String(result.url ?? '')
-    expect(mode2URL).toContain('/preview/')
-
+    const dirName = `e2e-dbn-${Date.now()}`
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, devBundleFiles(dirName), true))
     await page.goto(mode2URL)
-    await expect(page.locator('body')).not.toBeEmpty()
+    await expect(page).toHaveTitle(dirName)
+    expectBundlePositives(await probeBundlePositives(page), 'dev bundle')
+    expectBundleNegatives(await probeBundleNegatives(page, siblingTargets(mode2URL)), 'dev bundle')
+  })
 
-    // Submit a form whose action is INSIDE the prefix (a sibling path — a 404
-    // from the file server is fine: what is asserted is that the navigation
-    // HAPPENED and was not CSP-blocked; a blocked form-action fires a
-    // securitypolicyviolation and the page does not navigate).
+  test('S-3.6: a hot-reload ws:// connection inside the prefix opens and receives data through the dev proxy', async ({ page }) => {
+    test.setTimeout(300_000)
+    const dirName = `e2e-hmr-${Date.now()}`
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, devBundleFiles(dirName), true))
+    await page.goto(mode2URL)
+    await expect(page.locator('#probe')).toBeVisible()
+
+    const hmrUrl = childOfPrefix(mode2URL, 'hmr').replace(/^http/, 'ws')
     const outcome = await page.evaluate(
-      () =>
-        new Promise<{ navigated: boolean; violations: string[] }>((resolve) => {
-          const seen: string[] = []
-          document.addEventListener('securitypolicyviolation', (e) => {
-            seen.push(e.violatedDirective + ' ' + e.blockedURI)
-          })
-          const target = new URL(location.href)
-          target.pathname = target.pathname.replace(/\/$/, '') + '-posted/'
-          const form = document.createElement('form')
-          form.method = 'POST'
-          form.action = target.pathname
-          document.body.appendChild(form)
-          form.submit()
-          setTimeout(() => resolve({ navigated: true, violations: seen }), 2_000)
-        }),
+      ({ inPrefix }) =>
+        new Promise<{ message: string | null; inPrefixViolations: string[]; outOfPrefix: 'blocked' | 'opened' }>(
+          (resolve) => {
+            const seen: string[] = []
+            document.addEventListener('securitypolicyviolation', (e) => {
+              seen.push(`${e.effectiveDirective || e.violatedDirective} ${e.blockedURI}`)
+            })
+            let message: string | null = null
+            let outOfPrefix: 'blocked' | 'opened' = 'blocked'
+            const ws = new WebSocket(inPrefix)
+            ws.onmessage = (ev) => {
+              message = String(ev.data)
+              ws.close()
+            }
+            // Negative control: the gateway's own WebSocket, out of prefix.
+            try {
+              const bad = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/ws`)
+              bad.onopen = () => {
+                outOfPrefix = 'opened'
+                bad.close()
+              }
+            } catch {
+              outOfPrefix = 'blocked'
+            }
+            setTimeout(
+              () => resolve({ message, inPrefixViolations: seen.filter((v) => v.includes('/preview/')), outOfPrefix }),
+              5_000,
+            )
+          },
+        ),
+      { inPrefix: hmrUrl },
     )
     expect(
-      outcome.violations.filter((v) => v.startsWith('form-action')),
-      'S-3.7: form-action must allow posts inside the prefix — got: ' +
-        JSON.stringify(outcome.violations),
+      outcome.inPrefixViolations,
+      'S-3.6: connect-src must carry the ws-scheme form of the prefix directory',
     ).toHaveLength(0)
-    expect(
-      page.url().includes('-posted/'),
-      'the form navigation must have happened (S-3.7: forms work)',
-    ).toBe(true)
+    expect(outcome.message, 'S-3.6: the ws:// connection must reach the dev server and receive its frame').toBe(WS_HELLO)
+    expect(outcome.outOfPrefix, 'negative control: a WebSocket to /api/v1/ws must be blocked by connect-src').toBe('blocked')
+  })
+
+  test('S-3.7: a form POST to a child of the prefix navigates (no form-action block)', async ({ page }) => {
+    test.setTimeout(300_000)
+    const dirName = `e2e-form-${Date.now()}`
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, staticBundleFiles(dirName), false))
+    await page.goto(mode2URL)
+    await expect(page.locator('#probe')).toBeVisible()
+
+    const target = childOfPrefix(mode2URL, 'posted')
+    const posted = page.waitForRequest((r) => r.url() === target && r.method() === 'POST', { timeout: 10_000 })
+    await page.evaluate((action) => {
+      const form = document.createElement('form')
+      form.method = 'POST'
+      form.action = action
+      document.body.appendChild(form)
+      form.submit()
+    }, target)
+    await posted
+    await page.waitForURL(target, { timeout: 10_000 })
+    expect(page.url(), 'S-3.7: the form navigation inside the prefix happened').toBe(target)
   })
 
   test('S-3.7: a popup and a download work from a static preview (no sandbox directive)', async ({ page }) => {
     test.setTimeout(300_000)
     const dirName = `e2e-pop-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, false)
-    const mode2URL = String(result.url ?? '')
-    expect(mode2URL).toContain('/preview/')
-
+    const mode2URL = mode2UrlOf(await mintWebServeViaAgent(page, dirName, staticBundleFiles(dirName), false))
     await page.goto(mode2URL)
-    await expect(page.locator('body')).not.toBeEmpty()
+    await expect(page.locator('#probe')).toBeVisible()
 
-    // Popup (S-3.7: window.open / target=_blank) — a sandboxed document would
-    // return null or refuse the navigation; no sandbox means it opens.
     const popup = page.waitForEvent('popup', { timeout: 10_000 })
-    const opened = await page.evaluate(
-      () => window.open(location.href, '_blank') !== null,
-    )
+    const opened = await page.evaluate(() => window.open(location.href, '_blank') !== null)
     const popupPage = await popup
-    expect(
-      opened,
-      'S-3.7: window.open must work from a preview document (no sandbox)',
-    ).toBe(true)
-    await expect(popupPage.locator('body')).not.toBeEmpty()
+    expect(opened, 'S-3.7: window.open must work from a preview document (no sandbox)').toBe(true)
+    await expect(popupPage.locator('#probe')).toBeVisible()
     await popupPage.close()
 
-    // Download (S-3.7) — an <a download> click must deliver a download event;
-    // a sandbox without allow-downloads suppresses it. Point the href at the
-    // document itself (any served bytes download fine).
     const downloadPromise = page.waitForEvent('download', { timeout: 10_000 })
     await page.evaluate(() => {
       const a = document.createElement('a')
-      a.href = location.href
-      a.download = 'e2e-download-probe.html'
+      a.href = './data.json'
+      a.download = 'e2e-download-probe.json'
       document.body.appendChild(a)
       a.click()
     })
     const download = await downloadPromise
-    expect(
-      download.suggestedFilename(),
-      'S-3.7: the download must start with the suggested filename',
-    ).toBe('e2e-download-probe.html')
+    expect(download.suggestedFilename(), 'S-3.7: the download must start with the suggested filename').toBe(
+      'e2e-download-probe.json',
+    )
   })
 })
 
 test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
-  test('S-2.1: Mode 1 (Chromium/Firefox) — the label URL opens the full app with working storage', async ({ page, browserName }) => {
+  test('S-2.1: Mode 1 (Chromium/Firefox) — the label URL opens the agent-built app with working storage', async ({ page, browserName }) => {
     test.skip(browserName === 'webkit', 'holdout H-2: Linux WebKit *.localhost resolution is system-resolver-dependent (spec E2E wiring note) — a WebKit pass would say nothing about Safari')
     test.setTimeout(300_000)
     const dirName = `e2e-m1-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, false)
+    const result = await mintWebServeViaAgent(page, dirName, staticBundleFiles(dirName), false)
 
-    // FR-001/FR-011: the tool result MUST gain isolated_url. Today the field
-    // does not exist anywhere — this is the loud BLOCKED-style failure that
-    // names the missing spec element (never a skip).
     const isolated = String(result.isolated_url ?? '')
     expect(
       isolated,
-      'BLOCKED: the serve_web result carries no isolated_url — FR-001/FR-011 ' +
-        '(ADR-094 Mode 1 minting) is not implemented yet; required by order 24 ' +
-        '(S-2.1). Minted result keys: ' + Object.keys(result).join(','),
+      'BLOCKED: the serve_web result carries no isolated_url — FR-001/FR-011 (Mode 1 minting) ' +
+        `is not in effect for this gateway. Minted result keys: ${Object.keys(result).join(',')}`,
     ).toBeTruthy()
 
     await page.goto(isolated)
-    await expect(
-      page.getByRole('banner'),
-      'S-2.1: the full app must render on the label origin',
-    ).toBeVisible({ timeout: 30_000 })
+    // The page is the agent's fixture, not the Omnipus shell.
+    await expect(page, 'S-2.1: the label origin serves the agent-built app').toHaveTitle(dirName)
+    await expect(page.locator('#probe')).toHaveText(`${dirName}-ready`)
+    expectBundlePositives(await probeBundlePositives(page), 'Mode 1 label origin')
     const storage = await page.evaluate(() => {
       try {
         localStorage.setItem('e2e-mode1-probe', 'ok')
@@ -574,24 +701,20 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
     test.skip(browserName === 'webkit', 'holdout H-2: see the S-2.1 row')
     test.setTimeout(300_000)
     const dirName = `e2e-ctl-${Date.now()}`
-    const result = await mintWebServeViaAgent(page, dirName, false)
+    const result = await mintWebServeViaAgent(page, dirName, staticBundleFiles(dirName), false)
     const isolated = String(result.isolated_url ?? '')
     expect(
       isolated,
-      'BLOCKED: no isolated_url — FR-001/FR-011 (ADR-094 Mode 1 minting) is ' +
-        'not implemented yet; required by order 24 (S-2.2). Result keys: ' +
-        Object.keys(result).join(','),
+      `BLOCKED: no isolated_url — FR-001/FR-011 (Mode 1 minting) not in effect. Result keys: ${Object.keys(result).join(',')}`,
     ).toBeTruthy()
 
     await page.goto(isolated)
+    await expect(page.locator('#probe')).toBeVisible()
     const controls = await page.evaluate(
       (gatewayOrigin) =>
         new Promise<{ fetchReadable: boolean | null; wsOpened: boolean | null }>((resolve) => {
-          const out: { fetchReadable: boolean | null; wsOpened: boolean | null } = {
-            fetchReadable: null,
-            wsOpened: null,
-          }
-          fetch(gatewayOrigin + '/api/v1/agents', { credentials: 'include' })
+          const out: { fetchReadable: boolean | null; wsOpened: boolean | null } = { fetchReadable: null, wsOpened: null }
+          fetch(`${gatewayOrigin}/api/v1/agents`, { credentials: 'include' })
             .then(async (r) => {
               try {
                 await r.json()
@@ -603,9 +726,7 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
             .catch(() => {
               out.fetchReadable = false
             })
-          const ws = new WebSocket(
-            gatewayOrigin.replace(/^http/, 'ws') + '/api/v1/ws',
-          )
+          const ws = new WebSocket(`${gatewayOrigin.replace(/^http/, 'ws')}/api/v1/ws`)
           ws.onopen = () => {
             out.wsOpened = true
             ws.close()
@@ -622,202 +743,152 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
     )
     expect(
       controls.fetchReadable,
-      'S-2.2 control 1: the CORS layer must not reflect a label Origin, so ' +
-        'the script must not be able to READ the cross-origin response ' +
-        '(the gateway may still service it server-side — browser-side claim)',
+      'S-2.2 control 1: the CORS layer must not reflect a label Origin, so the script must not be able ' +
+        'to READ the cross-origin response (browser-side claim)',
     ).toBe(false)
-    expect(
-      controls.wsOpened,
-      'S-2.2 control 3: the WS origin check must refuse a label-origin ' +
-        'connection attempt',
-    ).toBe(false)
+    expect(controls.wsOpened, 'S-2.2 control 3: the WS origin check must refuse a label-origin connection').toBe(false)
   })
 
-  test('S-8.1 (Chromium/Firefox): a transcript result carrying isolated_url renders the Mode 1 link', async ({ page, browserName }) => {
+  /** A saved canonical serve_web call (F3's replay path) with a VALID isolated_url for this origin. */
+  function servedTranscript(tag: string, isolated: string) {
+    const fakePath = `/preview/mia/iso-card-token-${tag}/`
+    const fakeUrl = `${BASE_URL}${fakePath}`
+    return {
+      fakeUrl,
+      entries: [
+        {
+          id: `user-${tag}-1`,
+          role: 'user' as const,
+          content: 'serve my workspace',
+          timestamp: new Date(Date.now() - 5000).toISOString(),
+          agent_id: '',
+        },
+        {
+          id: `asst-${tag}-1`,
+          role: 'assistant' as const,
+          content: 'Served.',
+          timestamp: new Date(Date.now() - 4000).toISOString(),
+          agent_id: 'mia',
+          tool_calls: [
+            {
+              id: `tc-${tag}-serve`,
+              tool: 'serve_web',
+              status: 'success',
+              duration_ms: 80,
+              parameters: { path: 'e2e', duration_seconds: 3600 },
+              result: {
+                kind: 'static',
+                path: fakePath,
+                url: fakeUrl,
+                expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+                isolated_url: isolated,
+              },
+            },
+          ],
+        },
+      ],
+    }
+  }
+
+  test('S-8.1 (Chromium/Firefox): a saved serve_web result carrying isolated_url renders the Mode 1 link', async ({ page, browserName }) => {
     test.skip(browserName === 'webkit', 'FR-024: this expectation is Chromium-family/Firefox-only; the WebKit fallback is the next row')
     await mockAbout(page)
-
-    const fakeToken = 'iso-card-token-t24a'
-    const fakePath = `/preview/mia/${fakeToken}/`
-    const fakeUrl = `${BASE_URL}${fakePath}`
-    const isolated = 'http://myapp.localhost:5000/'
-    const expires = new Date(Date.now() + 3600 * 1000).toISOString()
-
-    await seedAndOpenSession(page, 'preview-iso-card-t24a', [
-      {
-        id: 'user-t24a-1',
-        role: 'user',
-        content: 'serve my workspace',
-        timestamp: new Date(Date.now() - 5000).toISOString(),
-        agent_id: '',
-      },
-      {
-        id: 'asst-t24a-1',
-        role: 'assistant',
-        content: 'Served.',
-        timestamp: new Date(Date.now() - 4000).toISOString(),
-        agent_id: 'mia',
-        tool_calls: [
-          {
-            id: 'tc-t24a-serve',
-            tool: 'web_serve',
-            status: 'success',
-            duration_ms: 80,
-            parameters: { path: 'e2e', duration_seconds: 3600 },
-            result: {
-              path: fakePath,
-              url: fakeUrl,
-              expires_at: expires,
-              isolated_url: isolated,
-            },
-          },
-        ],
-      },
-    ])
+    const isolated = isolatedUrlFor(BASE_URL, 'e2e-card')
+    const { entries } = servedTranscript('t24a', isolated)
+    await seedAndOpenSession(page, 'preview-iso-card-t24a', entries)
 
     const previewLink = page.locator('[data-testid="preview-link"]')
     await expect(previewLink, 'the card must render exactly one preview link').toHaveCount(1)
-    expect(
-      await previewLink.getAttribute('href'),
-      'FR-024/S-8.1: on a Mode-1-capable engine the card href must be the ' +
-        'isolated_url (RED today: isolated_url is dropped and the card ' +
-        'renders the Mode 2 fallback)',
-    ).toBe(isolated)
+    await expect(previewLink, 'FR-024/S-8.1: on a Mode-1-capable engine the href is the isolated_url').toHaveAttribute(
+      'href',
+      isolated,
+    )
   })
 
-  test('S-8.1 (WebKit pin): the same transcript renders the Mode 2 fallback link', async ({ page, browserName }) => {
+  test('S-8.1 (WebKit pin): the same saved serve_web result renders the Mode 2 fallback link', async ({ page, browserName }) => {
     test.skip(browserName !== 'webkit', 'the Mode 2 fallback expectation is WebKit-specific (FR-024)')
     await mockAbout(page)
-
-    const fakeToken = 'iso-card-token-t24b'
-    const fakePath = `/preview/mia/${fakeToken}/`
-    const fakeUrl = `${BASE_URL}${fakePath}`
-    const isolated = 'http://myapp.localhost:5000/'
-    const expires = new Date(Date.now() + 3600 * 1000).toISOString()
-
-    await seedAndOpenSession(page, 'preview-iso-card-t24b', [
-      {
-        id: 'user-t24b-1',
-        role: 'user',
-        content: 'serve my workspace',
-        timestamp: new Date(Date.now() - 5000).toISOString(),
-        agent_id: '',
-      },
-      {
-        id: 'asst-t24b-1',
-        role: 'assistant',
-        content: 'Served.',
-        timestamp: new Date(Date.now() - 4000).toISOString(),
-        agent_id: 'mia',
-        tool_calls: [
-          {
-            id: 'tc-t24b-serve',
-            tool: 'web_serve',
-            status: 'success',
-            duration_ms: 80,
-            parameters: { path: 'e2e', duration_seconds: 3600 },
-            result: {
-              path: fakePath,
-              url: fakeUrl,
-              expires_at: expires,
-              isolated_url: isolated,
-            },
-          },
-        ],
-      },
-    ])
+    const isolated = isolatedUrlFor(BASE_URL, 'e2e-card')
+    const { entries, fakeUrl } = servedTranscript('t24b', isolated)
+    await seedAndOpenSession(page, 'preview-iso-card-t24b', entries)
 
     const previewLink = page.locator('[data-testid="preview-link"]')
     await expect(previewLink, 'the card must render exactly one preview link').toHaveCount(1)
-    expect(
-      await previewLink.getAttribute('href'),
-      'FR-024/S-8.1: WebKit must get the Mode 2 fallback href (never both ' +
-        'links). PIN: green today and must survive GREEN unchanged.',
-    ).toBe(fakeUrl)
+    await expect(previewLink, 'FR-024/S-8.1: WebKit gets the Mode 2 fallback href (never both links)').toHaveAttribute(
+      'href',
+      fakeUrl,
+    )
   })
 })
 
 test.describe('order 32 — S-4.4 planted-cookie recovery in a real browser', () => {
-  test('a Domain=localhost omnipus-session plant (incl. the trailing-slash /api/ form) is cleared once and the retry succeeds — no forced logout', async ({ page }) => {
+  test('a Domain=localhost omnipus-session plant (incl. the trailing-slash /api/ form) is cleared, Retry succeeds, no forced logout', async ({ page }) => {
     test.setTimeout(180_000)
 
-    // Logged-in baseline BEFORE the plant (the plant must be the only thing
-    // that changes between "app works" and "recovery flow").
+    // Signed-in baseline BEFORE the plant: the plant is the only change.
     await page.goto('/')
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page, { timeout: 15_000 })
+    const usernameBefore = await page.evaluate(() => localStorage.getItem('omnipus_auth_username'))
+    expect(usernameBefore, 'baseline: the browser is signed in').toBeTruthy()
 
-    // The plant (S-4.4: "a served preview app has tossed a Domain=localhost
-    // omnipus-session plant (including the trailing-slash /api/ form)") —
-    // planted out-of-band here exactly as a Mode 1 toss would land in the jar:
-    // Domain-qualified, so never the genuine cookie (FR-015: the genuine
-    // omnipus-session is host-only at exactly Path=/ with no Domain, ever).
+    // Record which SPA GET met the planted-cookie 401, so the Retry can be
+    // checked against that exact request.
+    const plantedGets: string[] = []
+    page.on('response', async (res) => {
+      if (res.status() !== 401 || res.request().method() !== 'GET') return
+      try {
+        const body = (await res.json()) as { code?: unknown }
+        if (body.code === 'planted_cookie_cleared') plantedGets.push(res.url())
+      } catch {
+        // Not a JSON body — not the typed planted-cookie response.
+      }
+    })
+
+    // The plant, exactly as a Mode 1 toss lands in the jar: Domain-qualified,
+    // so never the genuine cookie (FR-015: the genuine omnipus-session is
+    // host-only at exactly Path=/ with no Domain).
     await page.context().addCookies([
-      {
-        name: 'omnipus-session',
-        value: 'e2e-planted-domain-root-' + Date.now(),
-        domain: 'localhost',
-        path: '/',
-      },
-      {
-        name: 'omnipus-session',
-        value: 'e2e-planted-domain-api-' + Date.now(),
-        domain: 'localhost',
-        path: '/api/',
-      },
+      { name: 'omnipus-session', value: `e2e-planted-domain-root-${Date.now()}`, domain: 'localhost', path: '/' },
+      { name: 'omnipus-session', value: `e2e-planted-domain-api-${Date.now()}`, domain: 'localhost', path: '/api/' },
     ])
 
-    // Drive a SPA call with the duplicated Cookie header (a reload makes the
-    // SPA's own boot calls — every main-Host /api/v1 request now carries all
-    // three omnipus-session values).
+    // A reload makes the SPA's own boot GETs carry the duplicated Cookie header.
     await page.reload()
-    await expect(
-      page.getByRole('banner'),
-      'the app must still be up for the recovery flow to be reachable',
-    ).toBeVisible({ timeout: 30_000 })
 
-    // S-4.2/S-4.4: the SPA renders the typed error with a Retry action —
-    // ONE toast, the gateway's Q4 message, a Retry button (orders 27/28 own
-    // the unit-level pins; this row proves the real-browser flow).
     const toast = page.getByRole('alert').filter({ hasText: Q4_MESSAGE })
-    await expect(
-      toast,
-      'RED today: no planted-cookie detector exists (FR-015) and the SPA has ' +
-        'no retry toast (Q4) — the duplicate cookies pass unnoticed and no ' +
-        'typed error ever appears',
-    ).toBeVisible({ timeout: 30_000 })
-    await expect(
-      toast,
-      'exactly ONE recovery toast (order 27: never a duplicate)',
-    ).toHaveCount(1)
+    await expect(toast, 'S-4.2/S-4.4: the typed planted-cookie error surfaces as the recovery toast').toBeVisible({
+      timeout: 30_000,
+    })
+    await expect(toast, 'exactly ONE recovery toast (order 27: never a duplicate)').toHaveCount(1)
+    expect(plantedGets.length, 'the gateway answered a GET with the typed planted-cookie 401').toBeGreaterThan(0)
+    const retried = plantedGets[0]
 
-    // Retry re-issues the request once; afterwards the recovery has landed:
-    // exactly one omnipus-session remains (the plants were cleared), the app
-    // is intact (no forced logout — orders 27/28 pin the SPA side).
+    const retryResponse = page.waitForResponse((r) => r.url() === retried && r.request().method() === 'GET', {
+      timeout: 15_000,
+    })
     await toast.getByRole('button', { name: /retry/i }).click()
+    expect((await retryResponse).status(), `S-4.4: the Retry of ${retried} succeeds`).toBe(200)
+
     await expect
-      .poll(
-        async () =>
-          (await page.context().cookies()).filter(
-            (c) => c.name === 'omnipus-session',
-          ).length,
-        {
-          message: 'exactly one omnipus-session must remain after the clear',
-          timeout: 15_000,
-        },
-      )
+      .poll(async () => (await page.context().cookies(BASE_URL)).filter((c) => c.name === 'omnipus-session').length, {
+        message: 'exactly one omnipus-session must remain after the clear',
+        timeout: 15_000,
+      })
       .toBe(1)
-    await expect(
-      page.getByRole('banner'),
-      'S-4.4: no forced logout — the app stays up after recovery',
-    ).toBeVisible({ timeout: 15_000 })
-    const token = await page.evaluate(() =>
-      localStorage.getItem('omnipus_auth_token'),
-    )
-    expect(
-      token,
-      'no forced logout: the auth token must survive the recovery (a ' +
-        'forceLogout would have cleared it and redirected to login)',
-    ).toBeTruthy()
+
+    // No forced logout: still on the app, the sign-in hint survives, no logout reason recorded.
+    await expect(page.getByRole('banner'), 'S-4.4: the app stays up after recovery').toBeVisible({ timeout: 15_000 })
+    expect(page.url(), 'no redirect to the login screen').not.toMatch(/#\/login/)
+    expect(await page.evaluate(() => sessionStorage.getItem('omnipus_logout_reason'))).toBeNull()
+    expect(await page.evaluate(() => localStorage.getItem('omnipus_auth_username'))).toBe(usernameBefore)
+
+    // The session itself is valid and usable (auth is the HttpOnly cookie).
+    const validate = await page.request.get(`${BASE_URL}/api/v1/auth/validate`)
+    expect(validate.status(), 'the genuine session validates after recovery').toBe(200)
+    ValidateTokenResponse.parse(await validate.json())
+    const op = await page.request.get(`${BASE_URL}/api/v1/library/workspaces`)
+    expect(op.status(), 'an authenticated operation succeeds after recovery').toBe(200)
+    z.array(LibraryWorkspaceNode).parse(await op.json())
   })
 })
