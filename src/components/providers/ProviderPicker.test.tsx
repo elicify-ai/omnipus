@@ -595,7 +595,7 @@ describe('ProviderPicker — Custom endpoint cannot reuse a listed provider name
   })
 
   it('accepts a free name — my-azure passes the same check', async () => {
-    const { onSelect } = renderPicker()
+    renderPicker()
     fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
     await screen.findByTestId('custom-endpoint-id')
 
