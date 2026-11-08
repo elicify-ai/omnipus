@@ -29,7 +29,7 @@ import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { ROOMS_ENABLED } from '@/lib/featureSwitches'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Command, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { QueryErrorState } from '@/components/ui/query-error-state'
@@ -84,7 +84,8 @@ export function AddParticipant({ target, presentation = 'label' }: { target: Add
     // background of its own. The picker behind it is unchanged.
     return (
       <>
-        <Tooltip content="Add participant" side="bottom" className="w-max" interactive>
+        <Tooltip>
+          <TooltipTrigger asChild>
           <IconButton
             aria-label="Add participant"
             data-testid="add-participant"
@@ -102,6 +103,8 @@ export function AddParticipant({ target, presentation = 'label' }: { target: Add
           >
             <UserPlus aria-hidden="true" size={16} />
           </IconButton>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Add participant</TooltipContent>
         </Tooltip>
         {open && <AddParticipantDialog target={target} onClose={() => setOpen(false)} />}
       </>

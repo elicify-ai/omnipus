@@ -299,7 +299,14 @@ test.describe('at a coarse pointer', () => {
     expect(traffic.errors, 'a page crash is a backdrop failure').toEqual([]);
   });
 
-  test('a tap on each control opens only its own thing at every coarse width', async ({ page }) => {
+  // Founder decision Q2 = A (2026-11-06): tooltips do not open on touch.
+  // A tap on the roster warning opens NOTHING visible; the explanation stays
+  // reachable with a mouse (hover) and from the keyboard (focus), and
+  // screen readers keep the sentence through the trigger's accessible
+  // description (aria-describedby) while the tooltip is open. The follow-up
+  // issue team-lead opens from Q2=A ("the page train shows it another way")
+  // tracks showing this warning's text to touch users another way.
+  test('a tap opens no tooltip (Q2=A); the explanation stays reachable by hover and by keyboard focus at every coarse width', async ({ page }) => {
     const { traffic, warning, participant } = await openCoexistence(page);
 
     for (const width of COARSE_WIDTHS) {
@@ -310,12 +317,39 @@ test.describe('at a coarse pointer', () => {
       const participantBox = await participant.boundingBox();
       expect(warningBox, `the warning has no box at ${width}px`).not.toBeNull();
       expect(participantBox, `the participant control has no box at ${width}px`).not.toBeNull();
-
-      // A tap on the warning opens ONLY the explanation — never the picker.
-      await warning.tap({ position: { x: warningBox!.width - 2, y: warningBox!.height / 2 }, timeout: 10_000 });
       const explanation = page.getByRole('tooltip').filter({ hasText: 'Agent names could not be loaded' });
-      await expect(explanation, `the warning never explained itself on a tap at ${width}px`).toBeVisible();
+
+      // A TAP opens NOTHING: no tooltip (Q2=A) and never the picker.
+      await warning.tap({ position: { x: warningBox!.width - 2, y: warningBox!.height / 2 }, timeout: 10_000 });
+      await expect(explanation, `a tap opened the explanation at ${width}px (Q2=A: tooltips do not open on touch)`).toHaveCount(0);
       await expect(page.getByTestId('add-participant-dialog'), `the warning tap opened the participant picker at ${width}px`).toHaveCount(0);
+
+      // A MOUSE explains it: hover shows the exact sentence.
+      await warning.hover();
+      await expect(explanation, `the warning never explained itself on hover at ${width}px`).toBeVisible();
+      await expect(explanation, `the hover text is not the explanation at ${width}px`).toContainText('Agent names could not be loaded');
+      await expect(explanation, `the hover text omits the recovery step at ${width}px`).toContainText('Reload the page');
+      await page.keyboard.press('Escape');
+      await expect(explanation, `Escape did not dismiss the explanation at ${width}px`).toHaveCount(0);
+
+      // The KEYBOARD explains it too: focus opens the same sentence, and
+      // while it is open the trigger's accessible description carries that
+      // sentence for screen readers (aria-describedby → the tooltip node).
+      // The focus is a REAL focus change on purpose: focus the neighbouring
+      // control first, then the warning. Radix's trigger opens on the
+      // onFocus event with no Escape suppression (react-tooltip
+      // TooltipTrigger.onFocus → onOpen; ta7 probe v4b), but focus() on the
+      // already-focused trigger fires no event at all — a keyboard user
+      // arrives here from the participant control's Tab, and so does this
+      // leg.
+      await participant.focus();
+      await warning.focus();
+      await expect(explanation, `the warning never explained itself on focus at ${width}px`).toBeVisible();
+      await expect(explanation, `the focus text is not the explanation at ${width}px`).toContainText('Agent names could not be loaded');
+      const describedBy = await warning.getAttribute('aria-describedby');
+      expect(describedBy, `no aria-describedby while the explanation is open at ${width}px`).not.toBeNull();
+      const descriptionText = await page.evaluate((id) => document.getElementById(id)?.textContent ?? '', describedBy!);
+      expect(descriptionText, `the accessible description lost the sentence at ${width}px`).toContain('Agent names could not be loaded');
       await page.keyboard.press('Escape');
       await expect(explanation, `Escape did not dismiss the explanation at ${width}px`).toHaveCount(0);
 
