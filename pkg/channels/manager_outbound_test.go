@@ -123,3 +123,50 @@ func TestAvailability_StatesUseContractEnumSpellings(t *testing.T) {
 	require.False(t, strings.TrimSpace(got.Reason) != "",
 		"T-7: running must not carry a reason string")
 }
+
+// TestAvailability_ChannelWithoutNotRunningReasonerKeepsTheSharedReasons pins
+// the #1687 round-8 compatibility rule for the new optional
+// channels.NotRunningReasoner interface (interfaces.go): a channel that does
+// NOT implement it still reports exactly the pre-#1687 reasons through
+// Manager.Availability — the fixed "not started", LastStartError's text
+// verbatim, running with no reason, and the "not loaded" row. The runtime
+// type assertion proves the fixture does not implement the interface, so
+// every reason below comes from the shared branches, never from the new one
+// (manager_outbound.go::Availability consults the interface first).
+func TestAvailability_ChannelWithoutNotRunningReasonerKeepsTheSharedReasons(t *testing.T) {
+	m, ch := newAvailabilityFixture(false)
+	_, implements := interface{}(ch).(NotRunningReasoner)
+	require.False(t, implements,
+		"fixture: the mock channel must not implement NotRunningReasoner for this pin")
+
+	// Registered, not running, no start error → exactly "not started".
+	got := m.Availability("discord")
+	require.Equal(t, AvailabilityNotRunning, got.State)
+	require.Equal(t, "not started", got.Reason,
+		"a channel without NotRunningReasoner keeps the fixed \"not started\" reason")
+
+	// Registered, not running, with a start error → exactly that error's text.
+	m.mu.Lock()
+	if m.startErrors == nil {
+		m.startErrors = make(map[string]error)
+	}
+	m.startErrors["discord"] = errors.New("401 unauthorized: bad bot token")
+	m.mu.Unlock()
+	got = m.Availability("discord")
+	require.Equal(t, AvailabilityNotRunning, got.State)
+	require.Equal(t, "401 unauthorized: bad bot token", got.Reason,
+		"a channel without NotRunningReasoner keeps the LastStartError reason verbatim")
+
+	// Running → running, empty reason.
+	ch.SetRunning(true)
+	got = m.Availability("discord")
+	require.Equal(t, AvailabilityRunning, got.State)
+	require.Empty(t, got.Reason,
+		"a running channel carries no reason, implementer or not")
+
+	// Unregistered → exactly "not loaded".
+	got = m.Availability("never-registered")
+	require.Equal(t, AvailabilityNotLoaded, got.State)
+	require.Equal(t, "not loaded", got.Reason,
+		"an unregistered instance keeps the fixed \"not loaded\" reason")
+}

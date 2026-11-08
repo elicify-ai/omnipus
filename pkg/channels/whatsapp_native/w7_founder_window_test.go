@@ -173,6 +173,13 @@ func TestAvailability_WhileReconnectFailsIsTheWhatsAppReconnectReason(t *testing
 	avail := m.Availability(instance)
 	require.Equal(t, channels.AvailabilityNotRunning, avail.State,
 		"instrument: the window reports not running; the founder pins the reason, not the state")
+	// Round-8 strengthening: the reason is pinned as a distinct VALUE —
+	// exactly the channel's reconnecting reason constant — not merely "not
+	// one of the shared strings".
+	require.Equal(t, reconnectingReason, avail.Reason,
+		"founder Q3 B: in the failing managed reconnect window the availability reason is exactly the WhatsApp reconnect reason (the channel's reconnectingReason constant)")
+	require.Equal(t, reconnectingReason, f.ch.NotRunningReason(),
+		"founder Q3 B: the channel's NotRunningReasoner accessor carries the same reason the manager reports through Availability")
 	require.NotEqual(t, "not started", avail.Reason,
 		"founder Q3 B: in the failing managed reconnect window the availability reason must be the WhatsApp reconnect reason, not the shared \"not started\"")
 	require.NotEqual(t, "not running", avail.Reason,
@@ -189,4 +196,6 @@ func TestAvailability_WhileReconnectFailsIsTheWhatsAppReconnectReason(t *testing
 		"a recovered channel answers running through the same availability surface")
 	require.Empty(t, availAfter.Reason,
 		"the reason is cleared with the recovery (running carries no reason)")
+	require.Empty(t, f.ch.NotRunningReason(),
+		"the channel's reconnect reason clears with the recovery (the manager then uses its shared reasons again)")
 }
