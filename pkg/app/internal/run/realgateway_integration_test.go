@@ -440,7 +440,7 @@ func TestRealGW_RunStreamsToStdout(t *testing.T) {
 // TestRealGW_CliTokenAuditedAsUser verifies the full WS-auth → GatewayUserID →
 // audit attribution thread for the cli principal, end-to-end against the REAL
 // gateway:
-//   - The cli user is provisioned in gateway.users via gw.SeedUser (bcrypt hash).
+//   - The cli credential is provisioned in gateway.cli_token via gw.SeedCLIToken (bcrypt hash).
 //   - run.Run authenticates via WS using the cli token (bcrypt path in WSHandler).
 //   - The mock LLM emits a tool call for a tool the sandbox policy DENIES.
 //   - The gateway wsApprovalHook returns VerdictDeny, and the agent loop's
@@ -480,7 +480,14 @@ func TestRealGW_CliTokenAuditedAsUser(t *testing.T) {
 	gw := testutil.StartTestGateway(t,
 		testutil.WithAPIBase(mockLLM.URL),
 		testutil.WithAllowEmpty(),
-		testutil.WithBearerAuth(),
+		// WithSeededAdmin (not WithBearerAuth): /reload — which SeedCLIToken
+		// must drive to install the CLI credential — accepts only a real
+		// Gateway.Users/Gateway.CLIToken bearer (issues #276/#640), and
+		// WithBearerAuth's env-var/reference-token credential is not one.
+		// WithSeededAdmin implies bearer auth and backs the harness bearer
+		// with a real gateway.users admin account, so the seeding reload
+		// authenticates as that admin.
+		testutil.WithSeededAdmin(),
 		testutil.WithSandboxConfig(config.OmnipusSandboxConfig{
 			Mode:         "off",
 			AuditLog:     true,
@@ -488,7 +495,8 @@ func TestRealGW_CliTokenAuditedAsUser(t *testing.T) {
 		}),
 	)
 
-	// Provision the cli user (bcrypt entry injected into gateway.users via SeedUser).
+	// Provision the cli credential (bcrypt entry injected into gateway.cli_token
+	// via gw.SeedCLIToken).
 	plainToken := provisionCLIToken(t, gw)
 
 	addr := strings.TrimPrefix(gw.URL, "http://")

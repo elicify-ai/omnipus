@@ -13,11 +13,18 @@ type harnessConfig struct {
 	bearerAuth bool
 	allowEmpty bool
 	apiBase    string // optional override for Providers[0].APIBase
+
 	// providerRows, when non-empty, replaces the single default provider row.
 	providerRows []*config.ModelConfig
 	// credentials are extra credential-store entries written after the
 	// default seed; a name here overwrites the seeded value.
 	credentials map[string]string
+
+	// seededAdmin opts the boot config into a real gateway.users admin
+	// account (WithSeededAdmin). setup() fills adminTokenHash; buildConfig
+	// writes the entry when seededAdmin is set.
+	seededAdmin    bool
+	adminTokenHash config.BcryptHash
 }
 
 // WithScenario uses the provided ScenarioProvider instead of a fresh empty one.
@@ -45,6 +52,26 @@ func WithSandboxConfig(sandbox config.OmnipusSandboxConfig) Option {
 // The token is stored on TestGateway and added to requests made via NewRequest automatically.
 func WithBearerAuth() Option {
 	return func(hc *harnessConfig) {
+		hc.bearerAuth = true
+	}
+}
+
+// WithSeededAdmin opts the gateway into bearer auth AND seeds a real
+// gateway.users admin account whose bearer token is the harness's own bearer
+// (testBearerToken — the same token WithBearerAuth exposes via Token() and
+// NewRequest). The account carries no password hash, so it authenticates only
+// by bearer, never by login.
+//
+// Why it exists: the /reload endpoint's authorizer (issues #276/#640,
+// pkg/channels/manager.go::reloadBearerAuthorizer) accepts ONLY a Gateway.Users
+// or Gateway.CLIToken bearer — not the OMNIPUS_BEARER_TOKEN env fallback, not
+// a session cookie, not dev_mode_bypass. A test that must drive /reload (e.g.
+// SeedCLIToken) therefore needs a real account credential in the gateway's
+// config, which WithBearerAuth alone does not provide. WithSeededAdmin puts
+// one there before boot and implies WithBearerAuth.
+func WithSeededAdmin() Option {
+	return func(hc *harnessConfig) {
+		hc.seededAdmin = true
 		hc.bearerAuth = true
 	}
 }
