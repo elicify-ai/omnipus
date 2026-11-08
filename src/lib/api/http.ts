@@ -211,8 +211,9 @@ export interface RequestOptions { // not-wire-format: in-browser transport switc
 // When the gateway clears cookies a preview planted, it answers with a typed
 // envelope on the failed call:
 //   { code: 'planted_cookie_cleared',
-//     error: 'planted_cookie_cleared',
-//     message: 'Omnipus cleared cookies set by a preview — please retry' }
+//     error: 'Omnipus cleared cookies set by a preview — please retry' }
+// (contracts/ PlantedCookieClearedError; `error` carries the human text, so
+// the toast reads `message` when present and falls back to `error`)
 // — 403 on a state-changing call, 401 on a GET. The SPA's ONE user-facing
 // recovery affordance is a single error toast whose Retry action re-issues
 // the EXACT same request once. Rules the spec's UI-states table and order 27
