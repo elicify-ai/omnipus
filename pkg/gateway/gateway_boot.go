@@ -1706,7 +1706,21 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 	// (e.g. corrupted manifest) does not abort the loop — the error is
 	// logged and the next tick proceeds. Libraries with no orphan files
 	// are a fast no-op.
+	//
+	// The done channel lets teardown WAIT for the goroutine, not just cancel
+	// it: this goroutine's FIRST act is repairLibraryAssociationsOnce — a
+	// writer under workspaces/ — and an in-flight tick touches disk too
+	// (Library.OrphanGC). Context cancellation alone stops the NEXT tick but
+	// leaves the current one running; join-on-done is what keeps a shutdown
+	// (or a test's t.TempDir removal) from racing it
+	// (#1598 "workspaces: directory not empty"). Consumed by
+	// drainBootBackgroundWriters.
+	orphanDone := make(chan struct{})
+	if stg.runningServices != nil {
+		stg.runningServices.orphanGCDone = orphanDone
+	}
 	go func() {
+		defer close(orphanDone)
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()

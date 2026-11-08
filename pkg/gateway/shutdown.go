@@ -242,6 +242,18 @@ type shutdownBackgroundStops struct {
 	liveLimits    func()
 	catalogCancel func()
 	catalogDone   <-chan struct{}
+	// bootBackground cancels (bootBackgroundDone joins) the boot-stage
+	// browser cache-trim schedule, managed-Chromium preprovision download
+	// and unknown-window primer started by initializeAgentLoop and attached
+	// to services by startServices. The preprovision download writes
+	// browser/chromium/*.zip.part-* under homePath and used to outlive every
+	// shutdown drain — the TempDir-cleanup family (#1644/#1695).
+	bootBackground     func()
+	bootBackgroundDone <-chan struct{}
+	// orphanGCDone joins the media-library orphan-GC goroutine (its boot
+	// pass repairs associations under workspaces/, #1598); cancellation is
+	// already owned by the gateway ctx, only the join was missing.
+	orphanGCDone <-chan struct{}
 }
 
 // backgroundStopsOf collects the running services' background stops.
@@ -264,6 +276,11 @@ func backgroundStopsOf(rs *services) shutdownBackgroundStops {
 	}
 	s.catalogCancel = rs.catalogRefreshCancel
 	s.catalogDone = rs.catalogRefreshDone
+	if rs.bootBackgroundCancel != nil {
+		s.bootBackground = rs.bootBackgroundCancel
+		s.bootBackgroundDone = rs.bootBackgroundDone
+	}
+	s.orphanGCDone = rs.orphanGCDone
 	return s
 }
 
@@ -337,6 +354,22 @@ func stopBackgroundWriters(ctx context.Context, s shutdownBackgroundStops) {
 		case <-ctx.Done():
 			slog.Warn("shutdown: catalog refresh loop did not exit within the shutdown budget; continuing")
 		}
+	}
+	// TempDir-cleanup family (#1644/#1695): the boot-stage browser writers
+	// (cache-trim schedule, managed-Chromium preprovision download) and the
+	// media orphan-GC goroutine (workspaces/ association repair) used to
+	// outlive RunContext entirely — the preprovision download was measured
+	// still growing its .part-* file seconds after every drain had run.
+	// Cancel-and-join them here, bounded, the same way the catalog loop
+	// above is joined.
+	if s.bootBackground != nil {
+		s.bootBackground()
+	}
+	if s.bootBackgroundDone != nil {
+		waitBootBackgroundDone(ctx, s.bootBackgroundDone, "boot browser/preprovision goroutines")
+	}
+	if s.orphanGCDone != nil {
+		waitBootBackgroundDone(ctx, s.orphanGCDone, "media library orphan-GC goroutine")
 	}
 }
 
