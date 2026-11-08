@@ -30,12 +30,18 @@ import (
 )
 
 // listdirViewsSchema is the record-type schema the fixture views refer to,
-// shaped like the gateway knowledge tests' own fixture schema.
+// shaped like the gateway knowledge tests' own fixture schema
+// (rest_knowledge_base_views_test.go::baseViewsTestSchema). The `currency`
+// companion property is required: the record loader
+// (pkg/records/schema.go::validateUnitProperties) rejects a `unit_property`
+// that does not name a property of the same type, and a rejected schema
+// rejects every view that queries the type.
 const listdirViewsSchema = "schema_version: 1\n" +
 	"type: invoice\n" +
 	"properties:\n" +
 	"  client:   { type: text }\n" +
-	"  amount:   { type: decimal, unit_property: currency }\n"
+	"  amount:   { type: decimal, unit_property: currency }\n" +
+	"  currency: { type: enum, values: [SGD, EUR] }\n"
 
 // writeListdirVault writes a knowledge base named displayName at dir with one
 // record schema and the given saved-view files (file name -> YAML body).

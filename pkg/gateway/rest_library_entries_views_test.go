@@ -368,12 +368,22 @@ func TestLibraryEntriesViews_PlacementFollowsSource(t *testing.T) {
 		"deepest-K: listing inside the nested knowledge base shows exactly the nested knowledge base's own views")
 
 	// L16 — no path built from source is ever opened or listed: whatever the
-	// source says, a view row's path is the storage file's real path.
-	for _, rows := range [][]gen.LibraryEntry{outerRows, innerRows} {
-		for _, e := range rows {
+	// source says, a view row's path is the storage file's real path (L7:
+	// K_rel/.omnipus-vault/views/<file>.yaml, K_rel being the knowledge base
+	// the view belongs to). Each row set is therefore checked against ITS OWN
+	// knowledge base's storage folder — the outer vault2's for the adversarial
+	// views, the nested vault2/inner's for its own view.
+	for _, kb := range []struct {
+		storagePrefix string
+		rows          []gen.LibraryEntry
+	}{
+		{"vault2/.omnipus-vault/views/", outerRows},
+		{"vault2/inner/.omnipus-vault/views/", innerRows},
+	} {
+		for _, e := range kb.rows {
 			if e.IsView != nil && *e.IsView {
-				assert.True(t, strings.HasPrefix(e.Path, "vault2/.omnipus-vault/views/"),
-					"L16: view row path %q must stay inside the storage folder regardless of its declared source", e.Path)
+				assert.True(t, strings.HasPrefix(e.Path, kb.storagePrefix),
+					"L16: view row path %q must stay inside its knowledge base's storage folder %q regardless of its declared source", e.Path, kb.storagePrefix)
 			}
 		}
 	}
