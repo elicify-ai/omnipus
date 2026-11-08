@@ -866,18 +866,17 @@ func (ro *restAPIHandleCompleteOnboarding) refuseCustomProvider() bool {
 	p := ro.provider
 	// C1: the PUT /providers/{id} id rule — the id becomes a providers[] row
 	// and a "<id>_API_KEY" credential ref, which the runtime publishes as an
-	// environment variable, so it must be non-blank and free of "=".
-	if p.ID == "" || strings.Contains(p.ID, "=") ||
-		validateEntityID(p.ID) != nil || len(p.ID) > maxProviderIDLen {
+	// environment variable, so it must also be free of "=". validateEntityID
+	// refuses the empty (all-blank) id.
+	if strings.Contains(p.ID, "=") || validateEntityID(p.ID) != nil || len(p.ID) > maxProviderIDLen {
 		return refuse(onboardingCustomIDShapeMsg, "id")
 	}
-	// The reserved and catalog checks of decodeAndValidate ran on the id as
-	// sent; repeat them on the trimmed id (catalog membership stays exact-case).
+	// decodeAndValidate's reserved check ran on the id as sent; repeat it on
+	// the trimmed id. Its catalog check needs no repeat: the catalog lookup
+	// trims the id itself (exact case otherwise), so a padded catalog id never
+	// reaches this path.
 	if isReservedProviderPathSegment(p.ID) {
 		return refuse(fmt.Sprintf("unknown provider %q", p.ID), "id")
-	}
-	if providers.IsCatalogProvider(p.ID) {
-		return refuse(fmt.Sprintf(onboardingListedNameMsgFmt, p.ID, p.ID), "id")
 	}
 	// C2: enforced here because inbound schema validation is off by default.
 	if p.Protocol != "" && !providers.IsCustomRowProtocol(p.Protocol) {
