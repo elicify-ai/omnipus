@@ -20,6 +20,8 @@ import (
 // Spec §3.2 and §4: both initial and continued native runs use the checked
 // program. Real local protocol fixtures record their own work and probe starts.
 func TestExternalDispatch_RunsCheckedProgram(t *testing.T) {
+	// Fixtures use an absolute shell and builtins, never an installed CLI.
+	t.Setenv("PATH", t.TempDir())
 	for _, spec := range t11bNativeCLIs() {
 		t.Run(spec.cli, func(t *testing.T) {
 			home, err := filepath.EvalSymlinks(t.TempDir())
