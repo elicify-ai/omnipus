@@ -40,6 +40,13 @@ resource-limited processes. Their memory limit differs by platform:
 When the kernel sandbox cannot be set up for these programs, they run with
 the limits only and the result says `converted without sandbox: <reason>`.
 
+When the kernel sandbox is active, LibreOffice can read only its own program
+files, the folder that holds the Omnipus program, the system libraries and
+fonts, and the temporary folder of the current preview. On macOS it can also
+read, but not change, the checked list of LibreOffice parts it may load. It
+cannot read your files, the agents' files, other previews or anything else
+Omnipus stores.
+
 Agents can never get write access to these programs' folders: shell approvals
 (**Allow** and **Allow once**), mounts (including one that contains a program
 folder, such as `/`) and new or changed write allowances that would give it, or

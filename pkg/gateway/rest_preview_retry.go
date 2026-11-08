@@ -10,7 +10,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -27,7 +26,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/library"
 	"github.com/elicify-ai/omnipus/pkg/preview"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -463,17 +461,12 @@ func (a *restAPI) sendPreviewRetryFrame(ctx context.Context, msg bus.OutboundMed
 // source was read) and releases it.
 func (a *restAPI) renderPreviewRetry(ctx context.Context, svc *preview.Service, adm *preview.Admission, src *previewRetrySource) ([]tools.DocumentPreviewThumbnail, generated.MediaPreview, error) {
 	defer adm.Release()
-	readModel, err := sandbox.KernelPolicyForTurn(src.policy)
-	if err != nil {
-		return nil, generated.MediaPreview{}, fmt.Errorf("sandbox policy: %w", err)
-	}
 	res, err := svc.Preview(ctx, adm, preview.Request{
 		Name:             src.rec.sourceName,
 		Ext:              src.ext,
 		Data:             src.data,
 		First:            src.rec.first,
 		Last:             src.rec.last,
-		ReadModel:        readModel,
 		CallerWriteRoots: preview.TurnWriteRoots(src.policy),
 	})
 	if err != nil {

@@ -11,21 +11,14 @@ import "github.com/elicify-ai/omnipus/pkg/sandbox"
 // policy renders the confinement as a kernel policy (macOS Seatbelt and
 // Linux Landlock; Windows uses the Job Object only, AD-7).
 func (c confinement) policy() sandbox.SandboxPolicy {
+	// ReadsOpen and ExecOpen stay false and no deny list is set: the rules
+	// below are everything the program may touch (spec §3.4 D8c).
 	var p sandbox.SandboxPolicy
-	if c.readModel != nil {
-		p.ReadsOpen = c.readModel.ReadsOpen
-		p.ExecOpen = c.readModel.ExecOpen
-		p.DeniedPaths = append(p.DeniedPaths, c.readModel.DeniedPaths...)
-		p.DeniedNodes = append(p.DeniedNodes, c.readModel.DeniedNodes...)
-		p.DeniedPathPrefixes = append(p.DeniedPathPrefixes, c.readModel.DeniedPathPrefixes...)
-		for _, r := range c.readModel.FilesystemRules {
-			if access := r.Access &^ sandbox.AccessWrite; access != 0 {
-				p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: r.Path, Access: access})
-			}
-		}
-	}
 	for _, d := range c.readExec {
 		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: d, Access: sandbox.AccessRead | sandbox.AccessExecute})
+	}
+	for _, d := range c.readOnly {
+		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: d, Access: sandbox.AccessRead})
 	}
 	for _, d := range c.readWrite {
 		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: d, Access: sandbox.AccessRead | sandbox.AccessWrite})

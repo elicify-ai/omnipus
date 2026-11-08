@@ -19,7 +19,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/preview"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // PreviewDocumentTool is preview_document (office-preview spec AD-1, AD-5,
@@ -216,10 +215,6 @@ func (t *PreviewDocumentTool) Execute(ctx context.Context, args map[string]any) 
 	if refusal != nil {
 		return refusal
 	}
-	readModel, err := sandbox.KernelPolicyForTurn(src.policy)
-	if err != nil {
-		return ErrorResult(previewPrefix + "the sandbox policy for this turn could not be built: " + err.Error())
-	}
 	res, err := svc.Preview(callCtx, adm, preview.Request{
 		Name:             filepath.Base(path),
 		Ext:              ext,
@@ -227,7 +222,6 @@ func (t *PreviewDocumentTool) Execute(ctx context.Context, args map[string]any) 
 		First:            first,
 		Last:             last,
 		Default:          def,
-		ReadModel:        readModel,
 		CallerWriteRoots: preview.TurnWriteRoots(src.policy),
 	})
 	if err != nil {

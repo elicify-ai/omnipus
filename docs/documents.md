@@ -129,6 +129,10 @@ reads any other file.
 - Registering LibreOffice never runs it: Omnipus reads the version from the
   installation's own files. A copy whose version files are missing is refused
   with `LibreOffice version unreadable`.
+- On macOS and Linux, previews use the fonts installed for all users and the
+  fonts that come with LibreOffice. A font installed only for your user
+  account is not used, and text in that font is shown in a similar font. To
+  use that font in previews, install it for all users.
 - "A folder an agent can write" covers these kinds of write access: agent and
   workspace folders, workspace mounts, the sandbox's allowed paths, the write
   allowances in `tools.allow_write_paths`, write access you approved for the
@@ -217,7 +221,10 @@ limit, so use may briefly exceed it.
 
 LibreOffice runs with macros off, links never updated and formulas recalculated
 when the file opens. On macOS and Linux, when the kernel sandbox is active, the
-programs can write at most their own temporary folder; on macOS they have no
+programs can write at most their own temporary folder; LibreOffice can read
+only the folders listed in
+[Sandbox limitations](operations/sandbox-limitations.md#document-preview-programs),
+never your files or other previews; on macOS they have no
 network; on Linux they cannot open or accept TCP connections where the kernel supports that rule (UDP is not
 blocked). When
 that sandbox cannot be set up, they still run with the limits above and the

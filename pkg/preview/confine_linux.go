@@ -17,6 +17,10 @@ import (
 // start (loader, libc, the loader cache).
 var linuxSystemReadExec = []string{"/lib", "/lib64", "/usr/lib", "/usr/lib64", "/etc/ld.so.cache"}
 
+// officeFontFolders are the system font folders LibreOffice reads (spec §3.4
+// D8c); missing ones are left out by existingFolders.
+var officeFontFolders = []string{"/usr/share/fonts", "/usr/local/share/fonts", "/etc/fonts"}
+
 // hooksFor starts the launcher on a Landlock-restricted thread that stays
 // parked until the program exits, so the parent-death SIGKILL is not fired by
 // the thread's retirement (sandbox.StartLockedWithPolicyHeld). Landlock is
@@ -45,6 +49,7 @@ func hooksFor(c confinement) spawnHooks {
 	policy.BindPortRules = []sandbox.NetPortRule{{Port: 0}}
 	policy.ConnectPortRules = []sandbox.NetPortRule{{Port: 0}}
 	return spawnHooks{
-		start: func(cmd *exec.Cmd) (func(), error) { return sandbox.StartLockedWithPolicyHeld(cmd, &policy) },
+		start:  func(cmd *exec.Cmd) (func(), error) { return sandbox.StartLockedWithPolicyHeld(cmd, &policy) },
+		policy: &policy,
 	}
 }

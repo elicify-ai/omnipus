@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -191,8 +192,22 @@ type officeConversion struct {
 	root       string
 	registry   string // macOS filtered registry folder
 	extraExes  []string
-	readModel  confinement
 	call       *call
+}
+
+// existingFolders returns list without the folders that do not exist: a
+// missing system folder is left out (Landlock refuses a rule for a missing
+// path; spec §3.4 D8c). Any other error keeps the folder, so the start fails
+// visibly instead of reading less silently.
+func existingFolders(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, d := range list {
+		if _, err := os.Stat(d); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // profileSettings pins the LibreOffice profile: macros never run, links are
@@ -230,9 +245,13 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	if err := os.WriteFile(inPath, input, 0o600); err != nil {
 		return nil, "", programFailure("conversion failed: scratch unavailable")
 	}
-	conf := o.readModel
-	conf.readExec = append(append([]string(nil), conf.readExec...), o.root, filepath.Dir(o.self))
-	conf.readWrite = append(append([]string(nil), conf.readWrite...), o.call.dir)
+	// The converter's own read list (spec §3.4 D8c), the same in both file
+	// models: never the calling turn's read rights.
+	conf := confinement{
+		readExec:  []string{o.root, filepath.Dir(o.self)},
+		readOnly:  existingFolders(officeFontFolders),
+		readWrite: []string{o.call.dir},
+	}
 	env := []string{
 		"PATH=/usr/bin:/bin",
 		"LANG=en_US.UTF-8",
@@ -247,6 +266,9 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		conf.socketDir = sock
 		env = append(env, "OSL_SOCKET_PATH="+sock)
 		if o.registry != "" {
+			// Read in place, read only (spec §3.4 D8c R1); its integrity is
+			// that of the program files (Component.Verify / VerifyIfChanged).
+			conf.readOnly = append(conf.readOnly, o.registry)
 			env = append(env, "URE_MORE_SERVICES=<"+fileURL(o.registry)+">*")
 		}
 	}
@@ -258,7 +280,7 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		"-env:UserInstallation=" + fileURL(filepath.Join(o.call.dir, "profile")),
 		"--convert-to", "pdf", "--outdir", dirs["out"], inPath,
 	}
-	hooks := hooksFor(conf)
+	hooks := hooksFor(conf).observedBy(testHookConverterStart)
 	spec := launcher.Spec{
 		Self:    o.self,
 		Target:  o.executable,

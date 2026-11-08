@@ -29,7 +29,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/preview/extracttext"
 	"github.com/elicify-ai/omnipus/pkg/preview/protocol"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // Admission budgets (AD-6).
@@ -171,9 +170,6 @@ type Request struct {
 	// First/Last is the requested range; Default marks "pages omitted".
 	First, Last int
 	Default     bool
-	// ReadModel is the calling turn's kernel policy (LibreOffice reads per
-	// the turn's read model, AD-7). Nil when no kernel policy applies.
-	ReadModel *sandbox.SandboxPolicy
 	// CallerWriteRoots are the calling turn's write roots (per-call writer
 	// exclusion, AD-4).
 	CallerWriteRoots []component.WriteRoot
@@ -253,7 +249,6 @@ func (s *Service) Preview(ctx context.Context, adm *Admission, req Request) (*Re
 			root:       office.Root,
 			registry:   office.Registry,
 			extraExes:  officeHelpers(office),
-			readModel:  confinement{readModel: req.ReadModel},
 			call:       c,
 		}
 		converted, unconfined, convErr := conv.run(ctx, req.Data, req.Ext)

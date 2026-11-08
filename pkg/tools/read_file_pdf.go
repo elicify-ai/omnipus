@@ -17,7 +17,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/preview"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // isPDFSource reports a PDF by its signature (a ".pdf" name alone keeps
@@ -76,9 +75,9 @@ func readWholePDF(handle *PathHandle) ([]byte, error) {
 	return raw, nil
 }
 
-// pdfPageRenderer renders pages 1–10 through the shared preview service, under
-// the calling turn's policy, with the same admission and disclosures as
-// preview_document.
+// pdfPageRenderer renders pages 1–10 through the shared preview service, with
+// the calling turn's write roots as the writer exclusion (AD-4) and the same
+// admission and disclosures as preview_document.
 func (t *ReadFileTool) pdfPageRenderer(policy fspolicy.FSPolicy, name, source string, data []byte) func(context.Context) ([]DocumentPreviewPage, string, string) {
 	return func(ctx context.Context) ([]DocumentPreviewPage, string, string) {
 		svc := preview.Shared()
@@ -92,14 +91,10 @@ func (t *ReadFileTool) pdfPageRenderer(policy fspolicy.FSPolicy, name, source st
 			return nil, err.Error(), ""
 		}
 		defer adm.Release()
-		readModel, err := sandbox.KernelPolicyForTurn(policy)
-		if err != nil {
-			return nil, "the sandbox policy for this turn could not be built: " + err.Error(), ""
-		}
 		res, err := svc.Preview(callCtx, adm, preview.Request{
 			Name: name, Ext: ".pdf", Data: data,
 			First: 1, Last: preview.DefaultPages, Default: true,
-			ReadModel: readModel, CallerWriteRoots: preview.TurnWriteRoots(policy),
+			CallerWriteRoots: preview.TurnWriteRoots(policy),
 		})
 		if err != nil {
 			return nil, err.Error(), ""
