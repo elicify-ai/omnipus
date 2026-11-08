@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
@@ -230,7 +231,13 @@ func (a *restAPI) providerModelList(
 ) (models []string, warning string) {
 	switch {
 	case src.locality == catalog.LocalityLocal && src.apiBase != "":
-		live, err := fetchLocalModels(ctx, src.protocol, src.apiBase, apiKey, a.endpointChecker())
+		// Only the hosted guard checks a local row: in core a local row is
+		// loopback by definition and sandbox.ssrf must not break its listing.
+		var guard *security.SSRFChecker
+		if providercommon.EndpointGuardActive() {
+			guard = a.endpointChecker()
+		}
+		live, err := fetchLocalModels(ctx, src.protocol, src.apiBase, apiKey, guard)
 		if err != nil {
 			slog.Warn("rest: could not list models from local provider endpoint",
 				"provider", id, "api_base", src.apiBase, "error", err)
@@ -286,9 +293,8 @@ const localModelListTimeout = 5 * time.Second
 // (providers.ListModels, T067-11): `/api/tags` for the ollama protocol,
 // `/v1/models` for the anthropic protocol, `{base}/models` otherwise.
 //
-// checker is the endpoint checker (restAPI.endpointChecker): nil when
-// neither sandbox.ssrf nor the hosted edition's guard applies, and then the
-// listing runs unchecked, because `locality = local` MEANS loopback/private
+// checker is the hosted edition's endpoint checker: nil in core (even with
+// sandbox.ssrf on), and then the listing runs unchecked, because `locality = local` MEANS loopback/private
 // (catalog.DeriveLocality) and FR-020's local half would otherwise be dead
 // code. When a checker IS configured it is honoured here like everywhere
 // else: the persisted api_base is caller-influenced (any PUT, or a planted

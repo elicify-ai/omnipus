@@ -667,6 +667,14 @@ func (a *restAPI) providerPutCheckEndpoint(p *providerPut) bool {
 	if base == "" {
 		return true
 	}
+	// A local row (Ollama, vLLM, a loopback or private custom host) is
+	// loopback by definition. In core, sandbox.ssrf on must not refuse it
+	// here: that is today's behaviour for a keyless save. Only the hosted
+	// guard has no local exception.
+	if !providercommon.EndpointGuardActive() &&
+		catalog.DeriveLocality(p.providerID, catalog.Protocol(p.reqProtocol), p.isCustomRow, base) == catalog.LocalityLocal {
+		return true
+	}
 	if err := checker.CheckURL(p.r.Context(), base); err != nil {
 		slog.Warn("rest: PUT provider: endpoint refused by the SSRF guard",
 			"provider", p.providerID, "error", err)

@@ -265,30 +265,6 @@ func TestProviderPlant_Local_CatalogAPIBaseOverrideKept(t *testing.T) {
 
 // ── Requirement 3: the address check runs on every api_base write ──────────
 
-// TestProviderPlant_SSRFOn_KeylessCustomRowWriteChecked: with sandbox.ssrf on
-// (local mode), repointing an existing custom row at loopback WITHOUT a key
-// used to skip the check (it only ran when the key changed). It must be
-// refused 422 and leave the stored row alone.
-func TestProviderPlant_SSRFOn_KeylessCustomRowWriteChecked(t *testing.T) {
-	env := newPlantEnv(t, config.EditionCore, false)
-	env.api.ssrfChecker = security.NewSSRFChecker(nil)
-	canary := startPlantCanary(t)
-	seedProviderRow(t, env, map[string]any{
-		"provider": "mybox", "model": "m1", "custom": true,
-		"protocol": "openai-compatible", "api_base": "https://mybox.example.com/v1",
-	})
-	body := fmt.Sprintf(`{"api_base":%q,"protocol":"openai-compatible"}`, canary.URL+"/v1")
-
-	w := serveViaRealMux(t, env.api, env.cfg,
-		plantRequest(http.MethodPut, "/api/v1/providers/mybox", body, false), "198.51.100.152")
-
-	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
-	rows := diskProviderRows(t, env)
-	require.Len(t, rows, 1)
-	assert.Equal(t, "https://mybox.example.com/v1", rows[0]["api_base"], "the stored base must be unchanged")
-	assert.Equal(t, int64(0), canary.hits.Load())
-}
-
 // TestProviderPlant_Hosted_GuardOnWithSSRFSettingOff: on hosted the address
 // check is on even though sandbox.ssrf is off (restAPI.ssrfChecker nil): a
 // signed-in owner's custom row at loopback is refused before any probe.
@@ -309,8 +285,9 @@ func TestProviderPlant_Hosted_GuardOnWithSSRFSettingOff(t *testing.T) {
 
 // TestProviderPlant_ListDoesNotCallPlantedPrivateEndpoint: a custom row on a
 // private host counts as "local", and GET /providers lists its models live.
-// That listing used a no-op checker; with the guard on (sandbox.ssrf in local
-// mode, always on hosted) it must not reach the planted address.
+// That listing used a no-op checker; on hosted (guard always on) it must not
+// reach the planted address. In core it stays unchecked, sandbox.ssrf or not
+// (TestProviderPlantCore_SSRFOn_LocalRowStillListsModels).
 func TestProviderPlant_ListDoesNotCallPlantedPrivateEndpoint(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -318,7 +295,6 @@ func TestProviderPlant_ListDoesNotCallPlantedPrivateEndpoint(t *testing.T) {
 		signedIn bool
 		ssrfOn   bool
 	}{
-		{"local with sandbox.ssrf on", config.EditionCore, false, true},
 		{"hosted with sandbox.ssrf off", config.EditionHosted, true, false},
 	}
 	for i, tc := range cases {
