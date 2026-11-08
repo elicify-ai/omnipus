@@ -20,6 +20,7 @@ import {
   TASK_CANCELLED_COLOR,
   type TaskStatus as SharedTaskStatus,
 } from '@/lib/statusColors'
+import { isScheduledTrigger } from '../taskFormFields'
 
 export type TaskStatus = Task['status']
 
@@ -248,10 +249,16 @@ export function buildTaskGraph(
   const planId = options.planId ?? null
   const collapseOrphans = options.planId == null ? (options.collapseOrphans ?? false) : false
 
-  // Match the Board: only top-level, user-surface tasks are graphable at all.
+  // Match the Board: only top-level, user-surface tasks are graphable, and
+  // schedule-bearing tasks stay calendar-only (operator ruling 2026-08-07;
+  // founder decision 2026-11-07, issue #1682). The same `isScheduledTrigger`
+  // helper Board and List use, applied here so workspace scope, plan scope,
+  // edges and the unlinked list all drop a scheduled task.
   const graphable = tasks.filter(
     (t) =>
-      (t.surface === 'user' || t.surface === undefined) && t.parent_task_id == null,
+      (t.surface === 'user' || t.surface === undefined) &&
+      t.parent_task_id == null &&
+      !isScheduledTrigger(t.trigger),
   )
 
   let visible: Task[]

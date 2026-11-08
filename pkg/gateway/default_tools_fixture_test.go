@@ -57,6 +57,9 @@ func defaultToolsSpecRows(t *testing.T, catalog *tools.BuiltinRegistry) []defaul
 		{ // Skills r15 §10: editing is no longer management; workers cannot edit.
 			names: "edit_skill", main: "ask", worker: "deny",
 		},
+		{ // Founder Q4, 2026-11-03: chat-capable Main agents always ask.
+			names: "set_channel_outbound", main: "ask", worker: "deny",
+		},
 	}
 	for _, group := range groups {
 		for _, name := range strings.Fields(group.names) {

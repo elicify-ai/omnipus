@@ -1,6 +1,9 @@
 package gateway
 
-import "github.com/elicify-ai/omnipus/pkg/config"
+import (
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+)
 
 // submittedBuiltinToolPolicyNames is the replacement-map universe: every
 // implemented static tool in the same central catalogue GET /tools publishes,
@@ -25,8 +28,20 @@ func submittedBuiltinToolPolicyNames[V ~string](submitted map[string]V) map[stri
 // validateSubmittedBuiltinToolPolicyMap leaves key legitimacy and the missing
 // implemented-tool refusals with the existing validator. Unknown/wildcard names
 // are never added to the universe; MCP keys retain their documented exception.
+//
+// An always-ask tool (tools.AlwaysAskTools) may be left out of a replacement
+// map: leaving it out is how its per-agent entry is cleared, which restores
+// inheritance of the global policy (channels-spec-r8 FR-037, T-10 rows 8-9).
+// That inheritance can only resolve to ask or deny for such a tool (FR-036),
+// so the omission never loosens the agent below what it stored.
 func validateSubmittedBuiltinToolPolicyMap[V ~string](submitted map[string]V) config.SubmittedToolPolicyDefects {
-	return config.ValidateSubmittedToolPolicyMap(submitted, submittedBuiltinToolPolicyNames(submitted))
+	universe := submittedBuiltinToolPolicyNames(submitted)
+	for name := range universe {
+		if _, supplied := submitted[name]; !supplied && tools.IsAlwaysAsk(name) {
+			delete(universe, name)
+		}
+	}
+	return config.ValidateSubmittedToolPolicyMap(submitted, universe)
 }
 
 // retainReservedBuiltinToolPolicies preserves only an existing stored entry for

@@ -164,7 +164,7 @@ var omnipusSupportedTools = []string{
 	"search_web", "fetch_url", "create_agent", "update_agent", "delete_agent",
 	"create_workspace", "update_workspace", "edit_skill", "install_skill",
 	"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
-	"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
+	"disable_channel", "configure_channel", "connect_channel", "set_channel_outbound", "connect_mailbox",
 	"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
 	"read_conversation", "list_mailboxes", "environment_setup", "bash",
 }

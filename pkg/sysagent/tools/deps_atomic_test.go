@@ -25,7 +25,7 @@ import (
 //
 // Concretely this test:
 //  1. Verifies Deps has exactly one exported field of type *atomic.Pointer[Deps].
-//  2. Verifies AllTools(nil) returns exactly 32 tools (supply side intact).
+//  2. Verifies AllTools(nil) returns exactly 33 tools (supply side intact).
 //  3. Verifies a non-nil *Deps with Live wired can Load() without panicking
 //     (the reload path invariant).
 //
@@ -34,7 +34,7 @@ import (
 //	When reflected for atomic.Pointer[Deps] fields,
 //	Then at least one such field exists (FR-050 structural guarantee).
 //	When AllTools is called with a valid Deps,
-//	Then it returns == 32 tools and none panic on Name()/Description().
+//	Then it returns == 33 tools and none panic on Name()/Description().
 //
 // Traces to: FR-050 (atomic-pointer deps), FR-001/FR-002 (supply side).
 func TestRegistry_ToolDepsContract(t *testing.T) {
@@ -60,12 +60,13 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_32", func(t *testing.T) {
-		// r17 7.12: 35 - get_agent_tools - read_agent_metadata = 33;
-		// r15 §10: 33 - create_skill - remove_skill + get_skill = 32.
+	t.Run("AllTools_returns_exactly_33", func(t *testing.T) {
+		// Merge base 34 (r15 §10 already applied: -create_skill -remove_skill
+		// +get_skill); r17 7.12: - get_agent_tools - read_agent_metadata = 32;
+		// channels FR-032: + set_channel_outbound = 33.
 		all := AllTools(nil)
-		if len(all) != 32 {
-			t.Errorf("AllTools(nil) returned %d tools; want == 32 (r17 7.12 removed get_agent_tools and read_agent_metadata; r15 §10 replaced create_skill/remove_skill with get_skill)", len(all))
+		if len(all) != 33 {
+			t.Errorf("AllTools(nil) returned %d tools; want == 33 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions; r17 7.12 removed get_agent_tools and read_agent_metadata; r15 §10 replaced create_skill/remove_skill with get_skill; channels FR-032 adds set_channel_outbound)", len(all))
 		}
 		for _, retired := range []string{"create_skill", "remove_skill"} {
 			if hasToolNamed(all, retired) {

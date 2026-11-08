@@ -44,6 +44,12 @@ const pairingCancelledText = "The WhatsApp connection is turned on, but its pair
 const ordinaryUnconfirmedText = "The WhatsApp connection is enabled, but its restart could not be " +
 	"confirmed yet. The new code appears here when the pairing starts."
 
+// ordinaryEnableUnconfirmedText answers a non-pairing enable whose setting
+// saved but whose reload did not confirm the start in time (#1568). The
+// enabled flag stays saved. It is the contract's 500 "enabled but could not
+// be confirmed", not a plain success, and it does not mention a pairing code.
+const ordinaryEnableUnconfirmedText = "The connector is enabled, but its start could not be confirmed yet."
+
 // pairingInProgressText refuses an ordinary enable while another pairing of
 // the connector is reserved, running or stopping: nothing is saved (gate r4
 // T2-SF-13, R4-A02, M2). Code pairing_in_progress.
@@ -108,16 +114,34 @@ func (a *restAPI) enableChannel(w http.ResponseWriter, r *http.Request, channelI
 // one on reserves an unowned pairing attempt for its start (M1, M2): a
 // refusal changes nothing (409 pairing_in_progress, or 404 while it is being
 // deleted). An enable of a connector already on is idempotent and reserves
-// nothing.
+// nothing. A confirmed reload whose adapter is not running, and a reload
+// that is not confirmed in time, are not a plain success (#1568): the
+// enabled flag stays saved and the response is the contract's 500
+// ErrorResponse.
 func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string) {
 	var attemptID string
 	opts := channelEnableOptions{requireExisting: pairingCapable(channelID), attemptID: &attemptID}
 	outcome := a.applyChannelEnabled(w, channelID, true, opts)
 	switch {
 	case attemptID == "":
-		if outcome != enableFailed {
-			jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
+		if outcome == enableFailed {
+			return
 		}
+		// The enabled flag is already saved. A reload that did not confirm
+		// in time must not answer the plain 200 (#1568). A confirmed
+		// reload can still leave the adapter not running; that uses
+		// Configure's not-running sentence.
+		if outcome == enableUnconfirmed {
+			jsonErr(w, http.StatusInternalServerError, ordinaryEnableUnconfirmedText)
+			return
+		}
+		if outcome == enableConfirmed {
+			if msg := a.ordinaryEnableStartFailure(channelID); msg != "" {
+				jsonErr(w, http.StatusInternalServerError, msg)
+				return
+			}
+		}
+		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	case outcome == enableFailed:
 		a.agentLoop.ReleasePairing(channelID, attemptID)
 	case outcome == enableUnconfirmed:
@@ -128,6 +152,29 @@ func (a *restAPI) enableChannelOrdinary(w http.ResponseWriter, channelID string)
 		a.agentLoop.SettlePairing(channelID, attemptID)
 		jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: true})
 	}
+}
+
+// ordinaryEnableStartFailure is the sentence Configure shows when a confirmed
+// reload left the connection not running (channelConfigureOutcome.ts
+// notRunningText, fed by Availability). Empty means the adapter is running, or
+// no manager is wired to observe a start, so the caller keeps the plain
+// success. It never changes what was saved.
+func (a *restAPI) ordinaryEnableStartFailure(channelID string) string {
+	if a.agentLoop == nil {
+		return ""
+	}
+	mgr := a.agentLoop.GetChannelManager()
+	if mgr == nil {
+		return ""
+	}
+	avail := mgr.Availability(channelID)
+	if avail.State == channels.AvailabilityRunning {
+		return ""
+	}
+	if avail.Reason == "" {
+		return "Saved, but the connection is not running."
+	}
+	return "Saved, but the connection is not running: " + avail.Reason + "."
 }
 
 // admitOrdinaryPairing reserves the unowned attempt of a QR-paired connector

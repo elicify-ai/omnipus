@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
@@ -30,7 +31,13 @@ type nativeLifecycle struct {
 	once      sync.Once
 	done      chan struct{}
 	err       error
+	// liveClient mirrors client for the stop path that must not take c.mu
+	// before Disconnect (a reconnect may hold it waiting on the channel order).
+	liveClient atomic.Pointer[whatsmeow.Client]
 }
+
+// nativeStopMark records the run context a stop has begun for (#1675).
+type nativeStopMark struct{ ctx context.Context }
 
 func (c *WhatsAppNativeChannel) beginNativeStart(ctx context.Context) (*nativeLifecycle, error) {
 	c.reconnectMu.Lock()
@@ -59,15 +66,38 @@ func (c *WhatsAppNativeChannel) beginNativeStart(ctx context.Context) (*nativeLi
 // stopNative initiates cancellation once; the caller's deadline only bounds its
 // wait. Disconnect can itself wait behind ConnectContext's library socket lock,
 // so both disconnects and the join run in the retained finalizer, not the caller.
+//
+// Order (#1675): the library's read pump runs on the run context. Cancelling it
+// first makes the read pump close the frame socket on its own goroutine while
+// our Disconnect's NoiseSocket.Stop writes the socket's disconnect callback
+// without the library's frame lock - a data race inside whatsmeow. With no
+// connect in progress, Disconnect therefore runs first: Stop clears the
+// callback and closes the frame socket under that lock, so the read pump's own
+// close comes after it and finds the socket already closed. Only a connect in
+// progress keeps cancel-first, because there Disconnect would wait behind
+// ConnectContext's socket lock until the dial ends.
 func (c *WhatsAppNativeChannel) stopNative(ctx context.Context, resource *nativeLifecycle, interrupt bool) error {
 	resource.once.Do(func() {
 		// This captured context is immutable and needs no native/order lock.
 		// A reconnect may hold those locks while waiting for a config writer,
 		// so even one-time bookkeeping belongs off the caller's deadline path.
-		if resource.cancel != nil {
-			resource.cancel()
+		c.nativeStopMark.Store(&nativeStopMark{ctx: resource.ctx})
+		if c.connectsInFlight.Load() > 0 {
+			if resource.cancel != nil {
+				resource.cancel()
+			}
+			go c.beginNativeStop(resource, interrupt)
+			return
 		}
-		go c.beginNativeStop(resource, interrupt)
+		go func() {
+			if client := resource.liveClient.Load(); client != nil {
+				client.Disconnect()
+			}
+			if resource.cancel != nil {
+				resource.cancel()
+			}
+			c.beginNativeStop(resource, interrupt)
+		}()
 	})
 	select {
 	case <-resource.done:
@@ -187,6 +217,13 @@ func (c *WhatsAppNativeChannel) connectNative(client *whatsmeow.Client) error {
 	c.mu.Unlock()
 	c.reconnectMu.Unlock()
 	defer c.wg.Done()
+	// Increment, THEN read the stop mark (stopNative does the reverse): one of
+	// the two always sees the other (#1675, see stopNative).
+	c.connectsInFlight.Add(1)
+	defer c.connectsInFlight.Add(-1)
+	if mark := c.nativeStopMark.Load(); mark != nil && mark.ctx == ctx {
+		return channels.ErrPairingConflict
+	}
 	err := client.ConnectContext(ctx)
 	c.mu.Lock()
 	current := c.nativeClientCurrentLocked(client)

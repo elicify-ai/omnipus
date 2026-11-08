@@ -367,6 +367,10 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 	// FR-022: the overrides are what this agent would store; Omnipus never
 	// stores a per-agent ask (inherited echoes of the ceiling are not
 	// overrides and never trip this).
+	// Channels FR-037: an always-ask tool never stores a per-agent allow.
+	if refuseAlwaysAskAllow(rau.w, overrides) {
+		return true
+	}
 	if refuseOmnipusPerAgentAsk(rau.w, rau.agentID, overrides) {
 		return true
 	}

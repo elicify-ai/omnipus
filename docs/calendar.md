@@ -8,7 +8,7 @@ Every workspace has a Calendar panel, between Tasks and Library in the top bar. 
 
 In a narrow panel or on a phone, the toolbar controls wrap onto extra rows so the view choices, agent filter and **New task** button remain visible and easy to tap.
 
-The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split keeps a repeating series separate from the task's last-run status: a run can be **Done** while future occurrences remain scheduled. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
+The Board, List and Graph hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split keeps a repeating series separate from the task's last-run status: a run can be **Done** while future occurrences remain scheduled. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
 The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists (done, failed, skipped, or missed), or the scheduled or no-record state when it does not — no record means the run's history is unavailable (retention expired or the schedule changed), which is different from a run missed while Omnipus was down. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
 
@@ -38,7 +38,7 @@ A repeat rule keeps firing on its own; use Week or Day to review recorded runs a
 5. Pick Custom for anything else. Choose the frequency, from minutes to years, and a multiplier from 1 to 99. Weekly rules take a weekday selection, monthly rules take a day of the month or an nth weekday. End the rule with Never, On date, or After N occurrences. A plain-English summary of the rule is shown at all times.
 6. Save. Week and Day show individual scheduled occurrences as chips, subject to the server's expansion limits; **More not shown** warns when expansion was capped. Month represents the returned event data with status-coloured dots, including the server's per-day groupings of frequent repeats where they apply. The grid itself prints no rhythm or count labels; hovering a date lists its first three event titles and can show a "+N more" count.
 
-Leaving Repeat on Does not repeat, with a time set, creates a one-time task that runs at that moment. The Board and List hide it; use Calendar to manage it.
+Leaving Repeat on Does not repeat, with a time set, creates a one-time task that runs at that moment. The Board, List and Graph hide it; use Calendar to manage it.
 
 ## How to edit or stop a series
 

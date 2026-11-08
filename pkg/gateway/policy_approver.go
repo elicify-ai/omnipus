@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -28,6 +29,16 @@ import (
 type policyApproverAdapter struct {
 	reg       *approvalRegistryV2
 	wsHandler *WSHandler
+}
+
+// consentAudit returns the agent loop's live audit logger for the consent
+// records (channels security S3), or nil when audit is off or no loop is
+// wired (pre-loop test harnesses).
+func (a *policyApproverAdapter) consentAudit() *audit.Logger {
+	if a.wsHandler == nil || a.wsHandler.agentLoop == nil {
+		return nil
+	}
+	return a.wsHandler.agentLoop.AuditLogger()
 }
 
 // newPolicyApproverAdapter constructs the adapter.  reg and wsHandler must be non-nil.
@@ -70,6 +81,11 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 		return false, "internal_error", false
 	}
 
+	// Every admission attempt writes its request record, a refused one too
+	// (saturated, missing turn id): its pre-delivered refusal is audited as the
+	// terminal decision below, and every decision is paired with its request
+	// (channels S3, approval state table, CHECK F2).
+	auditAskRequested(ctx, a.consentAudit(), entry)
 	if accepted {
 		// Broadcast the WS frame to connected clients scoped to the session owner (FR-073).
 		a.wsHandler.broadcastToolApprovalRequired(entry)
@@ -92,10 +108,28 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 	case outcome := <-entry.resultCh:
 		// FR-039: record approval latency on every terminal transition.
 		globalToolMetrics.ObserveApprovalLatency(outcome.Reason, time.Since(approvalStart).Seconds())
+		auditAskDecision(ctx, a.consentAudit(), entry, outcome, time.Since(approvalStart))
 		return outcome.Approved, outcome.Reason, outcome.RecordGrant
 	case <-ctx.Done():
 		// Turn was canceled (hard abort, graceful shutdown, etc.). Cancel the entry.
-		a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false)
+		outcome := ApprovalOutcome{Reason: denialReasonCancel}
+		if resolved, _ := a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false); !resolved {
+			// Another path (a session Stop's CancelPendingApprovals, a
+			// click, the timeout) made the entry terminal first. Every
+			// terminal transition delivers exactly one outcome on the
+			// buffered resultCh, after the registry lock is released, so it
+			// may not have arrived yet; this goroutine is its only reader.
+			// Receive it so the terminal decision is audited exactly once,
+			// here, whichever path resolved the card (channels S3, CHECK F1).
+			//
+			// GUARD: this receive blocks with no timeout. It relies on the
+			// registry invariant that EVERY transition out of pending
+			// delivers EXACTLY ONE outcome on resultCh. A new terminal
+			// transition that skips the send hangs this turn forever; one
+			// that sends twice blocks its sender on the full buffer.
+			outcome = <-entry.resultCh
+		}
+		auditAskDecision(context.WithoutCancel(ctx), a.consentAudit(), entry, outcome, time.Since(approvalStart))
 		globalToolMetrics.ObserveApprovalLatency("cancel", time.Since(approvalStart).Seconds())
 		return false, "cancel", false
 	}

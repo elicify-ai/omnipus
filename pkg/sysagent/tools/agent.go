@@ -378,6 +378,12 @@ func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 	if err != nil {
 		return fieldErrorResult(err), true
 	}
+	// Channels FR-037: an always-ask tool can be stored as ask or deny, never
+	// allow — on create exactly as on every update writer.
+	if name, bad := tools.AlwaysAskAllowViolation(patch.Set); bad {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", tools.AlwaysAskAllowRefusal(name),
+			"Set "+name+" to ask or deny, or leave it out")), true
+	}
 	if tool, bad := coreagent.ManagementGrantViolation(patch.Set); bad {
 		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementGrantRefusal(tool),
 			"Set "+tool+" to deny or leave it out; ask Omnipus to make management changes")), true

@@ -37,13 +37,15 @@ func AllTools(d *Deps) []tools.Tool {
 		// which now carry the optional workspace_id. There is no task section
 		// here any more: one family, one implementation.
 
-		// Channel management (6)
+		// Channel management (7)
 		NewChannelEnableTool(d),
 		NewChannelConfigureTool(d),
 		NewChannelDisableTool(d),
 		NewChannelListTool(d),
 		NewChannelTestTool(d),
 		NewChannelConnectTool(d),
+		// channels-spec-r8 FR-030: the dedicated outbound-list writer.
+		NewChannelOutboundTool(d),
 
 		// Skill management (3: install, search, create_skill and remove_skill retired)
 		NewSkillListTool(d),
@@ -79,7 +81,7 @@ func AllTools(d *Deps) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 35 system tools.
+// BuildRegistry creates a ToolRegistry containing all 36 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()
