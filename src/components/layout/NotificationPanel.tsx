@@ -8,7 +8,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/shared/ListStates'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore, type NotifItem } from '@/store/notifications'
 import { markNotificationRead, markAllNotificationsRead } from '@/lib/api'
@@ -107,7 +107,12 @@ export function NotificationPanel() {
         </SheetHeader>
 
         {items.length === 0 ? (
-          <EmptyState icon={<Tray size={32} />} message="No notifications yet" />
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon"><Tray className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+              <EmptyDescription>No notifications yet</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
           <ul className="divide-y divide-[var(--color-border)]">
             {items.map((item) => (

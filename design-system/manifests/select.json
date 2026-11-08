@@ -11,7 +11,8 @@
     "SelectItem",
     "SelectSeparator",
     "SelectScrollUpButton",
-    "SelectScrollDownButton"
+    "SelectScrollDownButton",
+    "selectTriggerVariants"
   ],
   "category": "primitive",
   "source": "src/components/ui/select.tsx",
@@ -21,7 +22,8 @@
     "dark"
   ],
   "variants": [
-    "default"
+    "field",
+    "ghost"
   ],
   "sizes": [
     "default"
@@ -29,14 +31,17 @@
   "states": [
     "default",
     "open",
-    "disabled"
+    "disabled",
+    "active"
   ],
   "stories": [
     {
       "file": "src/components/ui/select.stories.tsx",
       "exports": [
         "Default",
-        "Disabled"
+        "Disabled",
+        "Ghost",
+        "GhostActive"
       ]
     }
   ],
@@ -86,7 +91,13 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Select [check:select-browser] browser",
       "story": "Default",
-      "requiredTargets": [{ "selector": "[data-testid=\"select\"]", "attribute": "role", "value": "combobox" }],
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"select\"]",
+          "attribute": "role",
+          "value": "combobox"
+        }
+      ],
       "applicable": true
     },
     {
@@ -135,6 +146,44 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Select [check:select-reflow] reflow",
       "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-ghost-unit",
+      "kind": "unit",
+      "file": "src/components/ui/select.variants.test.tsx",
+      "test": "SelectTrigger variants — W2-1 §2.3 ghost variant carries the contract’s compact ghost classes and no field border/width",
+      "applicable": true
+    },
+    {
+      "id": "select-ghost-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/select.stories.tsx",
+      "test": "Ghost",
+      "story": "Ghost",
+      "applicable": true
+    },
+    {
+      "id": "select-ghost-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-ghost-browser] browser",
+      "story": "Ghost",
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"select-ghost\"]",
+          "attribute": "data-variant",
+          "value": "ghost"
+        }
+      ],
+      "applicable": true
+    },
+    {
+      "id": "select-ghost-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-ghost-pointer] pointer",
+      "story": "Ghost",
       "applicable": true
     }
   ]

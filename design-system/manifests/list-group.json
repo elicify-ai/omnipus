@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "component": "ListGroup",
+  "exports": [
+    "ListGroup"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/list-group.tsx",
+  "documentation": "docs/internal/design/components/list-group.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "with-actions"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "collapsed",
+    "expanded",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/list-group.stories.tsx",
+      "exports": [
+        "Collapsed",
+        "Expanded",
+        "WithActions"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "list-group-unit",
+      "kind": "unit",
+      "file": "src/components/ui/list-group.test.tsx",
+      "test": "ListGroup — collapsed by default (R35 \"all groups start collapsed\") renders a list-group section whose toggle starts aria-expanded=false with the body hidden and children unmounted",
+      "applicable": true
+    },
+    {
+      "id": "list-group-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/list-group.stories.tsx",
+      "test": "Collapsed",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-axe] axe",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-keyboard] keyboard",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-browser] browser",
+      "story": "Collapsed",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"list-group\"] [aria-controls]",
+          "attribute": "aria-expanded",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "id": "list-group-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-pointer] pointer",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "ListGroup adds no motion; the DisclosureRow toggle owns its own presentation."
+    },
+    {
+      "id": "list-group-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-forced-colors] forced-colors",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-root-size] root-size",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-zoom] zoom",
+      "story": "Collapsed",
+      "applicable": true
+    },
+    {
+      "id": "list-group-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ListGroup [check:list-group-reflow] reflow",
+      "story": "Collapsed",
+      "applicable": true
+    }
+  ]
+}

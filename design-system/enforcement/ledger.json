@@ -5173,6 +5173,384 @@
       "syntax": "StatusMotionFixture#svg-attribute.color<-AgentColor.options[9]",
       "reason": "Governed identity data, not chrome: the named StatusMotionFixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact app-story palette source and sink allow actual icon/text timing verification without introducing a second colour palette or a raw colour.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "Callout#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutActions#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "Callout#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutActions#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "Callout#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutActions#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/copy-button.tsx",
+      "syntax": "CopyButton#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/copy-button.tsx",
+      "syntax": "CopyButton#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/copy-button.tsx",
+      "syntax": "CopyButton#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "Empty#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyMedia#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "Empty#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyMedia#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "Empty#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyMedia#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/list-group.tsx",
+      "syntax": "ListGroup#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/list-group.tsx",
+      "syntax": "ListGroup#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/list-group.tsx",
+      "syntax": "ListGroup#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/page-header.tsx",
+      "syntax": "PageHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/page-header.tsx",
+      "syntax": "PageHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/page-header.tsx",
+      "syntax": "PageHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchField#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchToolbar#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchField#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchToolbar#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchField#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchToolbar#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/spinner.tsx",
+      "syntax": "Spinner#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/spinner.tsx",
+      "syntax": "Spinner#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/spinner.tsx",
+      "syntax": "Spinner#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "TooltipContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "TooltipContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "TooltipContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchFieldFrame#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchFieldFrame#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchFieldFrame#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
     }
   ],
   "reviewedBoundaries": [

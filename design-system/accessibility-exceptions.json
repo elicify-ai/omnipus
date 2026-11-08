@@ -25,6 +25,26 @@
       "manualEvidence": "outstanding-screen-reader",
       "reference": "https://github.com/radix-ui/primitives/discussions/3994",
       "rationale": "Radix modal DropdownMenu hides the application root while its trigger retains DOM tabIndex=0. While open, the complete axe ruleset must pass for the menu subtree and the separate reviewed aria-hidden-focus scan must match exactly one known host-root node. FocusScope keeps sequential and programmatic focus in the menu until Escape restores the trigger, after which the complete document must pass the full axe ruleset. This reviewed axe limitation applies only while every required proof passes."
+    },
+    {
+      "id": "radix-tooltip-portal-region",
+      "owner": "design-system",
+      "component": "Tooltip",
+      "story": "Default",
+      "check": "tooltip-axe",
+      "rule": "region",
+      "node": "div[data-radix-popper-content-wrapper=\"\"]",
+      "trigger": "[data-slot=\"tooltip-trigger\"]",
+      "content": "[data-slot=\"tooltip-content\"]",
+      "requiredAutomatedProofs": [
+        "open-bubble-full-axe",
+        "single-reviewed-region-node",
+        "trigger-described-by-bubble-text",
+        "restored-document-full-axe"
+      ],
+      "manualEvidence": "outstanding-screen-reader",
+      "reference": "https://dequeuniversity.com/rules/axe/4.12/region",
+      "rationale": "The open Tooltip bubble is portalled to the end of the document, outside the story main landmark (contract §2.9; founder K1 A, 2026-11-07). axe-core 4.12's region rule reports the outermost regionless ancestor, which is Radix's positioning wrapper around the content root (src/components/ui/tooltip.tsx TooltipContent). The exception is the region rule only, for that one wrapper only, and only while its single element child is the content root, one scan of the open document with the full axe ruleset reports nothing but that one region node (so the bubble subtree passes every other rule), the trigger's aria-describedby points at the bubble's text, and the whole document passes the full axe ruleset after the bubble closes. Screen-reader confirmation is still outstanding; the describedby link is the automated stand-in, not a screen-reader session."
     }
   ]
 }

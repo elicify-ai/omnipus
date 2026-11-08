@@ -19,7 +19,7 @@ The `asChild` contract preserves Radix’s enabled click and auxiliary-click cap
 
 In forced-colors mode, Button uses the paired system `ButtonFace` background and `ButtonText` foreground, with a one-pixel `ButtonText` boundary. These cues are scoped to forced colors and do not alter ordinary variant geometry or colours.
 
-Action feedback uses a persistent, initially empty polite live region beside the control in the same modal subtree. State changes update its text after render; returning to idle clears stale feedback. The region does not change the button’s accessible name or native disabled behavior. Automated checks verify DOM placement and updates; human screen-reader speech remains a separate acceptance check.
+Action feedback uses a persistent, initially empty polite live region beside the control in the same modal subtree. State changes update its text after render; returning to idle clears stale feedback. A composite that needs its own words passes `announcement` (for example CopyButton's "Copied"); it fills the same region only while `actionState` gives no feedback of its own, and never changes the accessible name or description. The region does not change the button’s accessible name or native disabled behavior. Automated checks verify DOM placement and updates; human screen-reader speech remains a separate acceptance check.
 
 The loading delay applies to pending announcements. Once the caller reports success, error, or idle, the accessible description and live-region text follow that actual state immediately, even if the spinner is finishing its minimum visual dwell. A retry cannot erase an error solely because that dwell has not finished.
 

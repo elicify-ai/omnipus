@@ -1,5 +1,3 @@
-import type { ReactNode } from 'react'
-import { EmptyState as EmptyStatePrimitive } from '@/components/ui/empty-state'
 import { ErrorState as ErrorStatePrimitive } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -14,10 +12,6 @@ export function SkeletonList() {
       ))}
     </div>
   )
-}
-
-export function EmptyState({ icon, message }: { icon: ReactNode; message: string }) {
-  return <EmptyStatePrimitive icon={icon} message={message} />
 }
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {

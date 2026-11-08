@@ -129,3 +129,7 @@ docs/internal/uat/screenshots/
 # Python bytecode (scripts/gateway-test-shards.py was once committed compiled)
 __pycache__/
 *.pyc
+
+# #986: written with absolute module ids by every dist/spa build; CI still
+# produces and reads it at this exact path, it is just never committed.
+/docs/internal/design/evidence/design-system-production-provenance.json
