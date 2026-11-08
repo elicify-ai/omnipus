@@ -1582,44 +1582,14 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 	}
 
 	if probeSkipReason == "" {
-		// ADR-067 FR-022: NO `GET /models` pre-fetch. For a catalog id,
-		// ValidateKey resolves its probe candidates straight from the registry
-		// catalog (the first active, tool-calling text models in document
-		// order) and falls through to the next one on a model_not_found
-		// answer, at most three times. The live fetch this used to make was a
-		// round trip whose answer the catalog already carries — and on a
-		// provider whose /models is public it returned a reassuring 200 that
-		// said nothing about the key.
-		//
-		// A custom row has no catalog models, so the key is checked against
-		// the model the operator chose (decodeAndValidate requires it), as PUT
-		// /providers/{id} does with its request's model. Without it ValidateKey
-		// would fall back to a live /models call and a guessed model — wrong
-		// where the model is a deployment name.
-		//
 		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
-		in := providers.ValidateInput{
-			ProviderID:   provider.ID,
-			ProviderName: providerDisplayName,
-			BaseURL:      probeBase,
-			APIKey:       provider.APIKey,
-		}
-		if provider.Custom {
-			in.ProbeModels = []string{provider.Model}
-		}
-		checker := a.ssrfChk()
-		var refusals *addressRefusalRecorder
-		if provider.Custom && a.ssrfChecker != nil {
-			refusals = &addressRefusalRecorder{sc: a.ssrfChecker}
-			checker = refusals
-		}
-		result := providers.ValidateKey(r.Context(), in, checker)
+		result, guardRefused := a.checkOnboardingKey(r.Context(), provider, providerDisplayName, probeBase)
 		// A custom row whose address the guard refused DURING the key check
 		// (the host now resolves to a blocked address, or the endpoint
 		// redirected to one) is refused like an address refused up front —
 		// before anything is stored. ValidateKey would report it only as
 		// "unreachable", which for a catalog row stays a warning.
-		if refusals != nil && refusals.refused.Load() {
+		if guardRefused {
 			slog.Warn("onboarding: SSRF guard refused a custom endpoint during the key check",
 				"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
 			jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
@@ -1717,6 +1687,43 @@ func (a *restAPI) refuseBlockedCustomEndpoint(
 		return true
 	}
 	return false
+}
+
+// checkOnboardingKey runs validateAndStoreOnboardingKey's key check and
+// reports whether the address guard refused a custom row's endpoint while it
+// ran (always false for a catalog row, or with the guard off).
+//
+// ADR-067 FR-022: NO `GET /models` pre-fetch. For a catalog id, ValidateKey
+// resolves its probe candidates straight from the registry catalog (the first
+// active, tool-calling text models in document order) and falls through to
+// the next one on a model_not_found answer, at most three times. The live
+// fetch this used to make was a round trip whose answer the catalog already
+// carries — and on a provider whose /models is public it returned a
+// reassuring 200 that said nothing about the key.
+//
+// A custom row has no catalog models, so the key is checked against the model
+// the operator chose (decodeAndValidate requires it), as PUT /providers/{id}
+// does with its request's model. Without it ValidateKey would fall back to a
+// live /models call and a guessed model — wrong where the model is a
+// deployment name.
+func (a *restAPI) checkOnboardingKey(
+	ctx context.Context, provider onboardingProviderChoice, displayName, probeBase string,
+) (providers.ValidationResult, bool) {
+	in := providers.ValidateInput{
+		ProviderID:   provider.ID,
+		ProviderName: displayName,
+		BaseURL:      probeBase,
+		APIKey:       provider.APIKey,
+	}
+	if provider.Custom {
+		in.ProbeModels = []string{provider.Model}
+	}
+	if !provider.Custom || a.ssrfChecker == nil {
+		return providers.ValidateKey(ctx, in, a.ssrfChk()), false
+	}
+	refusals := &addressRefusalRecorder{sc: a.ssrfChecker}
+	result := providers.ValidateKey(ctx, in, refusals)
+	return result, refusals.refused.Load()
 }
 
 // addressRefusalRecorder is the providers.URLChecker a custom row's key check
