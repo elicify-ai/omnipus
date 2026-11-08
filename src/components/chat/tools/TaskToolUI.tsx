@@ -1,6 +1,9 @@
 // TaskToolUI — issue #1683. A readable card for create_task / update_task /
-// run_task / delete_task, live (makeAssistantToolUI) and on history replay
-// (TaskToolCardBlock from ToolCallBadge). Raw rule text is never shown.
+// run_task / delete_task, live (makeAssistantToolUI) and on history replay:
+// TaskToolCardBlock is rendered by the real saved-history dispatcher
+// (HistoricalToolCallBlock.tsx::renderSavedToolCall, reached from
+// ChatScreen.tsx::VirtualAssistantMessageRow) and by ToolCallBadge. Raw rule
+// text is never shown.
 //
 // The trigger is parsed with the generated TaskTrigger Zod schema. A trigger
 // that fails that parse falls back to the generic chip — no invented schedule.
@@ -11,8 +14,12 @@
 // task detail panel uses (taskFormFields.ts::scheduledTriggerSummary, called
 // from TaskDetailPanel.tsx::TaskDetailPanel; founder C1 B, 2026-11-07 11:16Z).
 // A repeating trigger keeps the trigger's own zone: the clock time via
-// formatInstantInTriggerZone, and the calendar date the rule helpers infer via
-// triggerZoneCalendarAnchor.
+// formatInstantInTriggerZone, and the calendar dates the rule helpers print
+// (the start words and the end date) via triggerZoneCalendarAnchor.
+//
+// Wording: every string below follows the Omnipus voice (founder rule
+// 2026-11-08): in a chat the agent speaks as "I", says what happened, and an
+// error or warning ends with one thing the person can do.
 
 import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
@@ -20,34 +27,56 @@ import { CalendarBlank, Warning } from '@phosphor-icons/react'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { Card } from '@/components/ui/card'
+import { ErrorState } from '@/components/ui/error-state'
 import type { TaskTrigger } from '@/lib/api'
 import { TaskTrigger as TaskTriggerSchema } from '@/lib/api/generated/schemas'
-import { parseRruleString, summarizeRecurrence } from '@/lib/calendar/recurrence'
+import { parseRruleString, summarizeRecurrence, type RecurrenceEndCondition } from '@/lib/calendar/recurrence'
 import { scheduledTriggerSummary } from '@/components/workspaces/taskFormFields'
 import { GenericToolCall } from './GenericToolCall'
 
 export const TASK_TOOL_NAMES = ['create_task', 'update_task', 'run_task', 'delete_task'] as const
 export type TaskToolName = (typeof TASK_TOOL_NAMES)[number]
 
-const VERBS: Record<TaskToolName, string> = {
-  create_task: 'Task scheduled',
-  update_task: 'Task changed',
-  run_task: 'Task run started',
-  delete_task: 'Task deleted',
-}
+/**
+ * The card heading, in the agent's voice. create_task and run_task each have a
+ * second heading, picked in `headingFor` from the call and its result: a create
+ * with no schedule must not claim one (CHECK F3), and a run_task that found the
+ * task already running started nothing.
+ */
+const HEADINGS = {
+  scheduled: 'I scheduled the task',
+  created: 'I created the task',
+  updated: 'I updated the task',
+  started: 'I started the task',
+  alreadyRunning: 'The task is already running',
+  deleted: 'I deleted the task',
+} as const
+
+/**
+ * The `note` pkg/tools/run_task.go::TaskRunTool.Execute returns, next to the
+ * task_id / status / session_id, when the task is already in progress.
+ */
+const ALREADY_RUNNING_NOTE = 'already running'
 
 /**
  * Plain sentence for a result that carries `schedule_sync_warning`.
  * Keeps the meaning of tool-parity spec r17 §7.11 (the REST sentence is
  * `task "<id>" was saved but its schedule could not be re-armed. The saved
  * trigger stays authoritative; re-save the schedule or restart the gateway.`):
- * the task was saved, the schedule is not active, and the saved trigger still
- * counts until someone re-saves it or restarts.
+ * the task was saved, the schedule is not active, the saved schedule is still
+ * the one to use, and there is one thing to do from here — save it again in
+ * the Calendar. Wording is team-lead decision D4 (2026-11-08).
  */
-const SCHEDULE_NOT_ARMED =
-  'Saved, but the schedule is not active. The task was saved and the saved trigger still counts; re-save the schedule or restart to arm it.'
+const SCHEDULE_NOT_ACTIVE =
+  "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again."
 
-const FAILURE_FALLBACK = 'This task action did not succeed.'
+/** The verb of the no-reason failure sentence, per tool (team-lead decision D5). */
+const FAILED_ACTION: Record<TaskToolName, string> = {
+  create_task: 'create',
+  update_task: 'update',
+  run_task: 'start',
+  delete_task: 'delete',
+}
 
 type PartStatus = { type: string; reason?: string }
 
@@ -170,6 +199,25 @@ function triggerZoneCalendarAnchor(epochMs: number, timeZone: string): Date | nu
   return new Date(year, month - 1, day, 12, 0, 0, 0)
 }
 
+/**
+ * An "ends on" date the recurrence helpers print as the RULE's calendar date.
+ * `summarizeRecurrence` reads `end.date` through local getters — the editor
+ * builds it from a picked day and `endOfDayUtc` reads it back the same way —
+ * but `parseRruleString` returns the raw UNTIL instant. Printed as-is, a
+ * Los Angeles schedule that ends at the end of 10 November (UNTIL
+ * 20261111T075959Z) reads "November 11" to a UTC viewer. FR-006a: "Ends on
+ * date D" is D 23:59:59 in the rule's own zone, so the date to show is the
+ * instant's date there; the same noon carrier as the start anchor delivers it.
+ * Done here, not in recurrence.ts: the calendar editor and the task detail
+ * panel call the same helper and read the viewer's calendar. Returns null for
+ * an unusable instant or zone; the caller then shows no repeating schedule.
+ */
+function endInTriggerZone(end: RecurrenceEndCondition, timeZone: string): RecurrenceEndCondition | null {
+  if (end.kind !== 'on-date') return end
+  const day = triggerZoneCalendarAnchor(end.date.getTime(), timeZone)
+  return day ? { kind: 'on-date', date: day } : null
+}
+
 function plainSchedule(trigger: TaskTrigger): string | null {
   if (trigger.type === 'once') {
     // Founder C1 B, 2026-11-07 11:16Z: the same viewer-local string the task
@@ -190,9 +238,12 @@ function plainSchedule(trigger: TaskTrigger): string | null {
   // The zone-anchored date, not `new Date(dtstart)`: the weekday / day / month
   // the helpers infer must be the trigger's, matching the clock time and zone
   // label printed beside them.
-  const state = parseRruleString(rrule, anchor.getTime())
-  if (!state) return null
-  const phrase = summarizeRecurrence({ kind: 'rrule', state }, anchor)
+  const parsed = parseRruleString(rrule, anchor.getTime())
+  if (!parsed) return null
+  // The end date too: the trigger's calendar date, not the viewer's.
+  const end = endInTriggerZone(parsed.end, tz)
+  if (!end) return null
+  const phrase = summarizeRecurrence({ kind: 'rrule', state: { ...parsed, end } }, anchor)
   return `${phrase} at ${when.time} (${when.zoneLabel})`
 }
 
@@ -203,10 +254,46 @@ function hasSyncWarning(result: unknown): boolean {
   return typeof warning === 'string' && warning.trim() !== ''
 }
 
-function failureMessage(result: unknown, error?: string): string {
+function isAlreadyRunning(result: unknown): boolean {
+  return unwrapPayload(result)?.note === ALREADY_RUNNING_NOTE
+}
+
+/**
+ * The heading for a settled, successful call. `scheduled` is true when the
+ * card shows a schedule — a create that carries none says "created", never
+ * "scheduled".
+ */
+function headingFor(toolName: TaskToolName, scheduled: boolean, result: unknown): string {
+  switch (toolName) {
+    case 'create_task':
+      return scheduled ? HEADINGS.scheduled : HEADINGS.created
+    case 'update_task':
+      return HEADINGS.updated
+    case 'run_task':
+      return isAlreadyRunning(result) ? HEADINGS.alreadyRunning : HEADINGS.started
+    case 'delete_task':
+      return HEADINGS.deleted
+  }
+}
+
+/**
+ * The reason a failed call came with: its error text, else a text result (live)
+ * or the persisted `{ text }` envelope's text (saved history). Null when the
+ * call came back with none.
+ */
+function failureReason(result: unknown, error?: string): string | null {
   if (typeof error === 'string' && error.trim() !== '') return error
   if (typeof result === 'string' && result.trim() !== '') return result
-  return FAILURE_FALLBACK
+  if (isRecord(result) && typeof result.text === 'string' && result.text.trim() !== '') return result.text
+  return null
+}
+
+/** A real reason is shown as it came; with none, the sentence says so and names the action (D5). */
+function failureMessage(toolName: TaskToolName, result: unknown, error?: string): string {
+  return (
+    failureReason(result, error) ??
+    `I couldn't ${FAILED_ACTION[toolName]} the task, and no reason was given. Try again.`
+  )
 }
 
 function toMessagePartStatus(status: PartStatus): MessagePartStatus {
@@ -246,12 +333,13 @@ function TaskToolFallback(props: TaskToolCardBlockProps & { status: PartStatus }
   )
 }
 
+/**
+ * The catalogued error presentation (role="alert", forced-colours text), with
+ * the same inline layout the saved-history outcome lines use
+ * (historyEntryOutcome.tsx): left-aligned, tight vertical padding.
+ */
 function TaskToolFailure({ message }: { message: string }) {
-  return (
-    <p className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
-      {message}
-    </p>
-  )
+  return <ErrorState message={message} className="mt-[var(--space-2)] items-start py-[var(--space-1)]" />
 }
 
 function TaskToolLinks({ workspaceId }: { workspaceId: string }) {
@@ -266,7 +354,7 @@ function TaskToolLinks({ workspaceId }: { workspaceId: string }) {
         data-testid="task-tool-link-open"
         className={className}
       >
-        Open task
+        Open tasks
       </Link>
       <Link
         to="/workspaces/$workspaceId/calendar"
@@ -275,7 +363,7 @@ function TaskToolLinks({ workspaceId }: { workspaceId: string }) {
         className={className}
       >
         <CalendarBlank size={12} aria-hidden="true" />
-        Show in Calendar
+        Open calendar
       </Link>
     </div>
   )
@@ -304,7 +392,7 @@ export function TaskToolCardBlock({
     />
   )
   if (callFailed(part, isError)) {
-    return <TaskToolFailure message={failureMessage(result, error)} />
+    return <TaskToolFailure message={failureMessage(toolName, result, error)} />
   }
   if (running || part.type === 'incomplete') return fallback
 
@@ -322,7 +410,7 @@ export function TaskToolCardBlock({
         data-testid="task-tool-verb"
         className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]"
       >
-        {VERBS[toolName]}
+        {headingFor(toolName, schedule !== null, result)}
       </p>
       {title !== '' && (
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{title}</p>
@@ -338,7 +426,7 @@ export function TaskToolCardBlock({
           className="flex items-start gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           <Warning size={12} weight="fill" className="mt-[var(--space-0-5)] shrink-0" aria-hidden="true" />
-          <span>{SCHEDULE_NOT_ARMED}</span>
+          <span>{SCHEDULE_NOT_ACTIVE}</span>
         </p>
       )}
       {workspaceId !== '' && <TaskToolLinks workspaceId={workspaceId} />}

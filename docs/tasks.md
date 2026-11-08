@@ -119,15 +119,15 @@ Only the agent that created a task may change what it asks for — its instructi
 - An agent cannot schedule a task in another workspace: creating one with a schedule there, or adding a schedule to one, is refused and nothing is saved. Only the assignee there or a person can schedule it.
 - To stop a schedule, send `{"type": "manual", "config": {}}`. The schedule is removed and the task keeps its current status.
 
-**What you see in chat.** When an agent creates, changes, runs or deletes a task, the chat shows a short card instead of the raw tool result, both as it happens and when you reopen the chat later. The card's heading says what happened: "Task scheduled", "Task changed", "Task run started" or "Task deleted". It shows the task's title when the agent's call includes one and, when the call carries a schedule, that schedule in plain words rather than as a raw rule. A one-time run is shown in your own local time, the same way the task detail panel shows it; a repeating run keeps the schedule's own time zone. For example, a weekly report scheduled for Monday morning in Berlin reads:
+**What you see in chat.** When an agent creates, changes, starts or deletes a task, the chat shows a short card instead of the raw tool result, both as it happens and when you reopen the chat later. The card's heading says what the agent did: "I scheduled the task" (a new task that has a schedule), "I created the task" (a new task without one), "I updated the task", "I started the task" or "I deleted the task". If the agent starts a task that is already running, the heading reads "The task is already running", because nothing new was started. The card shows the task's title when the agent's call includes one and, when the call carries a schedule, that schedule in plain words rather than as a raw rule. A one-time run is shown in your own local time, the same way the task detail panel shows it. A repeating schedule is shown in the schedule's own time zone: its clock time, the days it falls on and the date it ends. For example, a weekly report scheduled for Monday morning in Berlin reads:
 
 ```
-Task scheduled
+I scheduled the task
 Weekly report
 Repeats every week on Monday at 09:00 (Berlin time)
 ```
 
-When the call names its workspace, the card also links to that workspace's Tasks panel and its Calendar. If the schedule was saved but could not be armed, the card says the task was saved, the schedule is not active, and the saved trigger still counts until the schedule is saved again or Omnipus is restarted. A call that failed or was refused shows its error or refusal text instead of a card.
+When the agent's call names its workspace, the card also offers **Open tasks** (that workspace's Tasks panel) and **Open calendar**. If the task was saved but its schedule could not be activated, the card says so: "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again." A call that fails or is refused shows the reason when one came back, instead of a card. When none did, it reads "I couldn't create the task, and no reason was given. Try again." — with "update", "start" or "delete" in place of "create" for the other actions.
 
 ## Task statuses
 
