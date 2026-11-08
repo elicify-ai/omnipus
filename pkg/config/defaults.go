@@ -463,7 +463,10 @@ func defaultToolPoliciesSysagent() map[string]string {
 		// asking for, listing and reading secrets, mailboxes and own
 		// conversations is allowed (each is also explicitly denied per agent
 		// wherever §6.5 says so).
-		"connect_channel":       "ask",
+		"connect_channel": "ask",
+		// channels-spec-r8 FR-032: the outbound-list writer ships ask and is
+		// always-ask besides (FR-036: God Mode never lifts it).
+		"set_channel_outbound":  "ask",
 		"connect_mailbox":       "ask",
 		"set_agent_permissions": "ask",
 		"remove_secret":         "ask",

@@ -351,6 +351,9 @@ var allStaticToolNames = []string{
 	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
 	"connect_channel", "connect_mailbox", "set_agent_permissions",
 	"read_conversation", "list_mailboxes",
+	// channels-spec-r8 FR-032: the dedicated outbound-list writer, implemented
+	// in pkg/sysagent/tools and always asking (FR-036).
+	"set_channel_outbound",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -1014,6 +1017,10 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// ceiling raise does not remove the agent's Ask posture.
 				"environment_setup": ask,
 				"bash":              config.ToolPolicyDeny,
+				// Founder Q4 (2026-11-03): every chat-capable agent may change
+				// a connection's posting list, always with a fresh approval
+				// (channels-spec-r8 FR-036); workers are denied below.
+				"set_channel_outbound": ask,
 			}),
 		},
 	}
@@ -1022,11 +1029,12 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 // workerTierDeniedTools is the Main-only set from the 2026-10-22 default
 // tool table. Workers may list secrets but ask their main agent to request
 // one; they do not author goals, plans, new tasks or retrospectives, and
-// they do not change skills (skills spec r15 §10).
+// they do not change skills (skills spec r15 §10). Founder Q4 (2026-11-03)
+// opens set_channel_outbound to chat-capable (Main) agents only.
 var workerTierDeniedTools = []string{
 	"answer_request", "read_conversation", "set_goal", "run_retrospective",
 	"create_plan", "execute_plan", "update_plan", "stop_plan", "plan_correct", "create_task",
-	"request_secret", "edit_skill", "show_to_user",
+	"request_secret", "edit_skill", "show_to_user", "set_channel_outbound",
 }
 
 // RestrictForWorkerTier turns Main creation defaults into Worker defaults

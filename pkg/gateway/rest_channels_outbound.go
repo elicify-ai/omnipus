@@ -292,89 +292,19 @@ func (a *restAPI) lookUpDiscordTargets(ctx context.Context, id string, added []s
 	return refused, unavailable
 }
 
-// applyOutboundChange is the one outbound writer (FR-020), shared by PUT
-// /api/v1/channels/{id}/outbound and the set_channel_outbound tool:
-// (1) without a lock, read the live configuration, fast-fail on
-// expectedRevision, canonicalize targets and run the bounded Discord
-// look-ups for added Discord targets (ctx carries the request's
-// cancellation; each look-up adds its own 5-second deadline); (2) take
-// configMu; (3) recheck the live revision (409 stale_revision); (3b)
-// classify extending vs non-extending over the saved and live snapshots
-// (409 saved_live_mismatch); (4) save through the common save step with
-// GuardOutbound(dedicated = true); (5) on a live-refresh failure publish the
-// guard-accepted outbound value alone and set Warning; (6) return the
-// contract ChannelOutboundWriteResponse. actor names the writer for logs
-// ("rest" or the calling agent id); it grants nothing.
-//
-// Errors: *outboundRejectionError for every contract refusal,
-// errOutboundNotConfigured for an instance with no config entry; any other
-// error is a save failure before the file was written.
-func (a *restAPI) applyOutboundChange(
-	ctx context.Context,
-	id string,
-	policy gen.ChannelOutboundUpdateRequestPolicy,
-	targets []string,
-	expectedRevision, actor string,
-) (gen.ChannelOutboundWriteResponse, error) {
-	var none gen.ChannelOutboundWriteResponse
-	live := a.agentLoop.GetConfig()
-	inst, configured := live.Channels[id]
-	if !configured {
-		return none, errOutboundNotConfigured
-	}
-	if config.ChannelConfigRevision(live, id) != expectedRevision {
-		return none, outboundRejection(http.StatusConflict, gen.ChannelOutboundRejectionCodeStaleRevision,
-			"these settings changed since they were read; read them again and retry; nothing was saved")
-	}
-	platform := channels.InstancePlatform(id, inst)
-	canonical, errs := channels.CanonicalizeTargets(platform, targets)
-	if len(errs) > 0 {
-		return none, invalidTargetsRejection(errs)
-	}
-	if len(canonical) > outboundMaxTargets {
-		return none, outboundRejection(http.StatusBadRequest, gen.ChannelOutboundRejectionCodeTooManyTargets,
-			fmt.Sprintf("at most %d people and groups can be listed; nothing was saved", outboundMaxTargets))
-	}
-	if canonical == nil {
-		canonical = []string{}
-	}
-	added := addedTargets(platform, inst.Outbound, canonical)
-	rule := channels.PlatformStartRuleFor(platform)
-	if !rule.StartSupported && (channels.StartPolicy(policy) == channels.StartPolicyAgentMayStart || len(added) > 0) {
-		if len(added) > 0 && rule.PersonRefusal == string(gen.ChannelOutboundRejectionCodePlatformCannotMessagePeople) {
-			return none, outboundRejection(http.StatusUnprocessableEntity,
-				gen.ChannelOutboundRejectionCodePlatformCannotMessagePeople,
-				"this platform can only answer, not start a direct message")
-		}
-		return none, outboundRejection(http.StatusUnprocessableEntity, gen.ChannelOutboundRejectionCodePlatformCannotStart,
-			"starting messages is not supported yet on "+rule.DisplayName)
-	}
-	if platform == "discord" && len(added) > 0 {
-		if a.channelAvailability(id).State != channels.AvailabilityRunning {
-			return none, outboundRejection(http.StatusConflict, gen.ChannelOutboundRejectionCodeConnectFirst, outboundConnectFirst)
-		}
-		rawIndex := firstRawEntries(platform, targets)
-		refused, unavailable := a.lookUpDiscordTargets(ctx, id, added, rawIndex)
-		if len(unavailable) > 0 {
-			return none, lookupUnavailableRejection(unavailable)
-		}
-		if len(refused) > 0 {
-			return none, invalidTargetsRejection(refused)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return none, err // a cancelled request never commits later (FR-019)
-	}
-	desired := &config.ChannelOutboundConfig{Policy: string(policy), Targets: canonical}
-	return a.commitOutboundChange(id, desired, expectedRevision, actor)
-}
-
-// commitOutboundChange is applyOutboundChange's locked phase (steps 2–6).
-func (a *restAPI) commitOutboundChange(id string, desired *config.ChannelOutboundConfig, expectedRevision, actor string) (gen.ChannelOutboundWriteResponse, error) {
+// commitOutboundChange is applyOutboundChange's locked phase (steps 2–6). The
+// request context is checked again once configMu is held (security S2,
+// FR-019): a request cancelled or expired while waiting for the lock commits
+// nothing, durable or live, even when the lock holder left this channel's
+// revision unchanged.
+func (a *restAPI) commitOutboundChange(ctx context.Context, id string, desired *config.ChannelOutboundConfig, expectedRevision, actor string) (gen.ChannelOutboundWriteResponse, error) {
 	var none gen.ChannelOutboundWriteResponse
 	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return none, err // cancelled while waiting for the lock: nothing is written (FR-019)
+	}
 	live := a.agentLoop.GetConfig()
 	liveInst, configured := live.Channels[id]
 	if !configured {
