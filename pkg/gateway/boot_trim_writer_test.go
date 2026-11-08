@@ -8,11 +8,24 @@ package gateway
 // profile it CREATES a sibling .chrome.lock file and REMOVES the allow-listed
 // cache directories. This test plants enough real profiles that the sweep
 // outlasts the drain, waits for the first profile to be touched (the sweep
-// is provably in flight), drains, and then requires the home to be
-// completely unchanged — additions, removals and resizes all fail. Post-fix
-// the drain waits out the whole sweep inside the join; on the mutant that
-// dropped the trim goroutine from the WaitGroup the drain returns early and
-// the remaining profiles are trimmed after it did.
+// is provably in flight), drains, and then requires the sweep to have
+// finished every planted profile and the home to be completely unchanged —
+// additions, removals and resizes all fail. Post-fix the drain waits out the
+// whole sweep inside the join; on the mutant that dropped the trim goroutine
+// from the WaitGroup the drain returns early and the remaining profiles are
+// trimmed after it did.
+//
+// The drain's budget is controlled by this test, not a wall clock (CHECK 4
+// finding R3, 2026-11-08). The test used to hand the drain a real
+// bootBackgroundStopTimeout (10 s) deadline: under a loaded -race run the
+// 1,200-profile sweep outlasted it, the drain returned by design (a budgeted
+// stop continues without a writer that is still running) and the join
+// assertion failed although nothing was wrong with the join. This test proves
+// the JOIN; whether a drain that runs out of budget continues is a separate
+// contract that the real budget keeps in production. So the drain's context
+// is cancelled only by the test, and only on its liveness guard — the go test
+// deadline, the same bound that would otherwise kill a hung test — which
+// fails the test as a hang, never passes it.
 import (
 	"context"
 	"errors"
@@ -94,17 +107,72 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 	// until the whole walk is done.
 	firstProfileTouch(t, profileRoot, plantedDirs)
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), bootBackgroundStopTimeout)
+	// The drain's budget is test-controlled (CHECK 4 R3, see the file
+	// comment): no wall-clock deadline races the sweep's real workload.
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	defer stopCancel()
-	rc.stopBootBackgroundWriters(stopCtx)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		rc.stopBootBackgroundWriters(stopCtx)
+	}()
+	awaitTrimDrainReturn(t, drained, stopCancel, profileRoot, plantedDirs)
 
 	select {
 	case <-rc.bootBackgroundDone:
 	default:
 		t.Fatal("boot background writers were not joined by the teardown drain")
 	}
+	// The join covers the WHOLE boot sweep: when the drain returns, every
+	// planted profile has been walked and its allow-listed cache removed
+	// (FR-072 trigger 2 — none of them has a live Chrome or a held lock). A
+	// drain that returned while the sweep was still walking leaves planted
+	// caches behind and fails here, before the write-window check below.
+	if remaining := plantedCachesRemaining(plantedDirs); len(remaining) > 0 {
+		t.Fatalf("boot cache-trim sweep still had %d of %d planted profiles untrimmed when the teardown drain returned (first: %v)",
+			len(remaining), trimKillProfiles, remaining[:min(3, len(remaining))])
+	}
 	// Post-drain the home must be EXACTLY as the drain left it. On the
 	// unjoined mutant the remaining profiles' locks and cache removals land
 	// here and fail this line.
 	watchHomeQuiescent(t, home, homeTree(t, home))
+}
+
+// plantedCachesRemaining returns the planted cache directories that still
+// exist. A stat error other than not-exist counts as remaining: the
+// instrument must not read an unreadable path as "trimmed".
+func plantedCachesRemaining(plantedDirs []string) []string {
+	var remaining []string
+	for _, dir := range plantedDirs {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			remaining = append(remaining, dir)
+		}
+	}
+	return remaining
+}
+
+// awaitTrimDrainReturn waits for the teardown drain to return. Its only
+// clock is a liveness guard: the go test deadline (minus a margin to report
+// before the harness kills the binary), or none when the run has no
+// deadline. The guard can only FAIL the test — it cancels the drain's
+// context, waits for the drain to return, and reports a hang with the
+// sweep's progress — so no load level can turn a slow sweep into a pass,
+// and none can turn a correct join into the R3 false "not joined" failure.
+func awaitTrimDrainReturn(t *testing.T, drained <-chan struct{}, cancel context.CancelFunc, profileRoot string, plantedDirs []string) {
+	t.Helper()
+	var guard <-chan time.Time
+	if deadline, ok := t.Deadline(); ok {
+		margin := 30 * time.Second
+		timer := time.NewTimer(max(time.Until(deadline)-margin, time.Second))
+		defer timer.Stop()
+		guard = timer.C
+	}
+	select {
+	case <-drained:
+	case <-guard:
+		cancel()
+		<-drained
+		t.Fatalf("teardown drain did not return before the test deadline: a hang, not a budget expiry; %d of %d planted profiles under %s still untrimmed",
+			len(plantedCachesRemaining(plantedDirs)), trimKillProfiles, profileRoot)
+	}
 }
