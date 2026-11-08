@@ -99,7 +99,12 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 
 	docx := minimalDocx(t)
 	for i := 1; i <= 2; i++ {
-		ctx, cancel := context.WithCancel(context.Background())
+		// The spec's per-call deadline (CallTimeout, the 120 s the tools
+		// pass): a LibreOffice stuck on its startup dialog fails this test
+		// with the deadline outcome instead of hanging to the go test
+		// timeout. Each preview is one call, so each iteration carries its
+		// own deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), CallTimeout)
 		adm, admErr := svc.Admit(ctx, true)
 		require.NoError(t, admErr, "instrument: the office slot is free — each admission is released before the next is requested")
 		res, previewErr := svc.Preview(ctx, adm, Request{
@@ -108,7 +113,7 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 		adm.Release() // released before the next admission, including on failure
 		cancel()
 		require.NoError(t, previewErr,
-			"T-102 §3.4 D8c: preview %d of two must succeed on the converter's own read list — the pre-D8c code grants no read on the filtered registry under <home>/system, so LibreOffice cannot open it", i)
+			"T-102 §3.4 D8c: preview %d of two must succeed on the converter's own read list — a failure here is the converter failing to start confined (pre-D8c: the registry under <home>/system was not granted; at the D8c state on macOS: LibreOffice's parent-folder look-up denials, the open issue the D8d ruling decides)", i)
 		require.NotEmpty(t, res.Pages, "T-102: preview %d of two produces pages", i)
 		require.Equal(t, "", res.Unconfined, "T-102: the converter runs confined on preview %d — an unconfined run is not a pass", i)
 	}

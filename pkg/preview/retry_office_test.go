@@ -23,17 +23,22 @@ import (
 
 // T-78 uses an external process only for the converter. The actual call,
 // launcher, owner publication, environment and conversion decision stay real.
-// The child snapshots its owner record immediately on entry: this proves
-// publication before target entry, not the stricter before-go-byte ordering.
-// The latter needs a separate pre-go observation seam; it is not claimed here.
+// The child no longer reads the owner record: §3.4 D1 (and §3.4 D8c) keep
+// `<id>/owner.json` out of the converter's reach on purpose, so a confined
+// fake must not read it (it used to exit 71 whenever an earlier test in the
+// same process had primed the sandbox). The publication-before-entry oracle
+// moves to the parent, which reads the record while the fake is held at a
+// work-folder barrier (officeRetryRunWithOwnerBarriers): the record must then
+// name THIS start's launcher — exactly what the child's entry-time snapshot
+// proved, from a vantage D1 allows. The fake carries the rest itself: its
+// own launcher identity, profile, and input.
 type officeRetryReceipt struct {
 	fakeOfficeReceipt
-	Owner         ownerRecord `json:"owner"`
-	Start         string      `json:"start"`
-	LauncherPID   int         `json:"launcher_pid"`
-	LauncherStart string      `json:"launcher_start"`
-	Profile       string      `json:"profile"`
-	Input         string      `json:"input"`
+	Start         string `json:"start"`
+	LauncherPID   int    `json:"launcher_pid"`
+	LauncherStart string `json:"launcher_start"`
+	Profile       string `json:"profile"`
+	Input         string `json:"input"`
 }
 
 func officeRetryProcess(behavior string) int {
@@ -42,14 +47,6 @@ func officeRetryProcess(behavior string) int {
 		return 70
 	}
 	n := len(starts) + 1
-	raw, err := os.ReadFile(filepath.Join("..", ownerFile)) // §3.4 D1: cwd is work/; the record is the call folder
-	if err != nil {
-		return 71
-	}
-	var owner ownerRecord
-	if json.Unmarshal(raw, &owner) != nil {
-		return 72
-	}
 	profile, err := os.ReadFile(filepath.Join("profile", "user", "registrymodifications.xcu"))
 	if err != nil {
 		return 73
@@ -70,7 +67,7 @@ func officeRetryProcess(behavior string) int {
 	if err != nil {
 		return 75
 	}
-	receipt := officeRetryReceipt{fakeOfficeReceipt: fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}, Owner: owner, Start: start, LauncherPID: launcherPID, LauncherStart: launcherStart, Profile: string(profile), Input: string(input)}
+	receipt := officeRetryReceipt{fakeOfficeReceipt: fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}, Start: start, LauncherPID: launcherPID, LauncherStart: launcherStart, Profile: string(profile), Input: string(input)}
 	if n == 2 && strings.HasSuffix(behavior, "_block") {
 		self, executableErr := os.Executable()
 		if executableErr != nil {
@@ -102,6 +99,14 @@ func officeRetryProcess(behavior string) int {
 	data, err := json.Marshal(receipt)
 	if err != nil || os.WriteFile(fmt.Sprintf("retry-start-%d.json", n), data, 0600) != nil {
 		return 77
+	}
+	// The owner-record barrier: the parent reads <id>/owner.json while this
+	// start is held here — a file barrier in work/, never a timer — then
+	// releases it. Without the wait the call could end (and the record reset
+	// to idle) before the parent's mid-run read; bounded, so a broken parent
+	// fails the call instead of hanging it.
+	if !officeRetryOwnerSeen(n) {
+		return 76
 	}
 	if n == 2 && strings.HasSuffix(behavior, "_block") {
 		time.Sleep(30 * time.Second) // canceled by the REAL conversion lifetime
@@ -160,6 +165,27 @@ func officeRetryPDF() []byte {
 	return []byte(b.String())
 }
 
+// officeRetryOwnerSeen polls for the parent's release file for this start,
+// bounded by 5 s so a broken parent fails the call visibly instead of
+// hanging it.
+func officeRetryOwnerSeen(n int) bool {
+	want := fmt.Sprintf("retry-owner-seen-%d", n)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := os.ReadFile(want); err == nil {
+			return true
+		}
+		select {
+		case <-deadline.C:
+			return false
+		case <-tick.C:
+		}
+	}
+}
+
 func officeRetryReceipts(t *testing.T, c *call) []officeRetryReceipt {
 	t.Helper()
 	paths, err := filepath.Glob(filepath.Join(c.dir, "retry-start-*.json"))
@@ -176,18 +202,16 @@ func officeRetryReceipts(t *testing.T, c *call) []officeRetryReceipt {
 	return receipts
 }
 
-func assertOfficeRetryRecord(t *testing.T, r officeRetryReceipt, executable string) {
+// assertOfficeRetryRecord checks what the fake itself observed (child-side
+// identity, seeded input, AD-7 profile). The owner-record checks live in
+// assertOfficeOwnerRecord, read by the parent from the trusted record while
+// the fake is held at its barrier.
+func assertOfficeRetryRecord(t *testing.T, r officeRetryReceipt) {
 	t.Helper()
-	require.Equal(t, "running", r.Owner.State)
-	require.NotNil(t, r.Owner.Launcher)
-	require.Equal(t, r.LauncherPID, r.Owner.Launcher.PID)
-	require.Equal(t, r.LauncherStart, r.Owner.Launcher.Start)
 	if runtime.GOOS != "windows" {
 		require.Equal(t, r.PID, r.LauncherPID, "Unix target keeps the launcher PID across execve")
 		require.Equal(t, r.Start, r.LauncherStart)
 	}
-	require.Equal(t, executable, r.Owner.Launcher.Executable)
-	require.Contains(t, r.Owner.Executables, executable)
 	// §3.4 D4: no stored process-group number. The group proof is T-94
 	// (TestPreviewRecovery_StopsOnlyTheVerifiedProcessGroup), not a field compare.
 	require.Equal(t, "same authorized input", r.Input)
@@ -210,6 +234,84 @@ func assertOfficeRetryRecord(t *testing.T, r officeRetryReceipt, executable stri
 		}
 	}
 	require.Equal(t, "true", safety["DisableMacrosExecution"], "AD-7: macros remain disabled on EVERY start")
+}
+
+// assertOfficeOwnerRecord is T-78's publication-before-entry oracle, read
+// from the parent — the vantage §3.4 D1 allows. While the start is held at
+// the fake's work-folder barrier, the trusted record must already name THIS
+// start's launcher: state running, launcher PID and start equal to the fake's
+// own observations, executable recorded. This is what the converter's own
+// entry-time snapshot used to prove, before D1/D8c rightly made the record
+// unreachable to it.
+func assertOfficeOwnerRecord(t *testing.T, c *call, receipt officeRetryReceipt, executable string) {
+	t.Helper()
+	owner := readPreviewOwner(t, c)
+	require.Equal(t, "running", owner.State, "T-78 §3.1 D3: the owner record is published before the target's go-byte")
+	require.NotNil(t, owner.Launcher)
+	require.Equal(t, receipt.LauncherPID, owner.Launcher.PID, "T-78 §3.1 D3: the record names THIS start's launcher")
+	require.Equal(t, receipt.LauncherStart, owner.Launcher.Start, "T-78 §3.1 D3: the record names THIS start's launcher start")
+	require.Equal(t, executable, owner.Launcher.Executable)
+	require.Contains(t, owner.Executables, executable)
+}
+
+// officeRetryWaitForStart waits for the fake's receipt for start n while the
+// conversion is still running; ok is false when the conversion finished
+// without reaching that start.
+func officeRetryWaitForStart(t *testing.T, c *call, n int, finished <-chan struct{}) (officeRetryReceipt, bool) {
+	t.Helper()
+	path := filepath.Join(c.dir, fmt.Sprintf("retry-start-%d.json", n))
+	deadline := time.NewTimer(10 * time.Second) // instrument failure bound only
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		raw, readErr := os.ReadFile(path)
+		var receipt officeRetryReceipt
+		if readErr == nil && json.Unmarshal(raw, &receipt) == nil {
+			return receipt, true
+		}
+		select {
+		case <-finished:
+			return officeRetryReceipt{}, false
+		case <-deadline.C:
+			t.Fatalf("T-78: converter start %d never wrote its receipt", n)
+		case <-tick.C:
+		}
+	}
+}
+
+// officeRetryRunWithOwnerBarriers runs one conversion while checking, per
+// start, that the owner record names THIS start's launcher before the fake
+// proceeds (assertOfficeOwnerRecord), then releases the fake's barrier. The
+// fake is held at the barrier until the release, so the record cannot reset
+// to idle before the parent reads it. onStart runs after that check, still
+// holding the fake, before the release.
+func officeRetryRunWithOwnerBarriers(t *testing.T, conv officeConversion, ctx context.Context, c *call, executable string, input []byte, ext string, onStart func(t *testing.T, start int, receipt officeRetryReceipt)) ([]byte, string, error) {
+	t.Helper()
+	var (
+		pdf        []byte
+		unconfined string
+		runErr     error
+	)
+	finished := make(chan struct{})
+	go func() {
+		pdf, unconfined, runErr = conv.run(ctx, input, ext)
+		close(finished)
+	}()
+	for start := 1; ; start++ {
+		receipt, ok := officeRetryWaitForStart(t, c, start, finished)
+		if !ok {
+			break
+		}
+		assertOfficeOwnerRecord(t, c, receipt, executable)
+		if onStart != nil {
+			onStart(t, start, receipt)
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(c.dir, fmt.Sprintf("retry-owner-seen-%d", start)), []byte("ok"), 0600),
+			"instrument: release the fake's owner-record barrier")
+	}
+	<-finished
+	return pdf, unconfined, runErr
 }
 
 func TestOfficeConversionRetriesExit81OnlyOnce(t *testing.T) {
@@ -235,15 +337,19 @@ func TestOfficeConversionRetriesExit81OnlyOnce(t *testing.T) {
 		t.Run(tc.mode, func(t *testing.T) {
 			conv, c := fakeOfficeCall(t, t.TempDir(), tc.mode)
 			defer c.finish()
-			pdf, _, err := conv.run(context.Background(), []byte("same authorized input"), ".docx")
+			pdf, _, err := officeRetryRunWithOwnerBarriers(t, conv, context.Background(), c, conv.self, []byte("same authorized input"), ".docx", nil)
 			receipts := officeRetryReceipts(t, c)
 			assert.Equal(t, tc.starts, len(receipts), "T-78: exact number of ACTUAL converter entries")
 			for _, receipt := range receipts {
-				assertOfficeRetryRecord(t, receipt, conv.self)
+				assertOfficeRetryRecord(t, receipt)
 			}
 			if len(receipts) == 2 {
 				require.NotEqual(t, receipts[0].PID, receipts[1].PID)
-				require.NotEqual(t, receipts[0].Owner.Launcher.PID, receipts[1].Owner.Launcher.PID, "T-78: a NEW launcher, not only a new target")
+				// A NEW launcher, not only a new target: the owner-record
+				// oracle above tied each start's record to ITS receipt's
+				// launcher PID, and the two launcher PIDs differ below, so
+				// the two records named different launchers transitively.
+				require.NotEqual(t, receipts[0].LauncherPID, receipts[1].LauncherPID, "T-78: a NEW launcher, not only a new target")
 				require.NotEqual(t, fmt.Sprint(receipts[0].LauncherPID, receipts[0].LauncherStart), fmt.Sprint(receipts[1].LauncherPID, receipts[1].LauncherStart))
 				require.Equal(t, receipts[0].Args, receipts[1].Args, "same profile argument and verified executable")
 				require.Equal(t, receipts[0].Env, receipts[1].Env, "same scrubbed environment")
