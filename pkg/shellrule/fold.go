@@ -11,17 +11,18 @@ import (
 
 // FoldedName returns the entry of names that word spells when letter case is
 // ignored, or "" when it spells none of them. It is the one program-name
-// matcher shared by this package's interpreter classification and by
-// pkg/tools' shell-name recognition. Case is compared under the same simple
+// matcher shared by this package's interpreter classification and wrapper
+// lookup, and by pkg/tools' shell-name recognition. Case is compared under the same simple
 // Unicode case folding as strings.EqualFold, not ASCII only: a
 // case-insensitive filesystem, such as the macOS default, runs the same
 // program for spellings that differ in letter case, including non-ASCII case
 // folds of an ASCII letter.
 //
 // Recognising a name this way only ever widens a check (an interpreter is
-// inspected, a shell's script is scanned). It never makes a spelling satisfy
-// an allow rule: allow matching stays on the resolved path and the
-// normalised-head restriction (matchRules, classifySegment).
+// inspected, a wrapper is looked through, a shell's script is scanned). It
+// does not decide whether an allow rule applies: that stays with the
+// resolved path and the normalised-head restriction (matchRules,
+// classifySegment).
 func FoldedName(word string, names []string) string {
 	for _, name := range names {
 		if strings.EqualFold(word, name) {

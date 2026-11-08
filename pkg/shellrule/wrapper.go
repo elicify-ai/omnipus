@@ -91,13 +91,37 @@ var wrapperSpecs = map[string]wrapperSpec{
 	},
 }
 
+// wrapperNames lists wrapperSpecs' keys for wrapperSpecFor. Order does not
+// matter: no two of them are equal under case folding.
+var wrapperNames = func() []string {
+	names := make([]string, 0, len(wrapperSpecs))
+	for name := range wrapperSpecs {
+		names = append(names, name)
+	}
+	return names
+}()
+
+// wrapperSpecFor is the one wrapper-name lookup: IsWrapperCommand and
+// unwrapWrappers both use it. The name is recognised in any letter case
+// through FoldedName, the same matcher as the interpreter check: the head
+// normaliser lowercases ASCII only, and a case-insensitive filesystem runs
+// the same wrapper for a non-ASCII case fold of its name.
+func wrapperSpecFor(head string) (wrapperSpec, bool) {
+	name := FoldedName(head, wrapperNames)
+	if name == "" {
+		return wrapperSpec{}, false
+	}
+	return wrapperSpecs[name], true
+}
+
 // IsWrapperCommand reports whether head (already normalised — lowercase,
 // directory prefix stripped, as HeadResolver/classifySegment returns it)
-// names a known command wrapper. Exported so prefix.go's SuggestedPrefix and
+// names a known command wrapper, in any letter case (wrapperSpecFor).
+// Exported so prefix.go's SuggestedPrefix and
 // pkg/tools/shell_permission_mode.go's BashPrefixGrantFor share this
 // package's ONE wrapper definition instead of each keeping their own list.
 func IsWrapperCommand(head string) bool {
-	_, ok := wrapperSpecs[head]
+	_, ok := wrapperSpecFor(head)
 	return ok
 }
 
@@ -175,7 +199,7 @@ const maxWrapperDepth = 8
 func unwrapWrappers(seg, head string, args []string, resolve HeadResolver) (finalSeg, finalHead string, finalArgs []string, wrapped bool, blind bool, blindReason blindSpotReason) {
 	curSeg, curHead, curArgs := seg, head, args
 	for depth := 0; depth < maxWrapperDepth; depth++ {
-		spec, known := wrapperSpecs[curHead]
+		spec, known := wrapperSpecFor(curHead)
 		if !known {
 			return curSeg, curHead, curArgs, wrapped, false, blindNone
 		}
