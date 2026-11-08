@@ -295,7 +295,10 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	// listing secret names and mailboxes, and reading the agent's own
 	// conversations run like the other reads (the secret card is itself the
 	// person's step).
-	"connect_channel":       AutoAsks,
+	"connect_channel": AutoAsks,
+	// channels-spec-r8 FR-032/T-10 row 11: explicit entry, never the
+	// unknown-name fallback.
+	"set_channel_outbound":  AutoAsks,
 	"connect_mailbox":       AutoAsks,
 	"set_agent_permissions": AutoAsks,
 	"remove_secret":         AutoAsks,
