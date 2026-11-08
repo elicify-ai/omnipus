@@ -349,16 +349,14 @@ export function fetchCliDetect(): Promise<CliDetect> {
   return request<CliDetect>('/system/cli-detect', undefined, CliDetectSchema as ZodType<CliDetect>)
 }
 
-// fetchCliValidate performs a stateless, create-time check that a CLI binary
-// actually runs at the given path (external-executor-cli-path-detection spec
-// FR-006/FR-013/FR-014/FR-015/FR-017/FR-018). It spawns only `<cli> --version`
-// server-side (15s timeout, no shell) and returns exactly one classified
-// `reason`. Callers MUST gate blocking on `reason` (missing-binary /
-// handshake-failed), never on the raw `ok` boolean (FR-018) — `unauthenticated`
-// also reports ok=true but is a non-blocking warning. The endpoint is
-// `withAuth` (create-parity with `createAgent`), rate-limited, and audited
-// server-side — pass an AbortSignal so a debounced validate-on-blur caller can
-// cancel a stale in-flight request when the path changes again.
+// fetchCliValidate runs the stateless program check behind Check CLI in
+// Settings → Third-party agents (POST /system/cli-validate). The server checks
+// cliPath exactly as given with the shared program-file check, then runs only
+// `<cli> --version` on the checked file (no shell) and returns one classified
+// `reason`. Settings shows the result as a notice chosen by `reason`, never by
+// the raw `ok` boolean — `unauthenticated` also reports ok=true. The check saves
+// nothing. The endpoint needs a signed-in person session and is rate-limited
+// and audited server-side; `opts.signal` lets a caller cancel a check in flight.
 export function fetchCliValidate(
   cli: CliValidateRequest['cli'],
   cliPath: string,

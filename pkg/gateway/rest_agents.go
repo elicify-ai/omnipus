@@ -1401,8 +1401,9 @@ var cliDetectAll = clidetect.DetectAll
 // Reports, per external-CLI runner (claude-code / codex / opencode), whether the
 // binary is installed and — when it is — its absolute resolved path and how it
 // was located ("path" via the gateway $PATH, "well-known" via a curated per-OS
-// install-dir scan). The roster screen greys-out CLIs the host cannot run, and
-// the create wizard / edit form prefill the executor cli_path field from `path`.
+// install-dir scan). The web app receives live detection through the
+// Settings → Third-party agents view, not by calling this endpoint. It
+// pre-fills an unsaved Program path from link_path when present, otherwise path.
 //
 // Pure-Go filesystem probe — detection NEVER spawns a subprocess (FR-004) and is
 // unaudited by design: no caller-supplied path is executed here (auditing is
