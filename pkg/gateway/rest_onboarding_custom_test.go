@@ -472,7 +472,7 @@ func TestOnboardingCompleteCustom_CatalogIdWithProtocol_400(t *testing.T) {
 
 	w := postComplete(t, api, customCompleteBody(ru.srv.URL, map[string]string{"id": "openai"}))
 
-	requireErrField(t, w, http.StatusBadRequest, "id", fmt.Sprintf(msgM1Fmt, "openai", "my-openai"))
+	requireErrField(t, w, http.StatusBadRequest, "id", fmt.Sprintf(msgM1Fmt, "openai", "openai"))
 	assertNothingStored(t, api, tmpDir, "openai")
 }
 
@@ -490,7 +490,7 @@ func TestOnboardingCompleteCustom_UnsupportedIdWithProtocol_400(t *testing.T) {
 
 	w := postComplete(t, api, customCompleteBody(ru.srv.URL, map[string]string{"id": "azure"}))
 
-	requireErrField(t, w, http.StatusBadRequest, "id", fmt.Sprintf(msgM1Fmt, "azure", "my-azure"))
+	requireErrField(t, w, http.StatusBadRequest, "id", fmt.Sprintf(msgM1Fmt, "azure", "azure"))
 	assertNothingStored(t, api, tmpDir, "azure")
 }
 
