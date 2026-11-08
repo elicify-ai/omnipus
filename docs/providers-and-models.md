@@ -35,7 +35,7 @@ For device-code sign-in, Omnipus shows the provider's verification link and a sh
 
 **Omnipus's model.** Omnipus, the system agent that creates and changes your agents, uses a model like any agent. If none works, it cannot plan — fix it without a chat: open **Settings → System agents**, choose **Edit** on Omnipus and pick a model from a connected provider. Saving works even while no model works, because it is a settings change, not a chat with the model.
 
-For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
+For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Give it an ID that is not already the ID of a listed provider, for example `my-azure` rather than `azure`; the form refuses a listed provider's ID. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
 ## Picking a model when two providers offer it
 

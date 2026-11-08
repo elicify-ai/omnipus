@@ -58,7 +58,7 @@ The local setup wizard has four numbered screens plus a closing screen: admin us
 | 1 — What should I call you? | Type the admin username | Continue accepts a nonblank name. Finish requires 2–63 characters using A–Z, a–z, 0–9, dots, dashes or underscores, starting with a letter or digit. `cli` is reserved, regardless of letter case |
 | 2 — Set your password | Choose a password of at least 8 characters, twice | Shows how strong it is |
 | 3 — What should I call you? (personal preferences) | Enter your name, choose Tone and How much detail | Includes these preferences when you finish setup |
-| 4 — Select your model provider and default model | Pick a provider, connect it, choose **Default model** | Checks the connection for the model you picked |
+| 4 — Select your model provider and default model | Pick a provider, connect it, choose **Default model**. If your provider is not listed, choose **Custom endpoint** and enter its ID, base URL, protocol and API key | Checks the connection for the model you picked |
 | Last — Mia, Assistant | Select Start chatting | Opens Chat; Finish has already signed you in |
 
 The check on screen 4 runs when you pick a model, or when you press its Check connection button. **Finish** stays locked until that check passes for the model you selected, so a working key with a broken model cannot get through setup.
