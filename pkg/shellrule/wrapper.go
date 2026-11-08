@@ -182,6 +182,67 @@ func skipWrapperArgs(spec wrapperSpec, args []string) (rest []string, ok bool) {
 // loop unboundedly.
 const maxWrapperDepth = 8
 
+// wrapperLayer is one known wrapper unwrapWrappers looked through: the
+// segment text starting at it, its head and its argument words.
+type wrapperLayer struct {
+	seg, head string
+	args      []string
+}
+
+// wrapperOwnMatch is the strictest deny or ask rule that names one of the
+// wrappers a segment was looked through, with the wrapper it matched.
+type wrapperOwnMatch struct {
+	action   Action
+	rule     *Rule
+	head     string
+	resolved string
+}
+
+// matchWrapperOwnRules matches the deny and ask rules against every wrapper
+// in layers, by resolved path and argument prefix like any other segment, so
+// a rule naming a wrapper keeps applying after the wrapper is looked through.
+// Allow rules are left out on purpose: an allow on a wrapper never approves
+// the command it runs, because D3 evaluates the unwrapped command. A wrapper
+// head that does not resolve on the child path is skipped: rules match by
+// resolved path, so no rule can name it, and the unwrapped command is still
+// evaluated in full.
+func matchWrapperOwnRules(layers []wrapperLayer, rules []Rule, opts Options, resolve BinaryResolver) wrapperOwnMatch {
+	var best wrapperOwnMatch
+	restrictive := make([]Rule, 0, len(rules))
+	for _, r := range rules {
+		if r.Action == ActionDeny || r.Action == ActionAsk {
+			restrictive = append(restrictive, r)
+		}
+	}
+	if len(restrictive) == 0 {
+		return best
+	}
+	for _, l := range layers {
+		resolved, err := resolveHeadOrBuiltin(l.head, opts.ChildPath, resolve)
+		if err != nil {
+			continue
+		}
+		matched := matchRules(resolved, l.args, l.seg, restrictive, opts, resolve)
+		action := Decide(matched)
+		if actionRank(action) > actionRank(best.action) {
+			best = wrapperOwnMatch{action: action, rule: representativeRule(matched, action), head: l.head, resolved: resolved}
+		}
+	}
+	return best
+}
+
+// apply returns v decided by this wrapper rule match: a genuine rule match on
+// the wrapper itself, not a blind result.
+func (m wrapperOwnMatch) apply(v SegmentVerdict) SegmentVerdict {
+	v.Head = m.head
+	v.ResolvedPath = m.resolved
+	v.Action = m.action
+	v.MatchedRule = m.rule
+	v.Blind = false
+	v.BlindReason = ""
+	return v
+}
+
 // unwrapWrappers follows a chain of known command wrappers (see
 // wrapperSpecs) to the command a D3 rule must actually be evaluated
 // against, recursively — `env sudo rm -rf x` unwraps twice, to `rm -rf x`.
@@ -196,29 +257,30 @@ const maxWrapperDepth = 8
 // classifySegment to a blind spot, or leaves no command at all — the blind
 // verdict FR-020 requires for every other unresolvable shape in this
 // package.
-func unwrapWrappers(seg, head string, args []string, resolve HeadResolver) (finalSeg, finalHead string, finalArgs []string, wrapped bool, blind bool, blindReason blindSpotReason) {
+func unwrapWrappers(seg, head string, args []string, resolve HeadResolver) (finalSeg, finalHead string, finalArgs []string, wrapped bool, layers []wrapperLayer, blind bool, blindReason blindSpotReason) {
 	curSeg, curHead, curArgs := seg, head, args
 	for depth := 0; depth < maxWrapperDepth; depth++ {
 		spec, known := wrapperSpecFor(curHead)
 		if !known {
-			return curSeg, curHead, curArgs, wrapped, false, blindNone
+			return curSeg, curHead, curArgs, wrapped, layers, false, blindNone
 		}
+		layers = append(layers, wrapperLayer{seg: curSeg, head: curHead, args: curArgs})
 		rest, found := skipWrapperArgs(spec, curArgs)
 		if !found {
-			return "", "", nil, true, true, blindNoResolvableHead
+			return "", "", nil, true, layers, true, blindNoResolvableHead
 		}
 		wrapped = true
 		innerSeg := strings.Join(rest, " ")
 		nextHead, reason := classifySegment(innerSeg, resolve, false)
 		if reason != blindNone {
-			return "", "", nil, true, true, reason
+			return "", "", nil, true, layers, true, reason
 		}
 		_, nextArgs, _ := splitHeadArgs(innerSeg)
 		curSeg, curHead, curArgs = innerSeg, nextHead, nextArgs
 	}
 	// Depth exhausted (pathological/hostile wrapper chain) — fail closed
 	// rather than trust an unbounded chain or loop forever.
-	return "", "", nil, true, true, blindNoResolvableHead
+	return "", "", nil, true, layers, true, blindNoResolvableHead
 }
 
 // detectInterpreterForm reports whether (head, args) is one of the ADR-092

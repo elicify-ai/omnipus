@@ -187,7 +187,13 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 
 	_, args, _ := splitHeadArgs(seg)
 
-	finalSeg, finalHead, finalArgs, wrapped, blind, blindReason := unwrapWrappers(seg, head, args, opts.HeadResolver)
+	finalSeg, finalHead, finalArgs, wrapped, layers, blind, blindReason := unwrapWrappers(seg, head, args, opts.HeadResolver)
+	// ADR-092 D3: looking through a wrapper adds the rules of the program it
+	// runs; it never drops the wrapper's own deny or ask rules.
+	own := matchWrapperOwnRules(layers, rules, opts, resolve)
+	if own.action == ActionDeny {
+		return own.apply(v)
+	}
 	if blind {
 		// A known wrapper resolved to nothing runnable (`sudo` alone, `env
 		// -i`), or one layer of it is itself a blind spot (an unbalanced
@@ -200,6 +206,18 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 		return v
 	}
 
+	v = evaluateUnwrapped(v, seg, finalSeg, finalHead, finalArgs, wrapped, rules, opts, resolve)
+	if actionRank(own.action) > actionRank(v.Action) {
+		return own.apply(v)
+	}
+	return v
+}
+
+// evaluateUnwrapped decides the command a segment's wrappers (if any) run:
+// the interpreter fail-closed check, resolve-and-verify and rule matching.
+// seg is the original segment text; finalSeg/finalHead/finalArgs are the
+// unwrapped command and wrapped reports whether any wrapper was removed.
+func evaluateUnwrapped(v SegmentVerdict, seg, finalSeg, finalHead string, finalArgs []string, wrapped bool, rules []Rule, opts Options, resolve BinaryResolver) SegmentVerdict {
 	if scriptText, isInterp := detectInterpreterForm(finalHead, finalArgs); isInterp {
 		if denyRule, ok := findDenyBinaryWordIn(scriptText, rules); ok {
 			// Founder decision: "if ANY deny rule exists whose binary
