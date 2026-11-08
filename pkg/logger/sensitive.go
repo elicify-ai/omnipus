@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // sensitiveValueReplacer is the process-wide replacer for the credential
@@ -92,13 +93,15 @@ const scrubFailClosedText = "[FILTERED]"
 //   - A field whose code-point reading (codePointReading) holds a credential
 //     is replaced whole as well.
 //
-// Worst-case work per field: each decodeScan visits at most 2^9-1 = 511
-// distinct strings (two decodings per layer, 8 layers) and builds one
-// code-point reading of each, so at most 1,022 strings per scan, none longer
-// than the field, since neither decoding nor the reading lengthens text.
-// scrubString runs at most two scans plus 8 single decoding steps: at most
-// about 2,050 linear passes over the field, holding at most 511 field-sized
-// strings at once.
+// Work per field, as estimated from this code (not measured): the depth
+// bound caps how many distinct strings one decodeScan reads (two decodings
+// per layer, maxScrubDecodeDepth layers), plus one code-point reading of
+// each; scrubString runs at most two scans and maxScrubDecodeDepth single
+// decoding steps. For a fixed depth and registered set the work therefore
+// grows with the field's length, by a large constant factor. The actual
+// time and memory also depend on the registered values (matcher cost and
+// expansion by the mask) and on intermediate strings, and are not
+// established here.
 func scrubString(r *strings.Replacer, s string) string {
 	masked := r.Replace(s)
 	// Without a backslash or a quote nothing in the field can be decoded.
@@ -146,7 +149,8 @@ const (
 // decodeScan reads s and every string reachable from it by unquoting a whole
 // quoted string or decoding Go escape sequences, both decodings tried at
 // every layer, up to maxScrubDecodeDepth layers. Each of those strings is
-// also checked in its code-point reading; that reading is not decoded further.
+// also checked in its code-point reading (codePointReading: all escape forms
+// read as characters in one pass); that reading is not decoded further.
 func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 	seen := map[string]bool{s: true}
 	frontier := []string{s}
@@ -183,31 +187,97 @@ func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 	return scanClean
 }
 
-// codePointReading returns s with every \xHH escape (either hex case) read
-// as the character U+00HH written in UTF-8, the way some other systems spell
-// those characters; all other text is kept as written. ok is false when s
-// has no such escape.
+// codePointReading returns s with every escape sequence read as the
+// character it names, written in UTF-8, in one pass: \xHH as U+00HH, \uHHHH
+// as U+HHHH, \UHHHHHHHH as that code point, a three-digit octal \NNN up to
+// \377 as U+0NNN (hex digits of either case), and the single-character
+// escapes (\n, \", \\ ...) as their character. This is how some other
+// systems spell characters, where Go reads \xHH and octal as bytes. Text
+// that is not such an escape, including a surrogate or out-of-range code
+// point, is kept as written. ok is false when nothing was read.
+//
+// The result is never longer than s: every escape is longer than the UTF-8
+// form of the character it names.
 func codePointReading(s string) (string, bool) {
-	if !strings.Contains(s, `\x`) {
+	if !strings.Contains(s, `\`) {
 		return s, false
 	}
 	var b strings.Builder
+	b.Grow(len(s))
 	changed := false
 	for i := 0; i < len(s); {
-		if i+3 < len(s) && s[i] == '\\' && s[i+1] == 'x' {
-			if hi, ok := hexDigit(s[i+2]); ok {
-				if lo, ok := hexDigit(s[i+3]); ok {
-					b.WriteRune(rune(hi<<4 | lo))
-					i += 4
-					changed = true
-					continue
-				}
+		if s[i] == '\\' {
+			if c, n, ok := readEscapedChar(s[i:]); ok {
+				b.WriteRune(c)
+				i += n
+				changed = true
+				continue
 			}
 		}
 		b.WriteByte(s[i])
 		i++
 	}
 	return b.String(), changed
+}
+
+// readEscapedChar reads the escape at the start of s (s[0] is a backslash)
+// as codePointReading describes. It returns the character, the length of
+// the escape in bytes, and false when s does not start with one.
+func readEscapedChar(s string) (rune, int, bool) {
+	if len(s) < 2 {
+		return 0, 0, false
+	}
+	switch s[1] {
+	case 'x':
+		return readHexChar(s, 2)
+	case 'u':
+		return readHexChar(s, 4)
+	case 'U':
+		return readHexChar(s, 8)
+	case '0', '1', '2', '3':
+		if len(s) < 4 {
+			return 0, 0, false
+		}
+		var v rune
+		for _, c := range []byte(s[1:4]) {
+			if c < '0' || c > '7' {
+				return 0, 0, false
+			}
+			v = v<<3 | rune(c-'0')
+		}
+		return v, 4, true
+	}
+	if c, ok := simpleEscapes[s[1]]; ok {
+		return c, 2, true
+	}
+	return 0, 0, false
+}
+
+// readHexChar reads the escape at the start of s made of a backslash, one
+// letter and the given number of hex digits.
+func readHexChar(s string, digits int) (rune, int, bool) {
+	if len(s) < 2+digits {
+		return 0, 0, false
+	}
+	var v rune
+	for i := 2; i < 2+digits; i++ {
+		d, ok := hexDigit(s[i])
+		if !ok {
+			return 0, 0, false
+		}
+		v = v<<4 | rune(d)
+	}
+	if !utf8.ValidRune(v) {
+		return 0, 0, false
+	}
+	return v, 2 + digits, true
+}
+
+// simpleEscapes are the single-character escapes and the characters they
+// name.
+var simpleEscapes = map[byte]rune{
+	'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v',
+	'\\': '\\', '\'': '\'', '"': '"',
 }
 
 // hexDigit returns the value of one hex digit of either case.

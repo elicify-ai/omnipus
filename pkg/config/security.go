@@ -144,9 +144,11 @@ func (sec *Config) EnsureSensitiveValues(values []string) {
 // The one rule for both this config's own replacer and the published
 // process-wide one.
 //
-// Cost: at most one extra pair per such value, built once at registration
-// and at most four times the value's length; the work per logged field is
-// unchanged.
+// Cost, as estimated from this code (not measured): at most one extra pair
+// per such value, built at registration. The extra pairs enlarge the
+// matcher, and with a single eligible value they move it off the
+// single-pattern path, so the work per logged field can change; by how much
+// is not established here.
 func sensitiveReplacementPairs(values []string) []string {
 	var pairs []string
 	for _, v := range values {
