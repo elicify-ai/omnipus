@@ -210,21 +210,21 @@ func previewServeRelPath(relPath string) (string, error) {
 		return ".", nil
 	}
 	if strings.ContainsRune(relPath, 0) {
-		return "", previewErrPathRefused
+		return "", errPreviewPathRefused
 	}
 	rel := path.Clean(strings.TrimPrefix(relPath, "/"))
 	if rel == "." {
 		return ".", nil
 	}
 	if !fs.ValidPath(rel) {
-		return "", previewErrPathRefused
+		return "", errPreviewPathRefused
 	}
 	return rel, nil
 }
 
-// previewErrPathRefused marks a wire path shape the served directory must
+// errPreviewPathRefused marks a wire path shape the served directory must
 // never answer: traversal that survives cleaning, or a NUL byte.
-var previewErrPathRefused = errors.New("preview path refused")
+var errPreviewPathRefused = errors.New("preview path refused")
 
 // previewPathEscapes reports whether err is os.Root's path-escape refusal.
 // os.Root exposes no exported sentinel for it: measured on go1.26.6, the
