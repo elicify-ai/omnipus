@@ -45,6 +45,13 @@ export interface ButtonProps
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
   actionState?: 'idle' | 'pending' | 'success' | 'error'
+  /**
+   * Caller text for the control's one polite announcement region, for a
+   * composite whose result needs its own words (CopyButton: "Copied").
+   * Used only while `actionState` produces no feedback of its own; it never
+   * changes the accessible name or the accessible description.
+   */
+  announcement?: string
 }
 
 // Portalled beside the control in its nearest dialog/alert-dialog subtree,
@@ -69,7 +76,7 @@ function ActionAnnouncement({ description, target }: { description?: string; tar
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, actionState = 'idle', type, disabled, onClickCapture, onAuxClickCapture, children, 'aria-busy': ariaBusy, 'aria-disabled': ariaDisabled, 'aria-description': ariaDescription, 'aria-label': ariaLabelProp, 'aria-labelledby': ariaLabelledByProp, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, actionState = 'idle', announcement, type, disabled, onClickCapture, onAuxClickCapture, children, 'aria-busy': ariaBusy, 'aria-disabled': ariaDisabled, 'aria-description': ariaDescription, 'aria-label': ariaLabelProp, 'aria-labelledby': ariaLabelledByProp, ...props }, ref) => {
     const Comp = asChild ? Slot : 'button'
     const [announcementTarget, setAnnouncementTarget] = React.useState<HTMLElement | null>(null)
     const setRootRef = React.useCallback((node: HTMLButtonElement | null) => {
@@ -88,6 +95,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       : announcedState === 'success'
         ? 'Action succeeded'
         : announcedState === 'error' ? 'Action failed' : undefined
+    const announcementText = feedbackDescription ?? announcement
     const reservesFeedback = actionState !== 'idle' || loadingVisible
     const feedback = reservesFeedback ? (
       <span data-action-indicator="" className="inline-flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
@@ -137,7 +145,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             childCapture?.(event)
             onAuxClickCapture?.(event)
           },
-        }, <>{feedback}{(children.props as { children?: React.ReactNode }).children}<ActionAnnouncement description={feedbackDescription} target={announcementTarget} /></>)
+        }, <>{feedback}{(children.props as { children?: React.ReactNode }).children}<ActionAnnouncement description={announcementText} target={announcementTarget} /></>)
       : children
     return (
       <Comp
@@ -162,7 +170,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         <>
           {feedback}
           {children}
-          <ActionAnnouncement description={feedbackDescription} target={announcementTarget} />
+          <ActionAnnouncement description={announcementText} target={announcementTarget} />
         </>
       )}</Comp>
     )

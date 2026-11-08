@@ -234,16 +234,25 @@ test('CR-1: pinned short-name icon tooltip is content-sized and readable inside 
   const tooltip = page.getByRole('tooltip')
   await expect(tooltip).toBeVisible()
   await expect(tooltip).toHaveText('Tasks')
-  const bounds = await tooltip.evaluate((bubble) => {
+  // The tooltip bubble renders in a Portal at the end of <body> (kit contract
+  // §2.9), so it is no longer a descendant of the workspace header — the old
+  // `bubble.closest('[data-testid="workspace-top-bar"]')!` is null there and
+  // threw (CI round 5, CR-1). Measure the header separately, in the same
+  // viewport-relative coordinates (boundingBox returns the same geometry as
+  // getBoundingClientRect), while the tooltip is open, and keep the same
+  // geometric oracle unchanged: the label must stay inside the header line.
+  const headerBar = await page.getByTestId('workspace-top-bar').boundingBox()
+  if (!headerBar) throw new Error('BLOCKED: workspace-top-bar did not render')
+  const inner = await tooltip.evaluate((bubble) => {
     const text = bubble.firstChild!
     const range = document.createRange()
     range.selectNodeContents(text)
     const label = range.getBoundingClientRect()
     const bubbleRect = bubble.getBoundingClientRect()
-    const column = bubble.closest('[data-testid="workspace-top-bar"]')!.getBoundingClientRect()
     const style = getComputedStyle(bubble)
-    return { label: { left: label.left, right: label.right, width: label.width }, bubble: { left: bubbleRect.left, right: bubbleRect.right, width: bubbleRect.width }, column: { left: column.left, right: column.right }, horizontalChrome: parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth) }
+    return { label: { left: label.left, right: label.right, width: label.width }, bubble: { left: bubbleRect.left, right: bubbleRect.right, width: bubbleRect.width }, horizontalChrome: parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth) }
   })
+  const bounds = { ...inner, column: { left: headerBar.x, right: headerBar.x + headerBar.width } }
   expect(bounds.bubble.width).toBeLessThanOrEqual(bounds.label.width + bounds.horizontalChrome + 1)
   expect(bounds.label.left).toBeGreaterThanOrEqual(bounds.column.left - 1)
   expect(bounds.label.right).toBeLessThanOrEqual(bounds.column.right + 1)

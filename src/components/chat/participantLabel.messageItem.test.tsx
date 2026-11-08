@@ -138,14 +138,21 @@ describe('MessageItem — participant label on a left-side user message', () => 
     expect(label.querySelector('strong, b')).toBeNull()
   })
 
-  it('truncates a long display_name and reveals the full text in the tooltip', () => {
+  it('truncates a long display_name and reveals the full text in the tooltip', async () => {
     const longName = 'N'.repeat(60)
     const msg = makeMsg({ id: 'tg-2', role: 'user', content: 'hi', participant: human(longName, 'telegram') })
     render(<MessageItem message={msg} />)
     const label = screen.getByTestId('participant-label')
     expect(label.textContent?.length).toBe(40)
     expect(label.textContent?.endsWith('…')).toBe(true)
-    fireEvent.mouseEnter(label)
-    expect(screen.getAllByText(longName + ' · Telegram').length).toBeGreaterThan(0)
+    // Radix opens on a pointer MOVE (mouse type) or focus — not mouseenter
+    // (round 2, K5). The Tooltip trigger is the participant-label-tooltip
+    // span; the open lands on a timer, so the assertion waits.
+    fireEvent.pointerMove(screen.getByTestId('participant-label-tooltip'), {
+      pointerType: 'mouse',
+      pointerId: 1,
+    })
+    const revealed = await screen.findAllByText(longName + ' · Telegram')
+    expect(revealed.length).toBeGreaterThan(0)
   })
 })

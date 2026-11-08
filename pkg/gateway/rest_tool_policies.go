@@ -97,6 +97,11 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Channels FR-037 (T-10 row 15): an always-ask tool can be set to ask or
+	// deny globally, never allow.
+	if refuseAlwaysAskAllow(w, body.Policies) {
+		return
+	}
 
 	// Reject any submitted KEY that isn't a real, known static builtin tool
 	// name (or the MCP-namespace carve-out). CLAUDE.md hard constraint 6:
