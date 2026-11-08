@@ -24,9 +24,11 @@ Omnipus picks the preview's address automatically when the agent publishes, base
 | `http://localhost` (the default desktop install) | Its own isolated address: `http://<random-name>.localhost:5000/` — a fresh, random name that exists only for this one preview. Chrome, Edge and Firefox open such names directly, with no setup. Safari does not, so in Safari the card shows the shared address instead. |
 | Any other way — HTTPS, an IP address, a real domain, Tailscale | The shared address: Omnipus's own address under a private path, `/preview/<agent>/<token>/`. |
 
-Both addresses serve the same preview. The chat card always shows the one that works in your browser.
+Both addresses of one preview show exactly the same published site. The chat card always shows the one that works in your browser.
 
-The two addresses differ in separation, not in features: the site runs as a full web app either way — storage, cookies, login, forms, popups and downloads all work on both (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
+An agent can have a finished-files preview and a live development server open at the same time. Each one gets its own link, and each link shows only its own site: the link to the finished files never shows the development server, and the reverse.
+
+The two addresses differ in separation, not in features: the site runs as a full web app either way. Its own stylesheets, scripts, images, data files and live connections load from inside its folder, and storage, cookies, login, forms, popups and downloads work on both (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
 
 - **Isolated address.** The preview has its own separate name, so it is a separate place from Omnipus: your Omnipus sign-in does not apply there, and none of Omnipus's cookies or API keys travel to it.
 - **Shared address.** The preview lives on Omnipus's own address. Omnipus fences it in: the page may make its network calls only within its own private path, and Omnipus removes its own sign-in and security cookies from everything the page sends through the gateway (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
@@ -79,21 +81,24 @@ A site inside a preview is a real web app, and its logins hold.
 
 - **The site's own login sticks.** The site keeps its own cookies and saved data between page loads and between visits, on both addresses. A login you make inside a preview stays working.
 - **What Omnipus removes, and only that.** Where a preview's requests pass through Omnipus's gateway, Omnipus removes from them only its own sign-in and security cookies (named `omnipus-session`, `csrf` and `__Host-csrf`) and its own API keys. Everything else — the site's own cookies above all — passes through untouched, which is exactly why the site's login holds.
-- **The reverse direction too.** A previewed site cannot hand your browser a cookie named like one of Omnipus's own: Omnipus drops any such attempt before it reaches you, so a preview can never overwrite your Omnipus session.
+- **The reverse direction, for server replies.** When a preview's server (a development server) answers with a cookie named like one of Omnipus's own, Omnipus removes that cookie from the answer before it reaches your browser.
+- **What that does not cover.** On the shared address, a script running inside the preview page can still set a cookie itself, in your browser, without going through Omnipus. Such a cookie can carry the same name as an Omnipus cookie. Omnipus cannot stop that; it detects it on the next request instead, as described below.
 
-### If Omnipus clears cookies (a one-click recovery)
+### If Omnipus clears cookies
 
-If something inside a preview plants an extra copy of an Omnipus cookie, Omnipus refuses the affected request, clears the planted copies, and shows a message: "Omnipus cleared cookies set by a preview — please retry", with a **Retry** button that repeats the failed action once.
+If something inside a preview has set an extra copy of an Omnipus cookie, Omnipus does not trust any cookie on the next request it receives from Omnipus's own screens. It refuses that request, tells your browser to delete the extra copies (never your real sign-in cookie), and Omnipus shows the message "Omnipus cleared cookies set by a preview — please retry" with a **Retry** button that repeats the failed request once.
 
-- If the message keeps coming back, the preview that plants them is still open: it re-plants them as fast as Omnipus clears them. **Close that preview tab first, then click Retry once** — recovery is one click once the planting tab is closed.
-- This is never a permanent login lockout.
+- This covers requests Omnipus's screens make to its own server, including loading data after a page reload. Your real sign-in is kept, so a Retry normally works.
+- If the message keeps coming back, the preview that sets the cookies is still open and sets them again as fast as Omnipus deletes them. **Close that preview tab first, then click Retry.**
+- If Retry still does not help, close all preview tabs and sign in again.
 
 ## What previews cannot protect against
 
 Two risks are accepted and documented rather than engineered away. Both stem from the same place: you opened a page your own agent built.
 
 - **A fake Omnipus login screen.** An agent-built page can display a fake Omnipus sign-in form. Omnipus itself never asks you to sign in inside a preview — so never enter your Omnipus password inside a preview.
-- **Driving Omnipus through a popup — shared address only.** On the shared address the preview runs on the same address as Omnipus, so a page there could in principle open Omnipus itself in a second window and click through the real interface as you. Omnipus narrows this window as much as headers allow, but cannot close it on this address. The isolated address does not have this problem. The hosted version of Omnipus will not rely on the shared address for previews.
+- **Driving Omnipus through a popup — shared address only.** On the shared address the preview runs on the same address as Omnipus, so a page there could in principle open Omnipus itself in a second window and click through the real interface as you. Omnipus narrows this window as much as headers allow, but cannot close it on this address. The isolated address does not have this problem.
+- **The hosted version uses the shared address for now.** Hosted Omnipus is not reached through `localhost`, so its previews currently use the shared address and carry both risks above. A separate preview domain for hosted previews is planned later work, not part of this release.
 
 ## Limits and things to watch
 
