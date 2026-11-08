@@ -261,7 +261,7 @@ func TestPostAgentsExecutorSmokeTest_MissingBinary(t *testing.T) {
 	require.NoError(t, err)
 	missing := filepath.Join(installDir, "missing-claude.cmd")
 	_, statErr := os.Stat(missing)
-	require.True(t, os.IsNotExist(statErr), "instrument: the configured file really is missing; stat=%v", statErr)
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "instrument: the configured file really is missing; stat=%v", statErr)
 	t11bSaveProgram(t, api, "claude-code", missing)
 	factoryCalls := 0
 	original := smokeTestNewDriver
@@ -863,7 +863,7 @@ exit 0
 	require.NoError(t, err)
 	assert.Equal(t, root, filepath.Dir(lines[0]), "the recorded cwd was an ephemeral smoke workspace")
 	_, err = os.Stat(lines[0])
-	assert.True(t, os.IsNotExist(err), "the workspace that actually ran must be removed; stat=%v", err)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the workspace that actually ran must be removed; stat=%v", err)
 	assertNoSmokeTestRunsLeftover(t, home)
 }
 

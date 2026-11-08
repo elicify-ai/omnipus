@@ -10,6 +10,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,7 +59,7 @@ func t11bNativeProgram(t *testing.T, spec t11bNativeCLI, label string) (string, 
 func t11bNativeCalls(t *testing.T, path string) [][]string {
 	t.Helper()
 	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil // the caller explicitly asserts the required process count
 	}
 	require.NoError(t, err)

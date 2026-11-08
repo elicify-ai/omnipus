@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -216,7 +217,7 @@ func TestSettingsThirdPartyAgents_DetectionNeverExecutesFoundProgram(t *testing.
 	require.NotNil(t, view.Clis.Codex.Detected.Path)
 	require.Equal(t, want, *view.Clis.Codex.Detected.Path)
 	_, err = os.Stat(marker)
-	require.True(t, os.IsNotExist(err), "FR-6: merely opening Settings must not execute a detected CLI; stat=%v", err)
+	require.True(t, errors.Is(err, os.ErrNotExist), "FR-6: merely opening Settings must not execute a detected CLI; stat=%v", err)
 	// Positive control AFTER the product assertion: execute only our harmless
 	// fixture explicitly, proving that the marker instrument would see a spawn.
 	cmd := exec.CommandContext(t.Context(), program)
