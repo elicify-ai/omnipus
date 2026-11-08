@@ -24,6 +24,7 @@ func TestEvaluateCommand_PythonInterpreterPrefixDeny(t *testing.T) {
 		{"python3", ActionDeny},
 		{"python", ActionDeny},
 		{"pyth", ActionNone},
+		{"pytho", ActionNone},
 	}
 	for _, c := range cases {
 		t.Run(c.program, func(t *testing.T) {
