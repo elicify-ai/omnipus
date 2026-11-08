@@ -10,6 +10,7 @@
  * row (leave tool_calls and spans), and stop keeping an already loaded
  * card when a saved record with no media is rebound.
  */
+import { act } from '@testing-library/react'
 import { beforeEach, afterEach, expect, it } from 'vitest'
 import type { MediaFrame, MediaPart } from '@/lib/api/generated/asyncapi-types'
 import type { Message } from '@/lib/api/generated/openapi-types'
@@ -135,4 +136,56 @@ it('shows two cards when one turn sends two different files', () => {
       libraryRef: { workspace_id: 'W', path: NOTES_PATH },
     },
   ])
+})
+
+const UPLOADS_URL = '/api/v1/media/uploads-plan-md'
+const UPLOADS_PATH = 'uploads/plan.md'
+const SAME_NAME_PART: MediaPart = {
+  type: 'file', url: UPLOADS_URL, filename: 'plan.md', content_type: 'application/octet-stream',
+  library_ref: { workspace_id: 'W', path: UPLOADS_PATH },
+}
+const USER_NOTE = { type: 'file' as const, url: '/api/v1/uploads/s/note-a.md', filename: 'note-a.md', contentType: 'text/markdown' }
+const USER_SLIDE = { type: 'image' as const, url: '/api/v1/uploads/s/slide.png', filename: 'slide.png', contentType: 'image/png' }
+
+it('shows two cards when one turn sends two files that share a name', () => {
+  // BS-5.4: each replayed media part is its own card. The filename is the label.
+  // Two urls are two files even when both are named plan.md (CHECK F1).
+  const sent = sendFile(2, 'send-same-name', 'call-same-name', PLAN_PATH)
+  const reply = prose(3, 'reply-same-name', 'Sent both plans.')
+  native([empty(1, 'blank-same-name'), sent, reply], false, [
+    mediaFrame(sent, PLAN_PART), mediaFrame(sent, SAME_NAME_PART),
+  ])
+  expect(foldedRow().media, 'BS-5.4: the same filename at two urls is two cards').toEqual([
+    PLAN_CARD,
+    {
+      type: 'file', url: UPLOADS_URL, filename: 'plan.md', contentType: 'application/octet-stream',
+      libraryRef: { workspace_id: 'W', path: UPLOADS_PATH },
+    },
+  ])
+})
+
+it('does not copy a user upload onto the assistant card when the saved record wins', () => {
+  // BS-5.4: the sent-file card is assistant media. A REST page is not a path for
+  // it, and a user upload is a different row (chat-history paging: a user row is
+  // a boundary). The snapshot commit rebinds that user row to the saved record,
+  // which has no card. The assistant-only keep must not write the uploads back
+  // onto the saved user text, and must not put them on the assistant card.
+  act(() => {
+    useChatStore.getState().sendMessage('two files', {
+      clientMessageId: 'user-uploads',
+      attachments: [USER_NOTE, USER_SLIDE],
+    })
+  })
+  const uploaded = useChatStore.getState().sessionsById[SID]?.messagesById['user-uploads']
+  expect(uploaded?.media, 'instrument: the live user row is carrying both uploads').toEqual([USER_NOTE, USER_SLIDE])
+  const turn = sentFileTurn()
+  const savedUser = entry(0, { id: 'user-uploads', role: 'user', content: 'two files', agent_id: 'mia' })
+  native([savedUser, ...turn.sources], false, turn.frames)
+  const user = useChatStore.getState().sessionsById[SID]?.messagesById['user-uploads']
+  expect(user, 'instrument: the saved user row is in the committed snapshot').toBeDefined()
+  expect(user?.media, 'BS-5.4: a saved user record has no upload card to restore').toBeUndefined()
+  const assistantMedia = foldedRow().media ?? []
+  expect(assistantMedia, 'BS-5.4: the assistant card is still plan.md, not the user uploads').toEqual([PLAN_CARD])
+  expect(assistantMedia.some(item => item.url === USER_NOTE.url || item.url === USER_SLIDE.url),
+    'a user row is a boundary: its uploads are not on the assistant card').toBe(false)
 })
