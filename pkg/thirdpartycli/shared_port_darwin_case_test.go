@@ -4,7 +4,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-package clitrust_test
+package thirdpartycli_test
 
 import (
 	"os"
@@ -16,13 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCheckProgramPath_CaseSpellingOfForbiddenRoot is spec §3.2. A program
+// TestSharedProgramPath_PortedCaseSpellingOfForbiddenRoot is spec §3.2. A program
 // planted in an agent working folder is refused under every spelling the
 // volume resolves to that same folder. On a case-insensitive volume the
 // different-case spelling is the same file. The program is never launched.
 // A case-sensitive volume cannot host that spelling; the test records the
 // measured os.SameFile result and skips only then.
-func TestCheckProgramPath_CaseSpellingOfForbiddenRoot(t *testing.T) {
+func TestSharedProgramPath_PortedCaseSpellingOfForbiddenRoot(t *testing.T) {
 	check, rootsFn := loadT11CLITrust(t)
 	base := t.TempDir()
 	root := filepath.Join(base, "AgentHome")
@@ -54,7 +54,7 @@ func TestCheckProgramPath_CaseSpellingOfForbiddenRoot(t *testing.T) {
 		resolved, err := check(prog, roots)
 		require.Error(t, err, "spec §3.2: a program inside the agent home is refused")
 		require.Empty(t, resolved, "a refusal returns no file to launch")
-		require.Contains(t, strings.ToLower(err.Error()), "home")
+		t11RequireCheck(t, err, "agent_writable_location")
 	})
 
 	t.Run("different-case spelling of the same root is refused", func(t *testing.T) {

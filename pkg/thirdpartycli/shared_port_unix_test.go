@@ -4,7 +4,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-package clitrust_test
+package thirdpartycli_test
 
 import (
 	"fmt"
@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCheckProgramPath_Unix(t *testing.T) {
+func TestSharedProgramPath_PortedUnix(t *testing.T) {
 	check, roots := loadT11CLITrust(t)
 	home := t.TempDir()
 	require.NoError(t, os.Chmod(home, 0o700))
@@ -44,8 +44,7 @@ func TestCheckProgramPath_Unix(t *testing.T) {
 		resolved, err := check(path, forbidden)
 		require.Error(t, err, "spec FR-5: %s must be refused", path)
 		require.Empty(t, resolved, "a refusal returns no file to launch")
-		require.Contains(t, strings.ToLower(err.Error()), needle,
-			"spec §3.2: the error names the failed check; err=%v", err)
+		t11RequireCheck(t, err, needle)
 	}
 	// Founder Q2b, spec §3.2 / §5: who can write the program is not checked.
 	mustAllow := func(t *testing.T, path string) {
@@ -59,15 +58,15 @@ func TestCheckProgramPath_Unix(t *testing.T) {
 
 	t.Run("inside omnipus home", func(t *testing.T) {
 		p := t11WriteExe(t, filepath.Join(home, "bin"), "fakecli", 0o755)
-		mustRefuse(t, p, "home")
+		mustRefuse(t, p, "agent_writable_location")
 	})
 	t.Run("inside a workspace", func(t *testing.T) {
 		p := t11WriteExe(t, work, "fakecli", 0o755)
-		mustRefuse(t, p, "workspace")
+		mustRefuse(t, p, "agent_writable_location")
 	})
 	t.Run("inside a mount", func(t *testing.T) {
 		p := t11WriteExe(t, mount.HostPath, "fakecli", 0o755)
-		mustRefuse(t, p, "mount")
+		mustRefuse(t, p, "agent_writable_location")
 	})
 	t.Run("link target inside a workspace", func(t *testing.T) {
 		inside := t11WriteExe(t, work, "target", 0o755)
@@ -75,7 +74,7 @@ func TestCheckProgramPath_Unix(t *testing.T) {
 		require.NoError(t, os.Chmod(dir, 0o700))
 		link := filepath.Join(dir, "link")
 		require.NoError(t, os.Symlink(inside, link))
-		mustRefuse(t, link, "link")
+		mustRefuse(t, link, "agent_writable_location")
 	})
 	t.Run("middle link sits in a workspace", func(t *testing.T) {
 		final := t11WriteExe(t, t.TempDir(), "final", 0o755)
@@ -85,7 +84,7 @@ func TestCheckProgramPath_Unix(t *testing.T) {
 		require.NoError(t, os.Chmod(dir, 0o700))
 		outer := filepath.Join(dir, "outer")
 		require.NoError(t, os.Symlink(mid, outer))
-		mustRefuse(t, outer, "link")
+		mustRefuse(t, outer, "agent_writable_location")
 	})
 	t.Run("group-writable file outside forbidden roots is allowed", func(t *testing.T) {
 		p := t11WriteExe(t, t.TempDir(), "fakecli", 0o775)
@@ -110,16 +109,16 @@ func TestCheckProgramPath_Unix(t *testing.T) {
 		mustAllow(t, t11WriteExe(t, dir, "fakecli", 0o755))
 	})
 	t.Run("relative path", func(t *testing.T) {
-		mustRefuse(t, "fakecli", "absolute")
+		mustRefuse(t, "fakecli", "not_absolute")
 	})
 	t.Run("directory", func(t *testing.T) {
-		mustRefuse(t, t.TempDir(), "regular")
+		mustRefuse(t, t.TempDir(), "not_regular_file")
 	})
 	t.Run("not executable", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "plain")
 		require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
-		mustRefuse(t, p, "executable")
+		mustRefuse(t, p, "not_executable")
 	})
 	t.Run("allowed file returns the final path", func(t *testing.T) {
 		dir := t.TempDir()
@@ -168,13 +167,13 @@ func t11WriteExe(t *testing.T, dir, name string, mode os.FileMode) string {
 	return p
 }
 
-// TestCheckProgramPath_GroupWritableOutsideRootsAllowed is the founder Q2b
+// TestSharedProgramPath_PortedGroupWritableOutsideRootsAllowed is the founder Q2b
 // positive control (spec §3.2 / §5). A group-writable directory, and a
 // group-writable folder that holds a link, used to be refused. They are
 // allowed when neither the file, the link, nor their folders sit inside a
 // forbidden root. Mode is not a check anymore. The sticky-folder cases were
 // removed with that rule: sticky was only an exception to a permission check.
-func TestCheckProgramPath_GroupWritableOutsideRootsAllowed(t *testing.T) {
+func TestSharedProgramPath_PortedGroupWritableOutsideRootsAllowed(t *testing.T) {
 	check, _ := loadT11CLITrust(t)
 
 	t.Run("parent directory group writable", func(t *testing.T) {
@@ -210,12 +209,14 @@ func TestCheckProgramPath_GroupWritableOutsideRootsAllowed(t *testing.T) {
 	})
 }
 
-// TestAgentWritableRoots_RuntimeHomeSpelling is S3. Forbidden roots use the
+// TestSharedAgentWritableRoots_PortedRuntimeHomeSpelling is S3. Forbidden roots use the
 // runtime's own home resolution. "~/" expands to the user home. A per-agent
 // Home is trimmed; the default home is kept as written, and its trimmed
 // spelling is forbidden as well so a differently spelled path is still refused.
-func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
+func TestSharedAgentWritableRoots_PortedRuntimeHomeSpelling(t *testing.T) {
 	check, roots := loadT11CLITrust(t)
+	// Preserve os.UserHomeDir/tilde semantics without writing to the real user home.
+	t.Setenv("HOME", t.TempDir())
 
 	t.Run("tilde spelling", func(t *testing.T) {
 		t.Setenv("OMNIPUS_HOME", "")
@@ -231,7 +232,7 @@ func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
 		resolved, err := check(prog, t11MustRoots(t, roots, t.TempDir(), cfg))
 		require.Error(t, err, "spec §3.2: ~/ spelling is the same writable home")
 		require.Empty(t, resolved)
-		require.Contains(t, strings.ToLower(err.Error()), "home")
+		t11RequireCheck(t, err, "agent_writable_location")
 	})
 
 	t.Run("per-agent home is trimmed", func(t *testing.T) {
@@ -254,7 +255,7 @@ func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
 		resolved, err := check(prog, got)
 		require.Error(t, err, "spec §3.2: the trimmed per-agent home is forbidden")
 		require.Empty(t, resolved)
-		require.Contains(t, strings.ToLower(err.Error()), "home")
+		t11RequireCheck(t, err, "agent_writable_location")
 	})
 
 	t.Run("default home is not trimmed", func(t *testing.T) {
@@ -282,7 +283,7 @@ func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
 		resolved, err := check(prog, got)
 		require.Error(t, err, "spec §3.2: a program at the trimmed absolute home is refused")
 		require.Empty(t, resolved)
-		require.Contains(t, strings.ToLower(err.Error()), "home")
+		t11RequireCheck(t, err, "agent_writable_location")
 	})
 
 	t.Run("relative agent home is forbidden at its absolute path", func(t *testing.T) {
@@ -300,14 +301,14 @@ func TestAgentWritableRoots_RuntimeHomeSpelling(t *testing.T) {
 		resolved, err := check(prog, got)
 		require.Error(t, err, "spec §3.2: a program inside a relative agent home is refused")
 		require.Empty(t, resolved)
-		require.Contains(t, strings.ToLower(err.Error()), "home")
+		t11RequireCheck(t, err, "agent_writable_location")
 	})
 }
 
-// TestAgentWritableRoots_IncompleteListRefuses is S6. An empty data folder, or
+// TestSharedAgentWritableRoots_PortedIncompleteListRefuses is S6. An empty data folder, or
 // a workspace list that cannot be read, is an error and not a shorter list:
 // a missing root would turn a refusal into an allow.
-func TestAgentWritableRoots_IncompleteListRefuses(t *testing.T) {
+func TestSharedAgentWritableRoots_PortedIncompleteListRefuses(t *testing.T) {
 	_, roots := loadT11CLITrust(t)
 
 	t.Run("blank data folder", func(t *testing.T) {

@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-package clitrust_test
+package thirdpartycli_test
 
 import (
 	"encoding/json"
@@ -16,11 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAgentWritableRoots_IncompleteMountRefuses is S6. A workspace whose mount
+// TestSharedAgentWritableRoots_PortedIncompleteMountRefuses is S6. A workspace whose mount
 // record cannot be trusted is not a shorter allow-list: an unreadable record,
 // malformed JSON, or a record that dropped an entry must all be errors.
 // A valid record still lists that mount. Spec §3.2.
-func TestAgentWritableRoots_IncompleteMountRefuses(t *testing.T) {
+func TestSharedAgentWritableRoots_PortedIncompleteMountRefuses(t *testing.T) {
 	_, roots := loadT11CLITrust(t)
 
 	t.Run("valid mount is listed", func(t *testing.T) {

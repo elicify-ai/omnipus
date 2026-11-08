@@ -16,6 +16,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,8 +62,11 @@ func TestExternalDispatch_IncompleteMountRecordRefusesEveryProgram_R5(t *testing
 							text := runErr.Error()
 							assert.Regexp(t, `^This agent cannot run: `, text, "R5: preserve the run-refusal form")
 							assert.Regexp(t, `\blocation_unverifiable\b`, text, "R5: the distinct failed-check name must reach actual run refusals")
-							assert.Contains(t, text, "Omnipus could not read the list of mounted folders, so it cannot check this location. Details are in the server log.",
-								"R5: name the unreadable mount list and the server log, not a location the person can repair by moving the program")
+							assert.Contains(t, text, t11combined.LocationUnverifiableCause,
+								"Q37 A: use the approved general cause, not an invented run sentence")
+							assert.Contains(t, text, "Details are in the server log.")
+							assert.NotContains(t, text, "Omnipus could not read the list of mounted folders",
+								"Q37 A: the old mount-only cause must not survive")
 							assert.NotContains(t, text, "agent_writable_location", "R5: unknown location is not proven writable")
 							assert.NotContains(t, text, "it is inside a folder agents can write to")
 						}

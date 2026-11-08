@@ -15,6 +15,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ func TestSettingsThirdPartyAgents_IncompleteMountRecordRefusesEveryProgram_R5(t 
 					// The existing real-boundary helper asserts HTTP 400, envelope,
 					// field, exact sentence/check/entered path, and unchanged bytes.
 					f.expectRejected(t, body, "codex", "path", "cli_path_invalid", "location_unverifiable", program,
-						"The program path for Codex was not saved: Omnipus could not read the list of mounted folders, so it cannot check this location. Details are in the server log.")
+						t11combined.CodexSaveRefusal)
 				})
 			}
 			require.NoError(t, os.Remove(record)) // restores the specified valid empty state

@@ -4,21 +4,20 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-package clitrust_test
+package thirdpartycli_test
 
 import (
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
-// TestCheckProgramPath_UnicodeEquivalentSpellingOfForbiddenRoot is round 6,
+// TestSharedProgramPath_PortedUnicodeEquivalentSpellingOfForbiddenRoot is round 6,
 // S8 (security round 5; spec §3.2). macOS volumes fold canonically equivalent
 // Unicode spellings of a name onto one folder, as they fold letter case: the
 // spec rule is refuse-if-and-only-if the candidate path reaches the forbidden
@@ -40,7 +39,7 @@ import (
 // instead of being labelled an unsupported volume. The spellings are written
 // as explicit Go escapes so the byte forms cannot be silently normalized by
 // an editor or tool round-trip. The planted programs are never launched.
-func TestCheckProgramPath_UnicodeEquivalentSpellingOfForbiddenRoot(t *testing.T) {
+func TestSharedProgramPath_PortedUnicodeEquivalentSpellingOfForbiddenRoot(t *testing.T) {
 	check, rootsFn := loadT11CLITrust(t)
 	base := t.TempDir()
 	root := filepath.Join(base, "Caf\u00e9")            // composed NFC: 43 61 66 c3 a9
@@ -105,7 +104,7 @@ func TestCheckProgramPath_UnicodeEquivalentSpellingOfForbiddenRoot(t *testing.T)
 			resolved, refErr := check(filepath.Join(decomposed, "fakecli"), roots)
 			require.Error(t, refErr, "S8: an equivalent Unicode spelling of the forbidden root must be refused like the configured one (os.SameFile-verified same folder); resolved=%q", resolved)
 			require.Empty(t, resolved, "a refusal returns no file to launch")
-			require.Contains(t, strings.ToLower(refErr.Error()), "inside", "the refusal names the forbidden root")
+			t11RequireCheck(t, refErr, "agent_writable_location")
 		})
 
 		t.Run("decomposed case-varied spelling of the final file is refused", func(t *testing.T) {
