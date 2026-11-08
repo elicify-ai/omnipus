@@ -21,7 +21,7 @@ Omnipus chooses the available preview addresses from its configured browser-faci
 
 | Configured address | Available preview addresses |
 |---|---|
-| `http://localhost`, with an optional port | An isolated `http://<random-name>.localhost[:port]/` link plus the shared fallback. The isolated link keeps the configured port. Chrome, Edge and Firefox open such names directly; Safari does not. |
+| `http://localhost`, with an optional port | An isolated `http://<random-name>.localhost[:port]/` link plus the shared fallback. The isolated link keeps the configured port. Whether the isolated address opens depends on the browser and local setup; use the shared fallback if it does not. |
 | HTTPS, an IP address or another concrete hostname | The shared `/preview/<agent>/<token>/` link. |
 
 Chat prefers the isolated link when its browser signal and address checks pass; otherwise it selects the shared link. These checks do not test whether the isolated address actually opens. If it does not, ask the agent for the shared fallback link.
@@ -32,7 +32,7 @@ An agent can have a finished-files preview and a live development server open at
 
 The two addresses differ in separation, and in what the site may do. Both open the site as a full browser page, but their limits differ.
 
-- On the shared address, resource URLs must resolve inside that preview's `/preview/<agent>/<token>/` directory. A URL relative to the page, such as `./app.js`, is suitable if it stays inside that directory; `../` can leave it. A URL beginning with the complete preview directory is also permitted. A website-root URL such as `/assets/app.js` is outside it and is blocked. If an essential file is blocked, the page may look blank. Configure the build so its resource URLs stay inside the preview directory.
+- On the shared address, resource files fetched over HTTP or HTTPS must use URLs inside that preview's `/preview/<agent>/<token>/` directory. A URL relative to the page, such as `./app.js`, is suitable if it stays inside that directory; `../` can leave it. A URL beginning with the complete preview directory is also permitted. A website-root URL such as `/assets/app.js` is outside it and is blocked. Embedded images and fonts (`data:` URLs) and browser-created workers (`blob:` URLs) have separate allowances and do not need that directory prefix; these do not permit service workers on the shared address. If an essential file is blocked, the page may look blank. Configure the build so its resource URLs stay inside the preview directory.
 - On the shared address, the browser security policy also limits data connections, live connections and form destinations to the preview directory. Development-server redirects outside the allowed destination can be refused.
 - Service workers are refused on the shared address. The isolated address does not impose that refusal or the resource-path limits above.
 - Saved data and cookies are kept by your browser per address, so on the shared address they sit on Omnipus's own address, not on a private one (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
@@ -69,7 +69,7 @@ The serving tool has two ways to publish. The agent picks one depending on wheth
 A few details behind the table:
 
 - The published folder must contain an `index.html` at its root. The link opens that file first.
-- Publishing the same folder again renews the same link only while that registration is still live and less than 24 hours old; otherwise a new link is issued. Always give the user the link the tool returns rather than assuming an older one still works. Publishing a **different** folder replaces the registration: the old link stops working, so use the new returned link. A new isolated address has a different browser origin and does not share the old address's saved browser data. A new shared-address link changes only the path on Omnipus's address, so publishing it does not clear saved browser data or sign you out. Publishing is not a reset of the app's server-side data.
+- Publishing the same folder again renews the same link only while that registration is still live and less than 24 hours old; otherwise a new link is issued. Always give the user the link the tool returns rather than assuming an older one still works. Publishing a **different** folder replaces the registration: the old link stops working, so use the new returned link. A new isolated address has a different browser origin and does not share storage that the browser keys to the old origin. A new shared-address link changes only the path on Omnipus's address, so publishing it does not clear saved browser data or sign you out. Publishing is not a reset of the app's server-side data.
 - The development command must come from a fixed list: `next dev`, `vite dev`, `astro dev`, `sveltekit dev`, `npm run dev`, `pnpm dev`, or `yarn dev`. An operator can extend the list in the config file.
 - At most two development servers run at once on a default install, and each agent can run only one at a time.
 
@@ -108,7 +108,7 @@ Two risks are accepted and documented rather than engineered away. Both stem fro
 
 - **A fake Omnipus login screen.** An agent-built page can display a fake Omnipus sign-in form. Omnipus itself never asks you to sign in inside a preview — so never enter your Omnipus password inside a preview.
 - **Driving Omnipus through a popup — shared address only.** On the shared address the preview runs on the same address as Omnipus, so a page there could in principle open Omnipus itself in a second window and click through the real interface as you. Omnipus narrows this window as much as headers allow, but cannot close it on this address. The isolated address does not have this problem.
-- **The hosted version uses the shared address for now.** Hosted Omnipus is not reached through `localhost`, so its previews currently use the shared address and carry both risks above. A separate preview domain for hosted previews is planned later work, not part of this release.
+- **The hosted version uses the shared address for now.** Hosted Omnipus is not reached through `localhost`, so its previews currently use the shared address and carry both risks above. This release does not provide a separate hosted preview domain.
 
 ## Limits and things to watch
 
@@ -122,7 +122,7 @@ Two risks are accepted and documented rather than engineered away. Both stem fro
 If Omnipus sits behind nginx, Caddy, or a similar proxy, previews use the shared address on the same listener when Omnipus is configured with a public HTTPS address, and everything still arrives on the single port (default 5000). One setting is needed:
 
 1. Set `public_url` under `gateway` in Omnipus's config file to the full HTTPS address a browser uses to reach Omnipus, for example `https://omnipus.example.com`.
-2. Restart the gateway. The setting is read at startup, so a change needs a restart to take effect.
+2. Restart the gateway so preview URLs and the gateway's request checks use the same public address. The serving tool reads the current configuration, but some request checks keep the address captured at startup; reloading configuration alone does not update all of them.
 3. Pass the `/preview/` path through untouched, like the rest of the app. The proxy must not block or rewrite that prefix.
 
 Without `public_url`, a gateway listening on all network interfaces cannot build a correct link, and the serving tool refuses rather than hand you a broken URL. Full nginx and Caddy examples are in the [reverse proxy guide](operations/reverse-proxy.md).

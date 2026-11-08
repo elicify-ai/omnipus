@@ -2,15 +2,15 @@
 
 ## Architecture (ADR-044)
 
-The Omnipus gateway serves everything on **one** TCP listener: `gateway.port` (default **5000**). That single origin carries:
+The Omnipus gateway serves everything on **one** TCP listener: `gateway.port` (default **5000**). That listener carries:
 
 - the embedded SPA (`GET /`, static assets),
 - the authenticated REST/WebSocket/SSE API (`/api/v1/*`),
-- and agent-generated dev/static previews at `/preview/<agent>/<token>/…` — the surface produced by the unified `web_serve` tool.
+- and agent-generated dev/static previews at `/preview/<agent>/<token>/…` — the surface produced by the unified `serve_web` tool.
 
-There is **no separate preview port, host, or origin**. The config keys that used to configure a second listener — `gateway.preview_port`, `preview_host`, `preview_origin`, `preview_listener_enabled` — were **deleted with no back-compat**; a `config.json` still carrying them has those keys silently ignored (the fields no longer exist on `GatewayConfig`).
+There is **no separate preview port**: shared previews use `/preview/<agent>/<token>/` on the configured browser-facing address. When that configured address is `http://localhost`, the serving tool can also return a per-preview `http://<random-name>.localhost[:port]/` address on the same listener. One listener does not mean one browser origin. The config keys that used to configure a second listener — `gateway.preview_port`, `preview_host`, `preview_origin`, `preview_listener_enabled` — were **deleted with no back-compat**; a `config.json` still carrying them has those keys silently ignored (the fields no longer exist on `GatewayConfig`).
 
-`/preview/` is registered bare on the main mux — no `withAuth`/session wrapping, and it is the one path prefix exempt from CSRF and the Origin-mismatch check, because the URL path token *is* the credential (`middleware.PreviewPathPrefix`, referenced by both the CSRF and Origin code so the exemption can't drift). Everything else on the mux — the SPA, `/api/v1/*` — is behind the normal HttpOnly-cookie session auth plus CSRF double-submit.
+`/preview/` is registered bare on the main mux — no `withAuth`/session wrapping, because the URL path token *is* the credential. The preview prefix is one of several exemptions from the cross-site request-forgery (CSRF) check, alongside the webhook, Library-preview and Mail-preview prefixes (`middleware.PreviewPathPrefix` and the default exempt prefixes in the CSRF middleware). Other routes have their own authentication and request-check requirements; the listener is not uniformly session-authenticated (the app shell, for example, is served without a session).
 
 **Preview is a link, not an iframe.** The SPA never embeds preview content in an `<iframe>`; it renders a clickable link that opens in the user's own browser tab (or the agent's built-in browser live panel). There is no "two-port origin isolation" model to reason about here — that design was superseded by ADR-044. The operative security boundary is now the HttpOnly session cookie (unreadable by JS, including any JS the previewed app serves), CSP `frame-ancestors`, and the reserved-cookie-stripping the proxy applies to previewed-app responses — not port separation.
 
@@ -26,7 +26,7 @@ When running on a VPS without TLS termination, expose the one port in the firewa
 ufw allow 5000/tcp
 ```
 
-No further configuration is needed. The gateway binds `gateway.port` on the host specified by `gateway.host` (default `0.0.0.0`). Clients reach the SPA, the API, and previews alike at `http://<host>:5000/...`.
+The gateway binds `gateway.port` on the host specified by `gateway.host`. The default host is `127.0.0.1`, so opening the firewall alone does not make it reachable: for remote access, set `gateway.host` to an address clients can reach (for example `0.0.0.0`) and set `gateway.public_url` to the complete address the browser uses, such as `http://<reachable-ip>:5000`. A wildcard bind without a public URL cannot mint preview links. Restart the gateway after changing either setting.
 
 ---
 
@@ -127,7 +127,7 @@ With either proxy, the gateway must know the fully-qualified HTTPS origin the br
 
 | Field | Purpose |
 |---|---|
-| `host` | The interface the gateway binds. `127.0.0.1` is correct when a reverse proxy handles external traffic; use `0.0.0.0` for bare-IP deployments. |
+| `host` | The interface the gateway binds. The default is `127.0.0.1`, which is correct when a reverse proxy on the same machine handles external traffic; use `0.0.0.0` (together with `public_url`) for bare-IP deployments. |
 | `public_url` | The fully-qualified HTTPS origin the browser reaches. Drives the boot-frozen `CanonicalGatewayOrigin` that CSP `frame-ancestors`, CORS `Access-Control-Allow-Origin`, the WebSocket upgrade's `CheckOrigin`, and `web_serve`'s minted preview URLs all use. **Restart-gated** — it is resolved once at boot, so a change here requires a gateway restart (or `POST /api/v1/reload` after a config write) to take effect. Without it set behind a reverse proxy, the gateway falls back to a `host:port` heuristic that will not match the public hostname the browser actually sees, and the origin checks will fail closed. |
 
 ### Accurate client-IP audit logging (`gateway.trust_xff`)
@@ -170,7 +170,7 @@ same `RemoteAddr`/`X-Forwarded-For` resolution.
 
 ## Disabling previews (`gateway.preview_enabled`)
 
-Previews (`/preview/` and `web_serve`) can be turned off entirely without touching the reverse proxy or restarting the process:
+Previews (`/preview/` and `serve_web`) can be turned off entirely without touching the reverse proxy or restarting the process:
 
 ```json
 {
@@ -190,8 +190,8 @@ For local development the single port works out of the box without any configura
 
 | Setting | Default |
 |---|---|
-| `gateway.host` | `0.0.0.0` |
+| `gateway.host` | `127.0.0.1` |
 | `gateway.port` | `5000` |
 | `gateway.public_url` | *(unset — falls back to a `host:port` heuristic; fine for `localhost`)* |
 
-Open `http://localhost:5000` in the browser. Chat, the API, and any preview link the agent produces all resolve on that same origin — no second port to reach.
+Open `http://localhost:5000` in the browser. Chat, the API and shared preview links resolve on that same listener — no second port to reach. Opening Omnipus as `localhost` does not by itself change preview-address selection: the configured address decides whether isolated localhost links are also returned. For example, setting `gateway.public_url` to `http://localhost:5000` makes the installation eligible for both forms; adjust the port to your configuration.

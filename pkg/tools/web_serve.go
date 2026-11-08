@@ -314,11 +314,13 @@ func (t *WebServeTool) Description() string {
 		"the built-in browser panel refuses the label URL, open url instead: that happens on a " +
 		"port-mapped install, where the label carries the canonical port rather than the panel's " +
 		"listener port.\n" +
-		"In Mode 2 (the url fallback) resource URLs must resolve inside the preview's " +
-		"/preview/<agent>/<token>/ directory. A URL relative to the page (./app.js) is suitable if " +
-		"it stays inside that directory; ../ can leave it. A website-root URL such as " +
-		"/assets/app.js is outside it and is blocked, and an essential blocked file can leave the " +
-		"page blank. Configure the build so its resource URLs stay inside the preview directory. " +
+		"In Mode 2 (the url fallback) resource files fetched over HTTP or HTTPS must use URLs " +
+		"inside the preview's /preview/<agent>/<token>/ directory. A URL relative to the page " +
+		"(./app.js) is suitable if it stays inside that directory; ../ can leave it. A " +
+		"website-root URL such as /assets/app.js is outside it and is blocked, and an essential " +
+		"blocked file can leave the page blank. Embedded images and fonts (data: URLs) and " +
+		"browser-created workers (blob: URLs) have separate allowances and need no directory " +
+		"prefix. Configure the build so its resource URLs stay inside the preview directory. " +
 		"Mode 2 also refuses service-worker requests, and the preview does not get a separate " +
 		"browser-storage origin.\n" +
 		"A blank or broken preview needs checking: blocked resources or connections are one " +
