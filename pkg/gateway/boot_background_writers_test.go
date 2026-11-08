@@ -197,6 +197,100 @@ func TestBootBackgroundWriters_JoinedBeforeHomeRemoval(t *testing.T) {
 	watchHomeQuiescent(t, home, homeTree(t, home))
 }
 
+// TestBootWriters_JoinHoldsForUnknownWindowPrimer kills the primer WaitGroup
+// mutant (CHECK 1 finding F5's survivor, CHECK 2's weak test): the mutant
+// drops the primer from the boot WaitGroup, and every previously passing
+// assertion — join-before-home-removal, quiescence — stayed green with it,
+// because the primer's synchronous pass is microseconds and its fetch is
+// bounded by the LiveLimits lifecycle instead of the WaitGroup. This test
+// holds the primer pass MID-FLIGHT through the seam the production goroutine
+// calls (live_limits_boot.go::primeUnknownWindowsFn), so the drain's join is
+// observable: a correct drain cannot return while the pass is still running,
+// and the verdict needs no timing — "drain returned AND pass still held" is
+// a proven violation the moment both facts hold. It also pins the pairing
+// with defect 1's fix: the drain joins the primer BEFORE it closes the
+// rung, so a boot teardown can never cut the primer's priming short by
+// closing the rung under it.
+func TestBootWriters_JoinHoldsForUnknownWindowPrimer(t *testing.T) {
+	home, _ := bootFixture(t)
+	bootEditedPlan(t, home)
+	t.Cleanup(func() { agent.SetLiveWindowLookup(nil) })
+
+	primerStarted := make(chan struct{})
+	primerDone := make(chan struct{})
+	release := make(chan struct{})
+	oldFn := primeUnknownWindowsFn
+	primeUnknownWindowsFn = func(al windowReloader) {
+		close(primerStarted)
+		<-release
+		primeUnknownWindows(al)
+		close(primerDone)
+	}
+	t.Cleanup(func() {
+		primeUnknownWindowsFn = oldFn
+		select {
+		case <-release:
+		default:
+			close(release) // never leak a held primer into a later test
+		}
+	})
+
+	rc := &runContextWithOptions{ctx: context.Background(), homePath: home, configPath: filepath.Join(home, "config.json"), allowEmptyStartup: true}
+	err, stop := rc.loadConfigAndProvider()
+	require.NoError(t, err, "real credentials/config/roster startup must succeed")
+	require.False(t, stop)
+	rc.provider = &restMockProvider{}
+	err, stop = rc.initializeAgentLoop()
+	require.NoError(t, err)
+	require.False(t, stop)
+	stopBootWritersOnCleanup(t, rc)
+
+	select {
+	case <-primerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("instrument: the unknown-window primer pass never started")
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), bootBackgroundStopTimeout)
+	defer stopCancel()
+	drainReturned := make(chan struct{})
+	go func() {
+		rc.stopBootBackgroundWriters(stopCtx)
+		close(drainReturned)
+	}()
+
+	// A correct drain is still joined on the held pass here; a primer-dropping
+	// drain is back in microseconds. If it IS back already, the pass must be
+	// provably done — while the pass is still held, an early return is the
+	// proven violation, with no sleep and no threshold in the verdict.
+	select {
+	case <-drainReturned:
+		select {
+		case <-primerDone:
+		default:
+			t.Fatal("boot drain returned while the unknown-window primer pass was still running: the primer was not joined by the boot WaitGroup")
+		}
+	case <-time.After(250 * time.Millisecond):
+		// still waiting on the held pass — the join is holding it
+	}
+	close(release)
+	select {
+	case <-drainReturned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("boot drain never returned after the held primer pass completed")
+	}
+	select {
+	case <-primerDone:
+	default:
+		t.Fatal("the held primer pass did not complete")
+	}
+	select {
+	case <-rc.bootBackgroundDone:
+	default:
+		t.Fatal("boot background writers were not joined by the teardown drain")
+	}
+}
+
 // TestWU15Boot_QuiesceBeforeHomeRemoval drives the setupAndStartServices
 // boot shape every WU15 rooms test uses (wu15NewHarness), including a real
 // room exchange, then the harness shutdown and the same assertions for the

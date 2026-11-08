@@ -42,6 +42,12 @@ type bootDownloadStream struct {
 	ready, release, wrote, closed chan struct{}
 	step                          int
 	once                          sync.Once
+
+	// closedAt is WHEN Close ran, stamped under closedMu before the closed
+	// channel fires, so the join oracle can compare event times instead of
+	// racing two ready channels (CHECK 2, 2026-11-08, defect 2).
+	closedMu sync.Mutex
+	closedAt time.Time
 }
 
 func (s *bootDownloadStream) Read(p []byte) (int, error) {
@@ -71,7 +77,24 @@ func (s *bootDownloadStream) Read(p []byte) (int, error) {
 	}
 }
 
-func (s *bootDownloadStream) Close() error { s.once.Do(func() { close(s.closed) }); return nil }
+func (s *bootDownloadStream) Close() error {
+	s.once.Do(func() {
+		s.closedMu.Lock()
+		s.closedAt = time.Now()
+		s.closedMu.Unlock()
+		close(s.closed)
+	})
+	return nil
+}
+
+// bodyClosedAt returns when Close ran, or the zero time if it has not run
+// yet. The stamp is taken at the event site (inside Close), so an observer
+// that learns of the event later still sees the event's own time.
+func (s *bootDownloadStream) bodyClosedAt() time.Time {
+	s.closedMu.Lock()
+	defer s.closedMu.Unlock()
+	return s.closedAt
+}
 
 // bootDownloadInFlight boots the real loadConfigAndProvider +
 // initializeAgentLoop with managed-browser provisioning forced, holds the
@@ -137,15 +160,45 @@ func errorTransportRefusal(r *http.Request) error {
 // BEFORE `caller` returns. This is the JOIN property in its strict form: the
 // download goroutine closes its body as the last act before its WaitGroup
 // Done, so a drain that joins it must come back only after the body is
-// closed. A wait window here would gut the oracle — a drain that returned
-// WITHOUT the join comes back milliseconds early, and a body that closes on
-// its own 25 ms later (the cancellation acknowledgement) would still land
-// inside any generous window; the ordering race has no such slack.
-func awaitBodyClosedBefore(t *testing.T, stream *bootDownloadStream, callerReturned <-chan struct{}, what string) {
+// closed.
+//
+// The verdict is decided by comparing WHEN the two events happened, never by
+// racing their channels: the stream stamps its Close at the event site
+// (bootDownloadStream.Close), and the caller stamps its return at its own
+// event site and hands the stamp over as callerAt (read only after
+// callerReturned fires, so the write is ordered before the read). A select
+// between two ready channels picks arbitrarily — the previous shape here
+// rejected 18 of 32 legal already-finished schedules (CHECK 2, 2026-11-08,
+// defect 2), a false alarm against a correct drain. Only a PROVEN inversion
+// (caller stamped strictly before the body close) fails; schedules whose
+// order cannot be proven, including both events already complete, are
+// accepted. The two waits below are hang guards for genuine breakage (a
+// body never closed, a caller never returning), not tolerances: there is no
+// sleep and no elapsed-time threshold anywhere in the verdict.
+// callerReturnedBeforeBodyClosed is the oracle's verdict as a pure predicate
+// over the two event stamps: true only when the caller's stamp is strictly
+// before the body's close stamp — a proven inversion. Unprovable orders (a
+// zero stamp, or equal stamps from the same clock tick) are not inversions
+// and return false. It is a function so TestAwaitBodyClosedBefore_OracleOrdering
+// can pin every verdict positively — a rejection pinned by a nested failing
+// probe would fail its parent test by construction, not by verdict.
+func callerReturnedBeforeBodyClosed(callerAt, bodyClosedAt time.Time) bool {
+	return !callerAt.IsZero() && !bodyClosedAt.IsZero() && callerAt.Before(bodyClosedAt)
+}
+
+func awaitBodyClosedBefore(t *testing.T, stream *bootDownloadStream, callerReturned <-chan struct{}, callerAt func() time.Time, what string) {
 	t.Helper()
 	select {
 	case <-stream.closed:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s never closed the managed download's body: the drain neither joined it nor cancelled it", what)
+	}
+	select {
 	case <-callerReturned:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s never returned", what)
+	}
+	if callerReturnedBeforeBodyClosed(callerAt(), stream.bodyClosedAt()) {
 		t.Fatalf("%s returned before the managed download's body was closed: the download was cancelled but NOT joined by the drain", what)
 	}
 }
@@ -164,12 +217,14 @@ func TestPreprovisionDownload_CancelledAndJoinedByBootDrain(t *testing.T) {
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), bootBackgroundStopTimeout)
 	defer stopCancel()
 	drainReturned := make(chan struct{})
+	var drainReturnedAt time.Time
 	go func() {
 		rc.stopBootBackgroundWriters(stopCtx)
+		drainReturnedAt = time.Now() // stamped at the event site, before the signal
 		close(drainReturned)
 	}()
 
-	awaitBodyClosedBefore(t, stream, drainReturned, "boot drain")
+	awaitBodyClosedBefore(t, stream, drainReturned, func() time.Time { return drainReturnedAt }, "boot drain")
 	// Secondary witness, bounded: the partial is removed inside the joined
 	// goroutine, which can legally finish its own cleanup just after the
 	// transport's body close this oracle synced on.
@@ -191,18 +246,86 @@ func TestSandboxAbortDrainsStartedBootWriters(t *testing.T) {
 	rc, stream, _ := bootDownloadInFlight(t)
 	rc.opts.SandboxMode = "bootdl-invalid"
 	abortReturned := make(chan struct{})
+	var abortReturnedAt time.Time
 	var err error
 	var stop bool
 	go func() {
 		err, stop = rc.validateAndApplySandbox()
+		abortReturnedAt = time.Now() // stamped at the event site, before the signal
 		close(abortReturned)
 	}()
 
-	awaitBodyClosedBefore(t, stream, abortReturned, "sandbox validation abort")
+	awaitBodyClosedBefore(t, stream, abortReturned, func() time.Time { return abortReturnedAt }, "sandbox validation abort")
 	<-abortReturned // the goroutine writes err/stop; read them only after it returned
 
 	require.True(t, stop, "instrument: the real sandbox-validation abort branch was reached")
 	require.Error(t, err)
 	var bootErr *SandboxBootError
 	require.True(t, errors.As(err, &bootErr), "expected a sandbox boot error, got %v", err)
+}
+
+// TestAwaitBodyClosedBefore_OracleOrdering pins the join oracle itself, so
+// its verdicts are facts about schedules and not coin flips (CHECK 2,
+// 2026-11-08, defect 2: the previous select-based oracle rejected 18 of 32
+// legal already-finished schedules). The verdict table asserts every verdict
+// positively on the pure predicate — the one illegal schedule (caller
+// provably returned before the body closed) must be rejected, every legal
+// and unprovable schedule accepted — and the full helper is then driven on
+// real schedules: 32 repeats of the already-finished case the old select
+// got wrong, plus a live schedule whose events land while the oracle is
+// already waiting. Deterministic throughout: stamps are constructed from
+// one clock reading, no concurrency, no sleeps beyond the live case's one
+// finite hand-off, and the whole table runs under -count=100.
+func TestAwaitBodyClosedBefore_OracleOrdering(t *testing.T) {
+	newStream := func() *bootDownloadStream {
+		return &bootDownloadStream{ready: make(chan struct{}), release: make(chan struct{}), wrote: make(chan struct{}), closed: make(chan struct{})}
+	}
+	t.Run("verdict", func(t *testing.T) {
+		t0 := time.Now()
+		cases := []struct {
+			name               string
+			callerAt, bodyAt   time.Time
+			wantCallerProvenLt bool
+		}{
+			{"illegal caller before body", t0, t0.Add(time.Second), true},
+			{"legal body before caller", t0.Add(time.Second), t0, false},
+			{"tie accepted", t0, t0, false},
+			{"zero caller stamp accepted", time.Time{}, t0, false},
+			{"zero body stamp accepted", t0, time.Time{}, false},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				require.Equal(t, tc.wantCallerProvenLt, callerReturnedBeforeBodyClosed(tc.callerAt, tc.bodyAt))
+			})
+		}
+	})
+	t.Run("legal body-closed-then-caller-returned, both already complete", func(t *testing.T) {
+		for i := 0; i < 32; i++ {
+			stream := newStream()
+			returned := make(chan struct{})
+			stream.Close() // body's event first
+			returnedAt := time.Now()
+			close(returned)
+			awaitBodyClosedBefore(t, stream, returned, func() time.Time { return returnedAt }, "correctly completed caller")
+		}
+	})
+	t.Run("legal live schedule accepted", func(t *testing.T) {
+		stream := newStream()
+		returned := make(chan struct{})
+		var returnedAt time.Time
+		go func() {
+			time.Sleep(25 * time.Millisecond) // both events land while the oracle is already waiting on them
+			stream.Close()
+			returnedAt = time.Now()
+			close(returned)
+		}()
+		awaitBodyClosedBefore(t, stream, returned, func() time.Time { return returnedAt }, "joined drain")
+	})
+	t.Run("unstamped caller accepted when order cannot be proven", func(t *testing.T) {
+		stream := newStream()
+		returned := make(chan struct{})
+		close(returned)
+		stream.Close()
+		awaitBodyClosedBefore(t, stream, returned, func() time.Time { return time.Time{} }, "unstamped caller")
+	})
 }

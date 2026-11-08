@@ -955,7 +955,7 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	rc.bootBackgroundWG.Add(1)
 	go func() {
 		defer rc.bootBackgroundWG.Done()
-		primeUnknownWindows(rc.agentLoop)
+		primeUnknownWindowsFn(rc.agentLoop)
 	}()
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
@@ -1054,8 +1054,25 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 // t.TempDir cleanup — must drain them BEFORE that removal: the preprovision
 // download's browser/chromium/*.zip.part-* writes raced t.TempDir removal
 // and produced "TempDir RemoveAll cleanup: ... browser: directory not empty"
-// in CI (#1644/#1695). Nil-safe: a boot that stopped before
-// initializeAgentLoop has nothing to join.
+// in CI (#1644/#1695).
+//
+// The WaitGroup join does NOT cover the primer's fetch: primeUnknownWindows
+// calls agent.ResolveWindow, whose rung-4 Lookup starts a fetch whose writer
+// runs under the LiveLimits instance's own lifetime (agent.NewLiveLimits
+// derives it from context.Background(), deliberately independent of every
+// gateway context). A boot abort that returned after the join alone left
+// that fetch running: releasing its held HTTP answer afterwards wrote
+// cache/model_limits.json into a home the caller had already started
+// removing (CHECK 2, 2026-11-08, defect 1). So after the join this drain
+// also Closes rc.liveLimits — cancelling any fetch the primer (or a reload,
+// or a settings write) started and waiting, bounded by the same ctx, for
+// its writer to exit; a call still running at the deadline is not abandoned
+// half-way, matching stopBackgroundWriters' posture for its own bounded
+// waits. LiveLimits.Close is once-guarded (agent.LiveLimits.Close), so the
+// later teardown closes — the startServices abort branch, the graceful
+// shutdown, every test cleanup — stay idempotent, never a double-close
+// panic. Nil-safe twice over: a boot that stopped before
+// initializeAgentLoop has neither a WaitGroup nor a LiveLimits to close.
 func (rc *runContextWithOptions) stopBootBackgroundWriters(ctx context.Context) {
 	if rc == nil || rc.bootBackgroundCancel == nil {
 		return
@@ -1066,6 +1083,19 @@ func (rc *runContextWithOptions) stopBootBackgroundWriters(ctx context.Context) 
 	case <-ctx.Done():
 		slog.Warn("gateway: boot background writers did not stop within the shutdown budget; continuing",
 			"error", ctx.Err())
+	}
+	if rc.liveLimits != nil {
+		closed := make(chan struct{})
+		go func() {
+			rc.liveLimits.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-ctx.Done():
+			slog.Warn("gateway: live-limits close did not finish within the shutdown budget; continuing",
+				"error", ctx.Err())
+		}
 	}
 }
 
