@@ -182,11 +182,15 @@ type services struct {
 	// orphanGCDone joins startBackgroundServices' media-library orphan-GC
 	// goroutine, whose FIRST act at boot is repairLibraryAssociationsOnce —
 	// a writer under workspaces/ (#1598's "workspaces: directory not
-	// empty"). The goroutine already exits on the boot ctx; the done channel
-	// is what lets shutdown WAIT for it instead of racing a mid-flight
-	// repair.
-	orphanGCDone chan struct{}
-	TaskTrigger  *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
+	// empty"). orphanGCCancel is the goroutine's own cancel handle (its
+	// context is a child of the boot ctx): both shutdown drains call it
+	// BEFORE waiting on done, because on a partial-boot abort or a test
+	// harness teardown the parent ctx stays live and a join-only drain would
+	// wait out its whole budget while the goroutine kept running (CHECK 1
+	// finding F2, 2026-11-08).
+	orphanGCDone   chan struct{}
+	orphanGCCancel context.CancelFunc
+	TaskTrigger    *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
 	// HeartbeatService was skipped whenever a per-agent heartbeat was active,
@@ -1065,8 +1069,38 @@ func (rc *runContextWithOptions) stopBootBackgroundWriters(ctx context.Context) 
 	}
 }
 
+// bootAbortDrainTimeout bounds the boot-abort drain of the boot-stage
+// background writers in validateAndApplySandbox and startServices. The cancel
+// is already delivered when the wait starts, so this only waits out the
+// writers' exit after cancellation — the same posture as
+// bootBackgroundStopTimeout, just tighter: a boot that is already aborting
+// should not spend its full stop budget waiting for a download to notice.
+const bootAbortDrainTimeout = 5 * time.Second
+
 // validateAndApplySandbox cleans orphaned runs, validates policies, applies the sandbox, and starts its nag banner.
-func (rc *runContextWithOptions) validateAndApplySandbox() (error, bool) {
+//
+// Every stop=true return below runs AFTER initializeAgentLoop started the
+// boot-stage background writers (the browser cache-trim schedule, the
+// managed-Chromium preprovision download, the unknown-window primer —
+// TempDir-cleanup family #1644/#1695), so each one must cancel and join them
+// before returning: the preprovision download keeps writing
+// browser/chromium/*.zip.part-* under homePath until it is cancelled, and a
+// test (or a supervisor) that treats this return as "the gateway is gone"
+// removes homePath right after it. The deferred guard drains once for all
+// four abort returns. validateAndApplySandbox runs on the boot path only —
+// the reload path never calls it — so this cannot cut short a live gateway's
+// writers, and stopBootBackgroundWriters is nil-safe for a boot that stopped
+// before initializeAgentLoop.
+func (rc *runContextWithOptions) validateAndApplySandbox() (err error, stop bool) {
+	defer func() {
+		if !stop {
+			return
+		}
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootAbortDrainTimeout)
+		defer stopCancel()
+		rc.stopBootBackgroundWriters(stopCtx)
+	}()
+
 	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
 	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any
 	// new external-cli sub-agent run can be dispatched, so every run dir present is
@@ -1286,7 +1320,7 @@ func (rc *runContextWithOptions) startServices() (error, bool) {
 		// Boot aborted: join the boot-stage writers before returning, or the
 		// preprovision download keeps writing into homePath after this
 		// returns (#1644/#1695 — same race as the teardown paths below).
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootAbortDrainTimeout)
 		defer stopCancel()
 		rc.stopBootBackgroundWriters(stopCtx)
 		return rc.err, true
@@ -2032,13 +2066,16 @@ func drainBootBackgroundWriters(ctx context.Context, rs *services) {
 	if rs == nil {
 		return
 	}
-	// Cancel everything first, then join, so the three writers settle
-	// concurrently instead of serializing their exit waits.
+	// Cancel everything first, then join, so the writers settle concurrently
+	// instead of serializing their exit waits.
 	if rs.catalogRefreshCancel != nil {
 		rs.catalogRefreshCancel()
 	}
 	if rs.bootBackgroundCancel != nil {
 		rs.bootBackgroundCancel()
+	}
+	if rs.orphanGCCancel != nil {
+		rs.orphanGCCancel()
 	}
 	if rs.catalogRefreshDone != nil {
 		waitBootBackgroundDone(ctx, rs.catalogRefreshDone, "provider-catalog refresh loop")

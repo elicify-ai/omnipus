@@ -250,10 +250,17 @@ type shutdownBackgroundStops struct {
 	// shutdown drain — the TempDir-cleanup family (#1644/#1695).
 	bootBackground     func()
 	bootBackgroundDone <-chan struct{}
-	// orphanGCDone joins the media-library orphan-GC goroutine (its boot
-	// pass repairs associations under workspaces/, #1598); cancellation is
-	// already owned by the gateway ctx, only the join was missing.
-	orphanGCDone <-chan struct{}
+	// orphanGCCancel cancels the media-library orphan-GC goroutine and
+	// orphanGCDone joins it. The goroutine's FIRST act is the one-time
+	// association repair under workspaces/ (#1598) — synchronous and
+	// uncancelable, which the join covers; the cancel stops the tick loop
+	// after it. The goroutine's context is a child of the gateway ctx, but
+	// both drains must carry their own cancel: on a partial-boot abort or a
+	// test harness teardown the parent ctx stays live, and a join-only wait
+	// would hold the drain until its budget expired while the goroutine kept
+	// running (CHECK 1 finding F2, 2026-11-08).
+	orphanGCCancel context.CancelFunc
+	orphanGCDone   <-chan struct{}
 }
 
 // backgroundStopsOf collects the running services' background stops.
@@ -280,6 +287,7 @@ func backgroundStopsOf(rs *services) shutdownBackgroundStops {
 		s.bootBackground = rs.bootBackgroundCancel
 		s.bootBackgroundDone = rs.bootBackgroundDone
 	}
+	s.orphanGCCancel = rs.orphanGCCancel
 	s.orphanGCDone = rs.orphanGCDone
 	return s
 }
@@ -367,6 +375,9 @@ func stopBackgroundWriters(ctx context.Context, s shutdownBackgroundStops) {
 	}
 	if s.bootBackgroundDone != nil {
 		waitBootBackgroundDone(ctx, s.bootBackgroundDone, "boot browser/preprovision goroutines")
+	}
+	if s.orphanGCCancel != nil {
+		s.orphanGCCancel()
 	}
 	if s.orphanGCDone != nil {
 		waitBootBackgroundDone(ctx, s.orphanGCDone, "media library orphan-GC goroutine")

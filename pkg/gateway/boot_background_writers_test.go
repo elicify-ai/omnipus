@@ -22,6 +22,7 @@ package gateway
 //     instrument, not tolerance: ANY entry appearing fails the test.
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,46 +43,47 @@ const bootQuiesceObservationWindow = 1200 * time.Millisecond
 // bootQuiescePollEvery is the write-window poll interval.
 const bootQuiescePollEvery = 50 * time.Millisecond
 
-// homeTree snapshots the test home as a path -> size-or-dir-marker map.
-// os.ReadDir recursion instead of filepath.WalkDir: a mid-snapshot vanish of
-// a single entry (an atomic write's temp renamed away) must degrade ONE
-// entry to a marker, not abort or silently truncate the whole walk —
-// this snapshot feeds an addition-diff, so a missed entry would be a missed
-// writer. A vanished root means there is nothing left to watch.
-func homeTree(root string) map[string]int64 {
+// homeTree snapshots the test home as a path -> size map, FAILING the test on
+// any read or stat error (CHECK 1 finding F5): it runs after the teardown
+// drains, when the tree must be stable, so an error means something is still
+// creating, removing or replacing entries under the instrument — exactly the
+// mutation the old marker degradation (-2/-3 sentinels) would have hidden.
+func homeTree(t *testing.T, root string) map[string]int64 {
+	t.Helper()
 	out := map[string]int64{}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		out[root] = -3
-		return out
+		t.Fatalf("home tree unreadable at %s: %v", root, err)
 	}
 	for _, entry := range entries {
 		full := filepath.Join(root, entry.Name())
 		if entry.IsDir() {
 			out[full] = -1
-			for k, v := range homeTree(full) {
+			for k, v := range homeTree(t, full) {
 				out[k] = v
 			}
 			continue
 		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
-			out[full] = -2 // vanished between listing and stat: transient atomic-write temp
-			continue
+			t.Fatalf("home tree entry %s did not survive its own stat: %v", full, infoErr)
 		}
 		out[full] = info.Size()
 	}
 	return out
 }
 
-// assertQuiesceBeforeHomeRemoval fails if any NEW entry appears under root
-// within bootQuiesceObservationWindow of the teardown drain. This is the
-// condition t.TempDir's RemoveAll needs to hold: no writer may create
-// entries under the home after cleanup has started (or after the drains it
-// must have waited for returned).
-func assertQuiesceBeforeHomeRemoval(t *testing.T, root string) {
+// watchHomeQuiescent fails if the home changes AT ALL within
+// bootQuiesceObservationWindow of the teardown drain: additions, removals
+// and size changes are all live-writer evidence (CHECK 1 finding F5 — an
+// addition-only diff cannot see a writer that DELETES or rewrites, e.g. the
+// cache-trim sweep removing profile directories, or a download replacing a
+// .part file). The baseline is taken where this helper is called — the
+// caller takes it immediately after the drains return and BEFORE the home's
+// own removal (t.TempDir), so the diff covers everything from the join
+// boundary to the removal the family races.
+func watchHomeQuiescent(t *testing.T, root string, before map[string]int64) {
 	t.Helper()
-	before := homeTree(root)
 	deadline := time.NewTimer(bootQuiesceObservationWindow)
 	defer deadline.Stop()
 	ticker := time.NewTicker(bootQuiescePollEvery)
@@ -91,17 +93,27 @@ func assertQuiesceBeforeHomeRemoval(t *testing.T, root string) {
 		case <-deadline.C:
 			return
 		case <-ticker.C:
-			after := homeTree(root)
-			var added []string
-			for k := range after {
-				if _, ok := before[k]; !ok {
+			after := homeTree(t, root)
+			var added, removed, changed []string
+			for k, v := range after {
+				old, ok := before[k]
+				if !ok {
 					added = append(added, k)
+				} else if old != v {
+					changed = append(changed, fmt.Sprintf("%s (%d -> %d bytes)", k, old, v))
 				}
 			}
-			if len(added) > 0 {
+			for k := range before {
+				if _, ok := after[k]; !ok {
+					removed = append(removed, k)
+				}
+			}
+			if len(added)+len(removed)+len(changed) > 0 {
 				sort.Strings(added)
-				t.Fatalf("home not quiescent after teardown drain: %d new entries appeared (TempDir-cleanup family #1644/#1695/#1598): %v",
-					len(added), added)
+				sort.Strings(removed)
+				sort.Strings(changed)
+				t.Fatalf("home not quiescent after teardown drain (TempDir-cleanup family #1644/#1695/#1598): %d added %v; %d removed %v; %d resized %v",
+					len(added), added, len(removed), removed, len(changed), changed)
 			}
 		}
 	}
@@ -114,11 +126,20 @@ func assertQuiesceBeforeHomeRemoval(t *testing.T, root string) {
 // writing browser/chromium/*.zip.part-* into the test home after the whole
 // cleanup sequence had returned. Every test that drives initializeAgentLoop
 // registers this — those goroutines are started on that path unconditionally.
+//
+// The shutdown budget starts when CLEANUP RUNS, not when it is registered
+// (CHECK 1 finding F4): a test whose other cleanups or body keep it busy
+// longer than the budget must not hand this drain an already-expired
+// context, or the drain returns while the writers are still live. The
+// budget value is the same bootBackgroundStopTimeout every drain uses —
+// deliberately not enlarged.
 func stopBootWritersOnCleanup(t *testing.T, rc *runContextWithOptions) {
 	t.Helper()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t.Cleanup(stopCancel)
-	t.Cleanup(func() { rc.stopBootBackgroundWriters(stopCtx) })
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootBackgroundStopTimeout)
+		defer stopCancel()
+		rc.stopBootBackgroundWriters(stopCtx)
+	})
 }
 
 // TestBootBackgroundWriters_JoinedBeforeHomeRemoval drives the
@@ -141,14 +162,24 @@ func TestBootBackgroundWriters_JoinedBeforeHomeRemoval(t *testing.T) {
 	require.False(t, stop)
 
 	// Teardown in the boot test's LIFO order: the boot-stage writers first,
-	// then live limits, agent loop, credential store.
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// then live limits, agent loop, credential store. The unknown-window
+	// primer's only DISK I/O is its fetch/cache write, and that is bounded by
+	// the LiveLimits lifecycle — LiveLimits.Close cancels the fetch and joins
+	// its goroutine (pkg/agent/live_limits.go::Close; pinned by
+	// pkg/agent/live_limits_close_test.go::TestLiveLimits_CloseAbortsInflightFetchAndNeverWrites,
+	// "once Close returns, the instance performs no further I/O") — not by
+	// the boot WaitGroup, whose membership covers only the primer's
+	// synchronous ResolveWindow pass (live_limits_boot.go::primeUnknownWindows
+	// never blocks). So the boot drain is asserted on the join above, and the
+	// primer's write boundary is asserted here: the real boot built the
+	// instance and this teardown closed it BEFORE the home is watched.
+	require.NotNil(t, rc.liveLimits, "real boot must build the live-limits instance the primer's fetches are bounded by")
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), bootBackgroundStopTimeout)
 	defer stopCancel()
 	rc.stopBootBackgroundWriters(stopCtx)
-	if rc.liveLimits != nil {
-		rc.liveLimits.Close()
-		agent.SetLiveWindowLookup(nil)
-	}
+	rc.liveLimits.Close()
+	require.True(t, rc.liveLimits.Closed(), "primer's fetch boundary: live limits must be closed before the home is watched")
+	agent.SetLiveWindowLookup(nil)
 	if rc.agentLoop != nil {
 		rc.agentLoop.Close()
 	}
@@ -163,7 +194,7 @@ func TestBootBackgroundWriters_JoinedBeforeHomeRemoval(t *testing.T) {
 	default:
 		t.Fatal("boot background writers were not joined by the teardown drain")
 	}
-	assertQuiesceBeforeHomeRemoval(t, home)
+	watchHomeQuiescent(t, home, homeTree(t, home))
 }
 
 // TestWU15Boot_QuiesceBeforeHomeRemoval drives the setupAndStartServices
@@ -179,21 +210,25 @@ func TestWU15Boot_QuiesceBeforeHomeRemoval(t *testing.T) {
 
 	h.shutdown() // the same shutdown t.Cleanup registered (sync.Once)
 
-	if h.rs.catalogRefreshDone != nil {
-		select {
-		case <-h.rs.catalogRefreshDone:
-		default:
-			t.Fatal("provider-catalog refresh loop was not joined by shutdown")
-		}
+	// CHECK 1 finding F5: the real boot is EXPECTED to create these handles —
+	// a nil handle here means the writer never got a lifecycle at all, which
+	// must fail this test, not be skipped by a nil check.
+	require.NotNil(t, h.rs.catalogRefreshCancel, "real boot must attach the catalog refresh cancel handle")
+	require.NotNil(t, h.rs.catalogRefreshDone, "real boot must attach the catalog refresh done handle")
+	require.NotNil(t, h.rs.orphanGCCancel, "real boot must attach the orphan-GC cancel handle")
+	require.NotNil(t, h.rs.orphanGCDone, "real boot must attach the orphan-GC done handle")
+
+	select {
+	case <-h.rs.catalogRefreshDone:
+	default:
+		t.Fatal("provider-catalog refresh loop was not joined by shutdown")
 	}
-	if h.rs.orphanGCDone != nil {
-		select {
-		case <-h.rs.orphanGCDone:
-		default:
-			t.Fatal("media orphan-GC goroutine was not joined by shutdown")
-		}
+	select {
+	case <-h.rs.orphanGCDone:
+	default:
+		t.Fatal("media orphan-GC goroutine was not joined by shutdown")
 	}
-	assertQuiesceBeforeHomeRemoval(t, h.home)
+	watchHomeQuiescent(t, h.home, homeTree(t, h.home))
 }
 
 // TestStopAndCleanupServices_WaitsForBootBackgroundWriters proves the WAIT
