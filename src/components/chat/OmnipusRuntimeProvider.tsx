@@ -31,6 +31,7 @@ import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
 import { SetGoalToolUI } from "./tools/SetGoalToolUI";
+import { CreateTaskToolUI, UpdateTaskToolUI, RunTaskToolUI, DeleteTaskToolUI } from "./tools/TaskToolUI";
 import { ConnectChannelToolUI } from "./tools/ConnectChannelToolUI";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
@@ -333,6 +334,10 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   browser_evaluate  → BrowserEvaluateUnderscoreUI (underscore alias)
        *   browser.evaluate  → BrowserEvaluateUI         (registered dotted name)
        *   set_goal          → SetGoalToolUI             (ADR-082 D9: goal record card, anchored at the call)
+       *   create_task       → CreateTaskToolUI          (#1683: readable task card)
+       *   update_task       → UpdateTaskToolUI          (#1683: readable task card)
+       *   run_task          → RunTaskToolUI             (#1683: readable task card)
+       *   delete_task       → DeleteTaskToolUI          (#1683: readable task card)
        *   connect_channel   → ConnectChannelToolUI      (BDD-8.4: WhatsApp pairing QR in the requesting chat)
        */}
       <BashOutputUI />
@@ -372,6 +377,10 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
       <SetGoalToolUI />
+      <CreateTaskToolUI />
+      <UpdateTaskToolUI />
+      <RunTaskToolUI />
+      <DeleteTaskToolUI />
       <ConnectChannelToolUI />
       <Suspense fallback={null}>
         <LazyDraftLinkToolUIs />
