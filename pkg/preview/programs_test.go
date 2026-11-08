@@ -60,6 +60,9 @@ func fakeOfficeProcess() int {
 	if strings.HasPrefix(string(behavior), "cwd_") {
 		return cwdReceiptOfficeProcess(string(behavior) == "cwd_valid")
 	}
+	if strings.HasPrefix(string(behavior), "regread_") {
+		return regReadProcess()
+	}
 	receipt := fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}
 	if string(behavior) == "tree" {
 		child := exec.Command("/bin/sleep", "30")

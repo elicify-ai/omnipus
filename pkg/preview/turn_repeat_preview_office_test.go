@@ -6,31 +6,62 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/stretchr/testify/require"
 )
 
-// T-102 / §3.4 D8, FR-054 (B-67): a real Office preview, TWICE in a row, from
-// an agent turn, on a home where tmp already exists, through the real
-// confinement hooks with the turn's real read model. Both previews must
-// produce pages, and the policy may open only <id>/work — never tmp,
-// tmp/preview-calls or <id>. This settles D8's Unknown: the turn's deny list
-// (home entries that are not branches, so <home>/tmp once it exists) may
-// defeat the second preview's write to its own scratch on macOS.
+// T-102 / §3.4 D8, D8c; FR-054, FR-055 (B-67, B-69; revised again 2026-11-08
+// for D8c). Two real Office previews in a row through Service.Preview with
+// exactly the arguments the tools pass — the turn's policy is no longer an
+// input (Request.ReadModel goes; its removal is compiler-enforced for all
+// three callers) — on a home where tmp already exists, with
+// operator-registered real LibreOffice and the real renderer; each admission
+// is released before the next is requested (maxOfficeRuns = 1: a held
+// admission would deadlock the second preview). Both previews produce pages,
+// confined.
 //
-// Real components are required: registration BLOCKS (never skips) when the
-// real LibreOffice or renderer fixture is unavailable.
+// Second check, on the policy each real start used, plus the read probes —
+// HELD on the pre-D8c code: the spec's test seam does not exist yet. The
+// BLOCKED fatal below names it; the held checks, per the T-102 row:
+//
+//   - a test seam capturing the converter's SandboxPolicy per start, never a
+//     policy built by hand;
+//   - the file rules are exactly the §3.4 D8c list for the platform
+//     (component root read+execute; launcher folder read+execute; this
+//     call's <id>/work read+write; this call's socket folder read+write with
+//     socket bind/connect on macOS; system libraries per the platform
+//     preamble; on macOS Component.Registry read-only; the platform's font
+//     folders read-only);
+//   - write rules are exactly {<id>/work, socket folder} on macOS and
+//     {<id>/work} on Linux; ReadsOpen and ExecOpen are false;
+//   - no rule covers any part of the data folder other than that work and,
+//     on macOS, the registry folder; URE_MORE_SERVICES names
+//     Component.Registry;
+//   - probes: a harmless probe program started through the same confinement
+//     hooks with the captured policy, at a barrier inside the call (a
+//     barrier file, not a timer), tries to read a file in another call
+//     folder created after this call started, this call's owner.json, a file
+//     in the agent's workspace and a file in <home>/system outside the
+//     registry — every read fails; it writes in work, which succeeds; it
+//     reads the registry, which succeeds, and writes there, which fails.
+//
+// Not a pass if: the policy is built by hand; the "later" folder is created
+// before the start; an unconfined run is counted as a pass; a missing
+// component skips instead of failing; an admission is never released; the
+// component is registered so its registry lies inside its root; a probe
+// expected to fail fails for a reason other than the sandbox (every planted
+// target below is verified to exist and be readable by the test first).
 func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	primeKernelSandbox(t)
 	home := t.TempDir()
-	// tmp must exist BEFORE the turn policy is derived — that is exactly the
-	// state that puts <home>/tmp on the deny list (D8).
+	// tmp exists before the previews: the D8c guarantee is timing-independent
+	// (no deny walk, nothing to snapshot), and a real entry must be there for
+	// the no-other-data-folder-rule check to mean something.
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "tmp"), 0o700))
 
 	officeRoot := os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
@@ -52,49 +83,37 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	svc, err := New(Config{Home: home, Self: self, Resolver: &component.Resolver{Home: home, Executable: self}})
 	require.NoError(t, err)
 
-	// The turn's REAL read model: a registered boot base + a real authored
-	// FSPolicy, derived the way preview_document.go derives it.
-	sandbox.RegisterTurnPolicyBase(&sandbox.TurnPolicyInput{HomePath: home, Model: sandbox.FilesystemModelConfined})
-	t.Cleanup(func() { sandbox.RegisterTurnPolicyBase(nil) })
-	require.True(t, sandbox.TurnPolicyBaseInstalled(), "instrument: a policy base is registered (otherwise the policy is nil and the test is vacuous)")
-	workspace := t.TempDir()
-	authored := fspolicy.FSPolicy{WorkDir: workspace}
-	readModel, err := sandbox.KernelPolicyForTurn(authored)
-	require.NoError(t, err)
-	require.NotNil(t, readModel, "T-102: ReadModel must not be nil — every existing test passes nil, which is exactly what this row exists to close")
-	require.Contains(t, readModel.DeniedPaths, filepath.Join(home, "tmp"),
-		"instrument: the turn's read model really denies <home>/tmp — the D8 trigger is in force")
+	// The probe targets, planted before the previews and each verified to be
+	// readable by the test — so a probe that fails on one fails because of
+	// the sandbox, never because the target is missing (T-102 false-pass
+	// note). This call's owner.json needs no planting: it exists inside the
+	// live call, where the barrier probe reads it.
+	workspaceFile := filepath.Join(t.TempDir(), "turn-note.txt")
+	require.NoError(t, os.WriteFile(workspaceFile, []byte("workspace payload"), 0o600))
+	_, readErr := os.ReadFile(workspaceFile)
+	require.NoError(t, readErr, "instrument: the workspace target exists and is readable outside the sandbox")
+	outsideSystem := filepath.Join(home, "system", "t102-not-registry.txt")
+	require.NoError(t, os.WriteFile(outsideSystem, []byte("not the registry"), 0o600))
+	_, readErr = os.ReadFile(outsideSystem)
+	require.NoError(t, readErr, "instrument: the <home>/system target outside the registry exists and is readable outside the sandbox")
 
 	docx := minimalDocx(t)
 	for i := 1; i <= 2; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		adm, err := svc.Admit(ctx, true)
-		require.NoError(t, err)
+		adm, admErr := svc.Admit(ctx, true)
+		require.NoError(t, admErr, "instrument: the office slot is free — each admission is released before the next is requested")
 		res, previewErr := svc.Preview(ctx, adm, Request{
-			Name: "repeat.docx", Ext: ".docx", Data: docx, First: 1, Last: 1,
-			ReadModel: readModel,
+			Name: fmt.Sprintf("repeat%d.docx", i), Ext: ".docx", Data: docx, First: 1, Last: 1,
 		})
+		adm.Release() // released before the next admission, including on failure
 		cancel()
-		require.NoError(t, previewErr, "T-102: preview %d of two must succeed on a home where tmp exists", i)
+		require.NoError(t, previewErr,
+			"T-102 §3.4 D8c: preview %d of two must succeed on the converter's own read list — the pre-D8c code grants no read on the filtered registry under <home>/system, so LibreOffice cannot open it", i)
 		require.NotEmpty(t, res.Pages, "T-102: preview %d of two produces pages", i)
-		require.Equal(t, "", res.Unconfined, "T-102: the converter runs confined on preview %d", i)
+		require.Equal(t, "", res.Unconfined, "T-102: the converter runs confined on preview %d — an unconfined run is not a pass", i)
 	}
 
-	// Second check: the policy that reaches the converter opens only the
-	// call's work folder — nothing wider. Built from the same inputs the
-	// real call used; a wider allow would undo D1.
-	constrained := confinement{readModel: readModel, readWrite: []string{filepath.Join(home, "tmp", "preview-calls", "someid", "work")}}
-	policy := constrained.policy()
-	var allowedWrite []string
-	for _, rule := range policy.FilesystemRules {
-		if rule.Access&sandbox.AccessWrite != 0 {
-			allowedWrite = append(allowedWrite, rule.Path)
-		}
-	}
-	require.Equal(t, []string{filepath.Join(home, "tmp", "preview-calls", "someid", "work")}, allowedWrite,
-		"T-102 §3.4 D8: the policy opens only <id>/work — never tmp, tmp/preview-calls or <id>")
-	require.Contains(t, policy.DeniedPaths, filepath.Join(home, "tmp"),
-		"the turn's deny on <home>/tmp is kept in the converter's policy")
+	t.Fatal("BLOCKED: the policy each real start used cannot be captured on this code — the T-102 test seam (a hook in pkg/preview capturing the converter's SandboxPolicy per launcher start, called from the office conversion's start path) does not exist, and the row forbids a policy built by hand. Required by T-102 (§13) for the policy-shape checks and for the probe program (started through the same confinement hooks with the captured policy, at a barrier inside the call); the held checks are listed in this test's doc comment")
 }
 
 // minimalDocx builds the smallest docx LibreOffice opens: a zip with the
