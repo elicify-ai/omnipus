@@ -690,7 +690,7 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// development-bypass and user-less requests (it is not RequireNotBypass,
 	// which would answer 503). A DEDICATED rate limiter (cliValidateLimiter,
 	// distinct from validateLimiter) throttles the spawn endpoint; the handler
-	// runs clitrust.CheckProgramPath before any spawn, enforces a per-caller
+	// runs thirdpartycli.CheckProgramPath before any spawn, enforces a per-caller
 	// in-flight cap and audits each call.
 	rae.cm.RegisterHTTPHandler(
 		"/api/v1/system/cli-validate",

@@ -14,11 +14,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/agenthome"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -203,51 +206,105 @@ func MaskEnv(env map[string]string) map[string]string {
 	return out
 }
 
-// AgentWritableRoots lists the agent-writable locations a program path must
-// stay outside beyond $OMNIPUS_HOME: the gateway's home folder (every
-// workspace root lives under it), the sandbox's read+write grants
-// (sandbox.allowed_paths) and the host folder of every workspace mount (T11
-// §5). It is read on every call, so a mount added after a program was saved
-// counts at the next check. The Settings save, every run, the read model and
-// the agent tools all use this one list. A non-nil error means the mounts
-// could not be listed completely: the list is then incomplete, and a check
-// over it must refuse (CheckProgramPath), since a missing root would
-// otherwise silently turn "refuse" into "allow". A missing mount record is
-// an empty list, not an error.
+// AgentWritableRoots returns the folders agents can write to, which a
+// program path must therefore not live in or be linked through (T11 spec
+// §3.2, founder Q28 A): the Omnipus home, every agent home cfg configures
+// (resolved exactly as the runtime resolves it, through agenthome.Resolve),
+// the sandbox's extra read+write folders (sandbox.allowed_paths, "~"
+// expanded), every workspace folder and the host folder of every workspace
+// mount. Every entry is absolute: a relative one is made absolute against
+// the working directory, as the runtime does. It is read on every call, so a
+// mount or agent added after a program was saved counts at the next check.
+// The Settings save, cli-validate, every run, the read model and the agent
+// tools all use this one list; $OMNIPUS_HOME is added by the check itself.
+//
+// The list is complete or it is an error, and on error it is nil. A blank
+// home, an entry that cannot be made absolute, a workspace listing that
+// fails, an unsafe workspace id, or a mount record that cannot be read or
+// had entries dropped is an error, never a shorter list: a missing root
+// would silently turn "refuse" into "allow". Callers pass the error to
+// CheckProgramPath, which refuses as CheckLocationUnverifiable. A missing
+// mount record is an empty list, not an error.
 func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
-	out := []string{home}
-	if cfg != nil {
-		out = append(out, cfg.Sandbox.AllowedPaths...)
-	}
-	mounts, err := workspaceMountRoots(home)
-	if err != nil {
-		return out, err
-	}
-	return append(out, mounts...), nil
-}
-
-// workspaceMountRoots returns the host folder of every mount of every
-// workspace, or an error when a workspace listing or a mount record cannot be
-// read in full.
-func workspaceMountRoots(home string) ([]string, error) {
 	if strings.TrimSpace(home) == "" {
-		home = config.OmnipusHomeDir()
+		return nil, errors.New("the Omnipus data folder is not known, so the folders agents can write to cannot be listed")
+	}
+	var roots []string
+	var absErr error
+	add := func(p string) {
+		if strings.TrimSpace(p) == "" {
+			return
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			if absErr == nil {
+				absErr = fmt.Errorf("the agent-writable folder %q could not be made absolute: %w", p, err)
+			}
+			return
+		}
+		roots = append(roots, abs)
+	}
+	// addHome adds a runtime-resolved agent home and, when it differs, its
+	// whitespace-trimmed spelling: the runtime trims a per-agent home but uses
+	// the default home as written, and other components read the trimmed
+	// form, so both spellings are refused (extra roots only ever refuse more).
+	addHome := func(p string) {
+		add(p)
+		if t := strings.TrimSpace(p); t != p {
+			add(agenthome.ExpandHome(t))
+		}
+	}
+	add(home)
+	if cfg != nil {
+		addHome(agenthome.Resolve(nil, &cfg.Agents.Defaults))
+		for i := range cfg.Agents.List {
+			addHome(agenthome.Resolve(&cfg.Agents.List[i], &cfg.Agents.Defaults))
+		}
+		for _, p := range cfg.Sandbox.AllowedPaths {
+			add(expandUserHome(strings.TrimSpace(p)))
+		}
+	}
+	if absErr != nil {
+		return nil, absErr
 	}
 	ids, err := workspace.ListWorkspaceIDs(home)
 	if err != nil {
 		return nil, fmt.Errorf("the workspaces could not be listed: %w", err)
 	}
-	var roots []string
 	for _, id := range ids {
+		dir, derr := workspace.SafeWorkspaceDir(home, id)
+		if derr != nil {
+			return nil, fmt.Errorf("workspace %q has an unsafe id, so its folders cannot be listed: %w", id, derr)
+		}
+		add(dir)
 		mounts, ok, dropped := workspace.LoadMountsWithDropStatus(home, id)
 		if !ok || dropped {
 			return nil, fmt.Errorf("the mount record of workspace %q could not be read in full", id)
 		}
 		for _, m := range mounts {
-			roots = append(roots, m.HostPath)
+			add(m.HostPath)
 		}
 	}
+	if absErr != nil {
+		return nil, absErr
+	}
 	return roots, nil
+}
+
+// expandUserHome expands a leading "~" (alone, or followed by a separator)
+// in a trimmed sandbox.allowed_paths entry to the user's home folder, before
+// the entry is made absolute. The entry is returned unchanged when the home
+// folder is unknown; it is then made absolute as written, which only ever
+// refuses more.
+func expandUserHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, "~"+string(filepath.Separator)) {
+		return p
+	}
+	userHome, err := os.UserHomeDir()
+	if err != nil || userHome == "" {
+		return p
+	}
+	return filepath.Join(userHome, p[1:])
 }
 
 // PresetUseNote is the plain-text note on the audit entry of every run or test

@@ -1151,7 +1151,7 @@ func ResolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 }
 
 // resolveAgentHome determines the workspace directory for an agent. It
-// delegates to agenthome.Resolve, the single resolver pkg/clitrust also uses.
+// delegates to agenthome.Resolve, the single resolver pkg/thirdpartycli also uses.
 func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	return agenthome.Resolve(agentCfg, defaults)
 }

@@ -1,6 +1,6 @@
 //go:build !darwin && !windows
 
-package clitrust
+package thirdpartycli
 
 // foldPathCase keeps the path as written on Linux, whose filesystems are
 // case-sensitive (see pathWithin).

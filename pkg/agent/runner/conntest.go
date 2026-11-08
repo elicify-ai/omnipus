@@ -181,7 +181,7 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 }
 
 // TestConnectionCheckedFile is the connection test for a program file that a
-// caller has already checked (T11: clitrust.CheckProgramPath). It runs exactly
+// caller has already checked (T11: thirdpartycli.CheckProgramPath). It runs exactly
 // checkedFile — the same bytes, with no whitespace trimming and no PATH or
 // executable-extension lookup — so the file that starts is the file that was
 // checked (code review R2-C1: trimming a checked "name " could select a

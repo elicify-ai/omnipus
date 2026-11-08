@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -69,8 +70,15 @@ func (a *restAPI) HandleThirdPartyAgentSettings(w http.ResponseWriter, r *http.R
 
 // thirdPartyAgentWritable lists the agent-writable locations the path check
 // refuses beyond $OMNIPUS_HOME, with the error that makes the list
-// incomplete; see thirdpartycli.AgentWritableRoots.
+// incomplete; see thirdpartycli.AgentWritableRoots. It is the one gateway
+// entry for the Settings save, cli-validate, the command preview, the smoke
+// test, the connection test and the agent read model. A gateway with no
+// home path uses the Omnipus data folder, since AgentWritableRoots treats a
+// blank home as an error.
 func thirdPartyAgentWritable(homePath string, cfg *config.Config) ([]string, error) {
+	if strings.TrimSpace(homePath) == "" {
+		homePath = config.OmnipusHomeDir()
+	}
 	return thirdpartycli.AgentWritableRoots(homePath, cfg)
 }
 

@@ -1,6 +1,6 @@
 // Package agenthome is the single resolver for an agent's home (working)
 // directory and the Omnipus data directory. pkg/agent uses it to create and
-// root agents; pkg/clitrust uses it to build the agent-writable roots a
+// root agents; pkg/thirdpartycli uses it to build the agent-writable roots a
 // third-party CLI program must stay out of (T11 spec §3.2, security review
 // S3), so both always agree on where an agent can write.
 //

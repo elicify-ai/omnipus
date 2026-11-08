@@ -18,9 +18,10 @@
 //     per-caller, not a global slot — a global cap would let one caller starve
 //     everyone else.
 //   - Pre-spawn guard: the shared program-file check
-//     (clitrust.CheckProgramPath against clitrust.AgentWritableRoots) must
-//     accept the target, else it is classified path-not-allowed WITHOUT a
-//     spawn; the checked resolved file is the one launched. An empty path
+//     (thirdpartycli.CheckProgramPath against thirdpartycli.AgentWritableRoots,
+//     the same check the Settings save and every run use) must accept the
+//     target, else it is classified path-not-allowed WITHOUT a spawn; the
+//     checked resolved file is the one launched. An empty path
 //     short-circuits to missing-binary (never a silent $PATH fallback —
 //     FR-014). Per the operator decision there is NO basename/identity check —
 //     a runnable binary that returns a version passes even if mis-pointed
@@ -29,9 +30,9 @@
 //     (EventCliValidate), including the no-spawn classifications.
 //   - Response hygiene: `detail` is a fixed classified message per reason — NEVER
 //     raw stderr from the spawned process (FR-017). The one non-fixed detail is
-//     path-not-allowed's, which is the program-file check's own message (a
-//     path and the failed check, produced before anything runs), so process
-//     output still cannot be smuggled through the response.
+//     path-not-allowed's, "not allowed: <cli>: check <name> failed at <at>"
+//     (the failed check and a path, produced before anything runs), so
+//     process output still cannot be smuggled through the response.
 
 package gateway
 
@@ -40,17 +41,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/clitrust"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 // cliValidateInflight caps concurrent in-flight validations PER CALLER (not a
@@ -171,20 +169,22 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 	if cliPath == "" {
 		return buildCliValidateResponse(gen.CliValidateResponseReasonMissingBinary, nil, nil)
 	}
-	// 3. Shared program-file check BEFORE any spawn (T11 spec §3.2, FR-5): an
-	//    absolute path whose link chain and final file stay out of the
-	//    agent-writable roots, are not writable by others, and end at a regular
-	//    executable. A refusal is path-not-allowed and starts nothing. A bare
-	//    name is refused (not absolute) rather than resolved on $PATH.
-	roots, rootsErr := a.cliTrustForbiddenRoots(ctx)
-	if rootsErr != nil {
-		// Fail closed: without the complete agent-writable set the location
-		// check cannot be trusted, so nothing is started.
-		slog.Warn("cli-validate: agent-writable folders could not be listed; refusing the candidate",
-			"error", rootsErr)
-		return pathNotAllowedResponse(rootsErr)
+	// 3. Shared program-file check BEFORE any spawn (T11 spec §3.2, FR-5;
+	//    founder Q28 A): the same check the Settings save and every run use,
+	//    over the same folders agents can write to. It requires an absolute
+	//    path whose final file, links and link folders stay out of those
+	//    folders and whose final file is a regular executable. A refusal is
+	//    path-not-allowed and starts nothing; an incomplete folder list is
+	//    refused as location_unverifiable (logged by the check). A bare name
+	//    is refused (not absolute) rather than resolved on $PATH. The
+	//    request's config snapshot is preferred; the live config is the
+	//    fallback.
+	cfg := configFromContext(ctx)
+	if cfg == nil && a.agentLoop != nil {
+		cfg = a.agentLoop.GetConfig()
 	}
-	finalFile, checkErr := clitrust.CheckProgramPath(cliPath, roots)
+	roots, rootsErr := thirdPartyAgentWritable(a.homePath, cfg)
+	finalFile, checkErr := thirdpartycli.CheckProgramPath(cli, cliPath, roots, rootsErr)
 	if checkErr != nil {
 		return pathNotAllowedResponse(checkErr)
 	}
@@ -212,27 +212,11 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 	return buildCliValidateResponse(reason, resolved, version)
 }
 
-// cliTrustForbiddenRoots is the forbidden list for clitrust.CheckProgramPath:
-// the Omnipus home, every workspace folder and mount root, and configured
-// agent working folders. The request's config snapshot is preferred; the
-// live config is the fallback. An error means the list is incomplete and the
-// caller must refuse.
-func (a *restAPI) cliTrustForbiddenRoots(ctx context.Context) ([]string, error) {
-	cfg := configFromContext(ctx)
-	if cfg == nil && a.agentLoop != nil {
-		cfg = a.agentLoop.GetConfig()
-	}
-	home := a.homePath
-	if home == "" {
-		home = config.OmnipusHomeDir()
-	}
-	return clitrust.AgentWritableRoots(home, cfg)
-}
-
 // pathNotAllowedResponse is the path-not-allowed classification: not ok,
 // nothing resolved or run, and the check's own message naming the failed
-// check (spec §3.2 C-A2). The message comes from a filesystem check made
-// before any spawn, never from process output.
+// check (spec §3.2 C-A2): "not allowed: <cli>: check <name> failed at <at>"
+// (thirdpartycli.CheckError.Error). The message comes from a filesystem check
+// made before any spawn, never from process output.
 func pathNotAllowedResponse(checkErr error) gen.CliValidateResponse {
 	resp := buildCliValidateResponse(gen.CliValidateResponseReasonPathNotAllowed, nil, nil)
 	resp.Detail = strPtr("not allowed: " + checkErr.Error())
@@ -278,39 +262,6 @@ func derefTrimStr(p *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*p)
-}
-
-// isRegularExecutableFile reports whether p is a regular file the OS would
-// execute. Symlinks are followed (os.Stat). On Windows the execute bit is not
-// meaningful, so a regular file suffices; elsewhere at least one execute bit must
-// be set. A directory, socket, device, or missing path returns false — the
-// caller then classifies missing-binary WITHOUT a spawn.
-func isRegularExecutableFile(p string) bool {
-	fi, err := os.Stat(p)
-	if err != nil {
-		return false
-	}
-	if !fi.Mode().IsRegular() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return fi.Mode().Perm()&0o111 != 0
-}
-
-// absResolvePath returns the absolute, best-effort symlink-resolved form of p
-// for the resolved_path response field. EvalSymlinks failure falls back to Abs
-// of the raw path so a real target is never dropped.
-func absResolvePath(p string) string {
-	resolved := p
-	if ev, err := filepath.EvalSymlinks(p); err == nil && ev != "" {
-		resolved = ev
-	}
-	if abs, err := filepath.Abs(resolved); err == nil {
-		return abs
-	}
-	return resolved
 }
 
 // mapValidateReason maps runner.FailureReason to the wire enum, mapping

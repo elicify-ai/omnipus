@@ -13,8 +13,9 @@ import (
 	"strings"
 )
 
-// admittedExtensions is the r17 §3.5 PATHEXT set, compared case-insensitively.
-var admittedExtensions = []string{".exe", ".com", ".cmd", ".bat"}
+// admittedExtensions is the T11 spec §3.2 set (decision C1: .exe, .cmd and
+// .bat only), compared case-insensitively.
+var admittedExtensions = []string{".exe", ".cmd", ".bat"}
 
 // shortNameComponent matches an 8.3 short-name component: "~" followed by digits.
 var shortNameComponent = regexp.MustCompile(`~[0-9]+`)

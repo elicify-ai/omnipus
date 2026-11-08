@@ -1,6 +1,6 @@
 //go:build darwin || windows
 
-package clitrust
+package thirdpartycli
 
 import "strings"
 

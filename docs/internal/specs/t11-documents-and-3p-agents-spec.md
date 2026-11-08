@@ -36,6 +36,9 @@ Status: Approved for building (founder 2026-10-29: simple version)
 | R2-Q2 | Founder | **"A: Both in part A"**: Slice A builds the person-only gate and the shared file check; T8 reuses both. |
 | H-1 | Founder | #1489 converter on hold: **"the dependency to LibreOffice is not good, we need something lightweight"** |
 | S-1 | Founder, approving T11 for building | **"do not overcomplicate it, it is a simple setting in the ui for t11, nothing special"** |
+| Q28 | Founder 2026-11-07 | **A**: one shared check over the union of both slices' folders; delete `pkg/clitrust`. The Settings save, cli-validate, every run, the command preview, the smoke test and the agent read model all call `pkg/thirdpartycli/path.go::CheckProgramPath` over `executor_settings.go::AgentWritableRoots`. |
+| C1 | Combine plan §1.7, answer A (relayed with the combined build, 2026-11-08) | **A**: Windows programs end in `.exe`, `.cmd` or `.bat` only, as §3.2 says; `.com` is refused (`windows_extension`). |
+| C2 / Q37 | Founder 2026-11-08, Q37 **A** | `location_unverifiable` covers every reason the folder list is incomplete, with one general sentence. Settings save: "The program path for Codex was not saved: the list of folders agents can write to could not be read in full, so this location cannot be checked. Details are in the server log." A run refusal starts "This agent cannot run:", names `location_unverifiable` and the same cause clause, and points to the server log. |
 
 ## 3. Slice A
 
@@ -63,10 +66,10 @@ Today the route runs a caller-supplied path. It is open to anyone who can create
 | New shared piece (Slice A; T8 reuses both) | Behaviour |
 |---|---|
 | `pkg/gateway/middleware/person_session.go::RequirePersonSession` | Lives beside `bypass_gate.go::RequireNotBypass` and uses `pkg/gateway/ctxkey` (Verified: that import already exists there). Returns 403 before reading the body for: development-bypass requests, requests carrying `ctxkey.CLITokenContextKey`, and requests with no user. Applied as `a.withAuth(middleware.RequirePersonSession(h))`. |
-| `pkg/clitrust/check.go::CheckProgramPath(path, forbidden)` → resolved path | The path must be absolute. Resolves the link chain one link at a time. Refuses when the final file, any link, or any link's folder lies inside a forbidden root (founder Q2b, 2026-10-30: no owner, permission or ACL checks; protecting the CLI and its folders is the user's responsibility). Also refuses when the final file is not a regular executable for the gateway user. On Windows: absolute drive or UNC path, `.exe`/`.cmd`/`.bat` only, no 8.3 short names, no alternate data streams. Callers launch the returned file, never a second resolution. Platform files: `check_unix.go`, `check_windows.go`. |
-| `pkg/clitrust/roots.go::AgentWritableRoots(home, cfg)` | `$OMNIPUS_HOME`, every workspace folder and every workspace mount root. |
+| `pkg/thirdpartycli/path.go::CheckProgramPath(cli, path, roots, rootsErr)` → resolved path, or `*CheckError{CLI, Check, At}` | The path must be absolute. Resolves the link chain one link at a time. Refuses (`agent_writable_location`) when the final file, any link, or any link's folder lies inside a forbidden root, matched by text with letter case folded on macOS and Windows and by filesystem identity (`os.SameFile`), so any spelling the volume treats as the same folder is caught (founder Q2b, 2026-10-30: no owner, permission or ACL checks; protecting the CLI and its folders is the user's responsibility). Also refuses when the final file is not a regular executable for the gateway user. An incomplete root list, or a root that exists but cannot be examined, is refused as `location_unverifiable` at the entered path (Q37). On Windows: absolute drive or UNC path, `.exe`/`.cmd`/`.bat` only (C1), no 8.3 short names, no alternate data streams. Callers launch the returned file, never a second resolution. Platform files: `exec_unix.go`, `exec_windows.go`, `pathcase_fold.go`, `pathcase_exact.go`. |
+| `pkg/thirdpartycli/executor_settings.go::AgentWritableRoots(home, cfg)` → `([]string, error)` | The union (Q28): the Omnipus home, every agent home (defaults and each agent, through `agenthome.Resolve`, raw and trimmed spelling), `sandbox.allowed_paths` (`~` expanded), every workspace folder and every workspace mount root, each made absolute; `CheckProgramPath` adds `$OMNIPUS_HOME`. A blank home, an entry that cannot be made absolute, a failed workspace listing, an unsafe workspace id, or an unreadable or partly dropped mount record is an error and a `nil` list, never a shorter list. Callers resolve a blank home first (gateway: `config.OmnipusHomeDir()`). |
 
-The route runs: person gate → `CheckProgramPath` → existing version handshake on the returned file. A refusal returns the new reason `path-not-allowed` and starts nothing. The existing rate limit, in-flight cap, scrubbed environment and audit stay as they are. Detection (`GET /system/cli-detect`) stays filesystem-only.
+The route runs: person gate → `CheckProgramPath` → existing version handshake on the returned file. A refusal returns the new reason `path-not-allowed`, with `detail` "not allowed: <cli>: check <name> failed at <at>", and starts nothing. The existing rate limit, in-flight cap, scrubbed environment and audit stay as they are. Detection (`GET /system/cli-detect`) stays filesystem-only.
 
 ## 4. Slice B: Settings → Third-party agents
 
@@ -151,7 +154,7 @@ Delivery is reported as two separate lines: *code correct and tested* and *reach
 | FR-12 | Smoke test and preview take no free path | Given a request with `cli_path` / When received / Then 400 | `TestSmokeAndPreview_RejectFreePath` |
 | FR-13 | User docs updated in the same change (§10) | — | docs-verifier |
 
-Linux runs all tests in candidate CI. Windows adds the guard, `clitrust` and `cli-validate` tests to the existing Windows job (named `-run` per package; fake programs built from Go, not shell scripts). macOS adds them to the existing `phase3-macos.yml` core job. No new CI job.
+Linux runs all tests in candidate CI. Windows adds the guard, shared program-path (`pkg/thirdpartycli`) and `cli-validate` tests to the existing Windows job (named `-run` per package; fake programs built from Go, not shell scripts). macOS adds them to the existing `phase3-macos.yml` core job. No new CI job.
 
 ## 9. Hands-on rows (macOS, exact candidate)
 
@@ -181,7 +184,7 @@ Provider/model for agent-driven rows: `openrouter` + `deepseek/deepseek-v4.1-fla
 | Package | Owner | Depends on |
 |---|---|---|
 | A-tests (FR-1…FR-5) | qa-lead (one test author; CHECK by a different instance) | this spec |
-| A-code: guard rule; `RequirePersonSession`; `pkg/clitrust`; route wiring; C-A1/C-A2; CI additions; docs | backend developer | A-tests |
+| A-code: guard rule; `RequirePersonSession`; `pkg/clitrust` (merged into `pkg/thirdpartycli`, Q28); route wiring; C-A1/C-A2; CI additions; docs | backend developer | A-tests |
 | A-UI: the CLI-path hint shows `path-not-allowed` | frontend developer | C-A1/C-A2 commit |
 | A-gate | one 5-reviewer gate over Slice A, then hands-on U-1…U-3 | — |
 | B-tests (FR-6…FR-12) | qa-lead | T8 contract commit |

@@ -4,9 +4,10 @@
 
 // Package thirdpartycli owns the person-set program path and standard
 // parameters of the three external CLIs (Settings -> Third-party agents):
-// the one exported path check every caller uses (the Settings save, every
-// spawn, the connection check, the smoke test and the command preview) and
-// the exact refusal texts (tool-parity spec r17 §3.5, §3.6, §3.11).
+// the one exported path check every caller uses (the Settings save,
+// cli-validate, every spawn, the connection check, the smoke test and the
+// command preview) and the exact refusal texts (tool-parity spec r17 §3.5,
+// §3.6, §3.11; T11 spec §3.2, founder Q28 A).
 package thirdpartycli
 
 import (
@@ -56,15 +57,22 @@ var pathReasons = map[string]string{
 	CheckNotExecutable:         "it is not executable for the Omnipus user",
 	CheckAgentWritableLocation: "it is inside a folder agents can write to",
 	CheckLocationUnverifiable:  locationUnverifiableReason,
-	CheckWindowsExtension:      "it must end in .exe, .com, .cmd or .bat",
+	CheckWindowsExtension:      "it must end in .exe, .cmd or .bat",
 	CheckWindowsShortName:      "short (8.3) names are not accepted; use the full name",
 	CheckWindowsStream:         "alternate data streams are not accepted",
 }
 
 // locationUnverifiableReason names the real cause of a location_unverifiable
-// refusal: the list of mounted folders was unreadable, not the program.
-const locationUnverifiableReason = "Omnipus could not read the list of mounted folders, " +
-	"so it cannot check this location. Details are in the server log"
+// refusal (founder Q37 A): the list of folders agents can write to was
+// incomplete — a blank data folder, a workspace listing or mount record that
+// could not be read, an unsafe workspace id, or a listed folder that could
+// not be examined — not the program. The server log names the exact cause.
+const (
+	locationUnverifiableCause  = "the list of folders agents can write to could not be read in full"
+	locationUnverifiableLog    = "Details are in the server log"
+	locationUnverifiableReason = locationUnverifiableCause + ", so this location cannot be checked. " +
+		locationUnverifiableLog
+)
 
 // presetReasons is the `<reason>` of the cli_preset_invalid sentence.
 var presetReasons = map[string]string{
@@ -154,9 +162,9 @@ func CheckFailedText(cli, check, at string) string {
 	if check == CheckLocationUnverifiable {
 		// Moving or fixing the program would not help, so this refusal names
 		// the real cause instead of "does not pass its checks".
-		return "This agent cannot run: the program set for " + DisplayName(cli) +
-			" in Settings → Third-party agents cannot be checked (" + check + " at " + at + "). " +
-			pathReasons[check] + "."
+		return "This agent cannot run: the location of the program set for " + DisplayName(cli) +
+			" in Settings → Third-party agents cannot be checked (" + check + " at " + at + ") because " +
+			locationUnverifiableCause + ". " + locationUnverifiableLog + "."
 	}
 	return "This agent cannot run: the program set for " + DisplayName(cli) +
 		" in Settings → Third-party agents does not pass its checks (" + check + " at " + at +
