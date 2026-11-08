@@ -191,6 +191,21 @@ func t11AssertProgramRan(t *testing.T, w *httptest.ResponseRecorder, marker, fin
 	require.NoError(t, err, "the launched program must have written the marker")
 }
 
+// Canonicalize the failed element without replacing a failed link by its target.
+func t11CanonicalFailureElement(t *testing.T, element string) string {
+	t.Helper()
+	info, err := os.Lstat(element)
+	require.NoError(t, err, "fixture: the expected failing element exists")
+	if info.Mode()&os.ModeSymlink != 0 {
+		parent, parentErr := filepath.EvalSymlinks(filepath.Dir(element))
+		require.NoError(t, parentErr)
+		return filepath.Join(parent, filepath.Base(element))
+	}
+	final, err := filepath.EvalSymlinks(element)
+	require.NoError(t, err)
+	return final
+}
+
 func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker string, spawns int, needles ...string) {
 	t.Helper()
 	require.Equal(t, http.StatusOK, w.Code,
@@ -339,6 +354,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	// obsolete prose. Keep the real handshake counter and executable marker.
 	refuseShared := func(t *testing.T, path, at string) {
 		t.Helper()
+		at = t11CanonicalFailureElement(t, at)
 		t11ClearMarker(t, marker)
 		*spawns = 0
 		w := t11PostValidate(t, mux, cfg, token, path, ip, nil)
