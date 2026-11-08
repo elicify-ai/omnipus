@@ -50,7 +50,7 @@ import (
 )
 
 // budgetDirective matches a one-line exception marker. The reason, if any, is group 1.
-var budgetDirective = regexp.MustCompile(`^//\s*budget:exception(?:\s(.*))?$`)
+var budgetDirective = regexp.MustCompile(`^//[\t-\r \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]*budget:exception(?:[\t-\r \x{85}\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}](.*))?$`)
 
 // funcRow is one scanned Go function or method.
 type funcRow struct {
@@ -283,7 +283,7 @@ func recordComment(src []byte, starts []int, comments map[int]commentOnLine, off
 	if hasNonSpace(src[starts[line-1]:off]) {
 		return
 	}
-	comments[line] = commentOnLine{text: strings.TrimSpace(strings.TrimRight(lit, "\r"))}
+	comments[line] = commentOnLine{text: strings.TrimFunc(lit, isBlankRune)}
 }
 
 func markToken(src []byte, file *token.File, starts []int, info *sourceInfo, pos, end token.Pos) {
@@ -401,7 +401,7 @@ func directiveReason(line string) (exception, bool) {
 	}
 	reason := ""
 	if len(m) > 1 {
-		reason = strings.TrimSpace(m[1])
+		reason = strings.TrimFunc(m[1], isBlankRune)
 	}
 	return exception{present: true, reason: reason}, true
 }

@@ -249,6 +249,31 @@ function classifyKind(ts, sf, isTsx, fn, target) {
   return hasJsxReturn(ts, fn) ? 'component' : 'function';
 }
 
+// lfLines numbers physical lines the way scripts/funlen does: by LF only. The
+// TypeScript parser's own line table also breaks at a bare CR, U+2028 and U+2029,
+// which would give one source line two coordinates; this table is used for every
+// line number below so the Go and TS counts agree. It answers the two calls the
+// scanner makes on a SourceFile.
+function lfLines(text) {
+  const starts = [0];
+  for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  return {
+    getLineAndCharacterOfPosition(pos) {
+      let lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (starts[mid] <= pos) lo = mid;
+        else hi = mid - 1;
+      }
+      return { line: lo, character: pos - starts[lo] };
+    },
+    getPositionOfLineAndCharacter(line) {
+      return starts[line];
+    },
+  };
+}
+
 // analyzeSource walks the parsed tree's leaf tokens (so template tails, regular
 // expressions and JSX text are tokenised with the parser's own context, which a
 // context-free scanner cannot do) and returns:
@@ -262,6 +287,7 @@ function classifyKind(ts, sf, isTsx, fn, target) {
 //                 precedes it on its line. Text that merely looks like a comment
 //                 inside a string or template never appears here.
 function analyzeSource(ts, sf, text) {
+  const lf = lfLines(text);
   const codeLines = new Set();
   const firstOnLine = new Map();
   const lineComments = new Map();
@@ -278,28 +304,28 @@ function analyzeSource(ts, sf, text) {
     const start = n.kind === ts.SyntaxKind.JsxText ? n.pos : n.getStart(sf);
     const end = n.end;
     if (!(end > start) || start < lastEnd) return;
-    collectGapComments(sf, text, lineComments, lastEnd, start);
-    markTokenLines(sf, text, codeLines, firstOnLine, start, end);
+    collectGapComments(lf, text, lineComments, lastEnd, start);
+    markTokenLines(lf, text, codeLines, firstOnLine, start, end);
     lastEnd = end;
   };
   visit(sf);
-  collectGapComments(sf, text, lineComments, lastEnd, text.length);
-  return { codeLines, firstOnLine, lineComments };
+  collectGapComments(lf, text, lineComments, lastEnd, text.length);
+  return { codeLines, firstOnLine, lineComments, lf };
 }
 
 // collectGapComments parses the pure trivia text[from,to) between two tokens:
 // whitespace, newlines, // comments and /* */ comments are the only things there.
-function collectGapComments(sf, text, lineComments, from, to) {
+function collectGapComments(lf, text, lineComments, from, to) {
   let i = from;
   while (i < to) {
     const c = text[i];
     if (c === '/' && text[i + 1] === '/') {
       let e = text.indexOf('\n', i);
       if (e < 0 || e > to) e = to;
-      const line = sf.getLineAndCharacterOfPosition(i).line;
-      const lineStart = sf.getPositionOfLineAndCharacter(line, 0);
+      const line = lf.getLineAndCharacterOfPosition(i).line;
+      const lineStart = lf.getPositionOfLineAndCharacter(line, 0);
       lineComments.set(line, {
-        text: text.slice(i, e).replace(/\r$/, '').trim(),
+        text: trimBlank(text.slice(i, e)),
         only: !hasNonSpace(text, lineStart, i),
       });
       i = e;
@@ -315,13 +341,13 @@ function collectGapComments(sf, text, lineComments, from, to) {
   }
 }
 
-function markTokenLines(sf, text, lines, firstOnLine, start, end) {
+function markTokenLines(lf, text, lines, firstOnLine, start, end) {
   let i = start;
   while (i < end) {
     let lineEnd = text.indexOf('\n', i);
     if (lineEnd < 0 || lineEnd > end) lineEnd = end;
     if (hasNonSpace(text, i, lineEnd)) {
-      const line = sf.getLineAndCharacterOfPosition(i).line;
+      const line = lf.getLineAndCharacterOfPosition(i).line;
       lines.add(line);
       if (!firstOnLine.has(line)) firstOnLine.set(line, i === start ? start : -1);
     }
@@ -338,7 +364,14 @@ function markTokenLines(sf, text, lines, firstOnLine, start, end) {
 // U+FEFF (byte order mark), U+200B (zero width space) and U+180E (Mongolian vowel
 // separator) are not White_Space: they count as code. JavaScript's own \s is not
 // used because it includes U+FEFF and omits U+0085.
-const NON_SPACE = /[^\t-\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/;
+const BLANK_CLASS = '\\t-\\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000';
+const NON_SPACE = new RegExp('[^' + BLANK_CLASS + ']');
+const BLANK_EDGES = new RegExp('^[' + BLANK_CLASS + ']+|[' + BLANK_CLASS + ']+$', 'g');
+// trimBlank trims with the same set, so a reason made only of blank-set characters
+// is empty in both scanners (JavaScript's own trim() keeps U+0085, Go's strips it).
+function trimBlank(str) {
+  return str.replace(BLANK_EDGES, '');
+}
 function hasNonSpace(text, start, end) {
   return NON_SPACE.test(text.slice(start, end));
 }
@@ -354,7 +387,7 @@ function countCodeLines(codeLines, startLine, endLine) {
 }
 
 const NONE = { kind: 0, reason: '' };
-const BUDGET_DIRECTIVE = /^\/\/\s*budget:exception(?:\s(.*))?$/;
+const BUDGET_DIRECTIVE = new RegExp('^//[' + BLANK_CLASS + ']*budget:exception(?:[' + BLANK_CLASS + '](.*))?$', 's');
 
 // exceptionAbove returns {kind: 0 none, 1 empty reason, 2 reason, reason}.
 // The directive must be a real // comment (analyzeSource only records those) in
@@ -374,7 +407,7 @@ function exceptionAbove(ts, info, claimed, fn, sf, startLine) {
     // this line takes it; a function nested on the same line gets nothing.
     if (claimed.has(startLine)) return NONE;
     claimed.add(startLine);
-    const reason = (m[1] || '').trim();
+    const reason = trimBlank(m[1] || '');
     return reason === '' ? { kind: 1, reason: '' } : { kind: 2, reason };
   }
   return NONE;
@@ -413,8 +446,8 @@ function scanFile(ts, file, limit) {
   const visit = (n) => {
     if (isFunctionLikeNode(ts, n) && n.body) {
       total++;
-      const start = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
-      const end = sf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
+      const start = info.lf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+      const end = info.lf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
       const lines = countCodeLines(info.codeLines, start, end);
       const exc = exceptionAbove(ts, info, claimed, n, sf, start);
       if (lines > limit || exc.kind !== 0) {

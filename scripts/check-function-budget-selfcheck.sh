@@ -105,6 +105,10 @@
 #   ax. a line holding only U+200B, U+180E (and U+FEFF in TS) is code -> 241, FAIL
 #   av. exact counts (4) of tiny marked functions with such a blank line
 #
+#   ay. a bare CR, U+2028 or U+2029 inside a literal is not a line break: 240 code
+#      lines pass with and without a semicolon on that line, 241 fails (Go, TS)
+#   az. an exception reason of only blank-set characters is empty (FAIL) in Go and
+#      TS; a reason of only U+200B or U+180E is a real reason (listed)
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
 
@@ -694,6 +698,63 @@ for entry in "${NOT_WS[@]}" "${NOT_WS_TS_ONLY[@]}"; do
       bom-*) ;;
       *) grep -q 'CodeGo 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ax/$vname) Go did not count the line as code" >&2; FAIL=1; } ;;
     esac
+  fi
+done
+
+# (ay) Line coordinates (CHECK 5). Both scanners count physical lines by LF only,
+# so a bare CR, U+2028 or U+2029 inside a literal is not a line break and adding
+# a semicolon to a code-bearing line cannot change the count. Exactly 240 code
+# lines (signature, one literal line, 237 statements, brace) passes with and
+# without the semicolon; one more statement is 241 and fails citing 241.
+sep_go() { # sep_go <file> <name> <separator bytes> <semicolon or empty> <statements>
+  { printf 'package fixture\n\nfunc %s() {\n\t_ = `head%b' "$2" "$3"; printf 'tail`%s\n' "$4"; body_go "$5"; echo '}'; } > "$1"
+}
+sep_ts() {
+  { printf 'function %s() {\n  const s = `head%b' "$2" "$3"; printf 'tail`%s\n' "$4"; body_ts "$5"; echo '}'; } > "$1"
+}
+for sep in "cr:\\015" "u2028:\\342\\200\\250" "u2029:\\342\\200\\251"; do
+  sname="${sep%%:*}"; sbytes="${sep#*:}"
+  for semi in "" ";"; do
+    fresh_tree
+    sep_go "$TMP/tree/pkg/fixture_ay.go" "SepGo" "$sbytes" "$semi" 237
+    sep_ts "$TMP/tree/tests/fixture_ay.ts" "sepTs" "$sbytes" "$semi" 237
+    if expect "(ay) exactly 240 code lines, $sname inside a literal, semicolon='$semi' (Go and TS)" 0; then
+      grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (ay/$sname) a legal 240-line function failed" >&2; FAIL=1; }
+      grep -q 'SepGo 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (ay/$sname) Go count was not 240" >&2; FAIL=1; }
+      grep -q 'sepTs 240 > 120' "$TMP/out" || { echo "selfcheck FAIL: (ay/$sname) TS count was not 240" >&2; FAIL=1; }
+    fi
+  done
+  fresh_tree
+  sep_go "$TMP/tree/pkg/fixture_ay.go" "SepPlusGo" "$sbytes" ";" 238
+  sep_ts "$TMP/tree/tests/fixture_ay.ts" "sepPlusTs" "$sbytes" ";" 238
+  if expect "(ay) 241 code lines, $sname inside a literal, fails (Go and TS)" 1; then
+    grep -q 'SepPlusGo 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ay/$sname) Go FAIL did not cite 241" >&2; FAIL=1; }
+    grep -q 'sepPlusTs 241 > 240 (not grandfathered)' "$TMP/out" || { echo "selfcheck FAIL: (ay/$sname) TS FAIL did not cite 241" >&2; FAIL=1; }
+  fi
+done
+
+# (az) Exception reasons are trimmed with the same blank set. A reason made only
+# of blank-set characters is empty and fails in both languages; a reason made of
+# a non-member (U+200B, U+180E) is a real reason and is listed in both.
+for entry in "${WS_SET[@]}"; do
+  vname="${entry%%:*}"; vbytes="${entry#*:}"
+  case "$vname" in lf|cr) continue ;; esac
+  fresh_tree
+  gen_go_padded "$TMP/tree/pkg/fixture_az.go" "ReasonGo" 260 0 0 "//budget:exception $(printf '%b' "$vbytes")"
+  gen_ts_padded "$TMP/tree/tests/fixture_az.ts" "reasonTs" 260 0 "// budget:exception $(printf '%b' "$vbytes")"
+  if expect "(az) exception reason made only of $vname is empty (Go and TS)" 1; then
+    grep -q 'ReasonGo 260 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (az/$vname) Go did not fail it as empty" >&2; FAIL=1; }
+    grep -q 'reasonTs 260 empty exception reason' "$TMP/out" || { echo "selfcheck FAIL: (az/$vname) TS did not fail it as empty" >&2; FAIL=1; }
+  fi
+done
+for entry in "${NOT_WS[@]}"; do
+  vname="${entry%%:*}"; vbytes="${entry#*:}"
+  fresh_tree
+  gen_go_padded "$TMP/tree/pkg/fixture_az.go" "ReasonGo" 260 0 0 "//budget:exception $(printf '%b' "$vbytes")"
+  gen_ts_padded "$TMP/tree/tests/fixture_az.ts" "reasonTs" 260 0 "// budget:exception $(printf '%b' "$vbytes")"
+  if expect "(az) exception reason made only of $vname is a real reason (Go and TS)" 0; then
+    grep -q '^EXCEPTION .*ReasonGo 260 ' "$TMP/out" || { echo "selfcheck FAIL: (az/$vname) Go did not list it" >&2; FAIL=1; }
+    grep -q '^EXCEPTION .*reasonTs 260 ' "$TMP/out" || { echo "selfcheck FAIL: (az/$vname) TS did not list it" >&2; FAIL=1; }
   fi
 done
 
