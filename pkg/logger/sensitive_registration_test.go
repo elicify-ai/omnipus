@@ -219,3 +219,104 @@ func TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink(t *testing.T)
 			"the mask token %s must stand in for the credential", scrubberMaskToken)
 	})
 }
+
+// scrubberCodePointSpellings returns the one-byte escaped spellings of a
+// code point in U+0080..U+00FF in both hex cases — the forms a diagnostic
+// source outside this process may use for one of a value's characters.
+func scrubberCodePointSpellings(r rune) []string {
+	return []string{
+		fmt.Sprintf(`\x%02x`, r),
+		fmt.Sprintf(`\x%02X`, r),
+	}
+}
+
+// scrubberAssertSpellingEchoMasked runs the echo oracle for one spelling
+// row: exactly one field in the sink, no decoding variant recovers the
+// registered credential, no escaped spelling of the registered characters
+// survives, and the mask stands in.
+func scrubberAssertSpellingEchoMasked(t *testing.T, cred string, spellings []string, field string) {
+	t.Helper()
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	for _, variant := range scrubberDecodeClosure(values[0]) {
+		require.NotContains(t, variant, cred,
+			"a recoverable spelling of the registered credential survives the file sink (decoding variant of the field); want %s",
+			scrubberMaskToken)
+	}
+	for _, spelling := range spellings {
+		require.NotContains(t, values[0], spelling,
+			"the escaped spelling %s of the registered character survives the file sink; want %s",
+			spelling, scrubberMaskToken)
+	}
+	require.Contains(t, values[0], scrubberMaskToken,
+		"the mask token %s must stand in for the credential", scrubberMaskToken)
+}
+
+// TestScrubber_RegisteredSpellingEchoesNeverReachFileSink prices the echo
+// variants of the spelling rule (round 6): the one-byte escaped spelling of
+// a registered value's character may arrive with uppercase hex digits, may
+// be mixed with literal characters of the same value, and may concern a
+// code point below U+00A0 as well. In every variant the value must not
+// reach the sink in any recoverable spelling, and the mask must stand in.
+// The byte-identity controls below show credential-free content is
+// untouched.
+func TestScrubber_RegisteredSpellingEchoesNeverReachFileSink(t *testing.T) {
+	t.Run("uppercase_hex", func(t *testing.T) {
+		const cred = "token-é-9W"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed token-\xE9-9W at retry`)
+		scrubberAssertSpellingEchoMasked(t, cred, scrubberCodePointSpellings('é'), field)
+	})
+
+	t.Run("mixed_escape_second", func(t *testing.T) {
+		const cred = "töken-éa-7M"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed töken-\xe9a-7M at retry`)
+		spellings := append(scrubberCodePointSpellings('ö'), scrubberCodePointSpellings('é')...)
+		scrubberAssertSpellingEchoMasked(t, cred, spellings, field)
+	})
+
+	t.Run("mixed_escape_first", func(t *testing.T) {
+		const cred = "töken-éa-7M"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed t\xf6ken-éa-7M at retry`)
+		spellings := append(scrubberCodePointSpellings('ö'), scrubberCodePointSpellings('é')...)
+		scrubberAssertSpellingEchoMasked(t, cred, spellings, field)
+	})
+
+	t.Run("c1_code_point", func(t *testing.T) {
+		const cred = "token-\u0085-8F"
+		scrubberRegisterCredential(t, cred)
+		field := strconv.Quote(`provider echoed token-\x85-8F at retry`)
+		scrubberAssertSpellingEchoMasked(t, cred, scrubberCodePointSpellings('\u0085'), field)
+	})
+}
+
+// TestScrubber_SpellingEscapesCredentialFreeFieldStaysByteIdentical is the
+// control for the spelling rows: escape text for characters nobody
+// registered is diagnostic content like any other. A value is registered
+// only so the scrubber runs with a real masking set; the field holds no
+// credential and must reach the sink unchanged.
+func TestScrubber_SpellingEscapesCredentialFreeFieldStaysByteIdentical(t *testing.T) {
+	scrubberRegisterCredential(t, "plain-needle-4K")
+	field := strconv.Quote(`provider echoed \xE9 and \x85 in an unrelated retry`)
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	require.Equal(t, field, values[0],
+		"a credential-free field with escape text must reach the sink byte-for-byte")
+}
+
+// TestScrubber_AsciiCredentialUnrelatedFieldStaysByteIdentical is the second
+// control: with an ASCII-only value registered, an unrelated field must
+// still reach the sink byte-for-byte.
+func TestScrubber_AsciiCredentialUnrelatedFieldStaysByteIdentical(t *testing.T) {
+	scrubberRegisterCredential(t, "token-7Q")
+	field := strconv.Quote("provider refused with an unrelated diagnostic tail")
+	raw := scrubberLogRawField(t, field)
+	values := scrubberFileStringValues(t, raw)
+	require.Len(t, values, 1, "fixture: exactly the one error field must be in the sink")
+	require.Equal(t, field, values[0],
+		"an unrelated field must reach the sink byte-for-byte")
+}

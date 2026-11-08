@@ -61,3 +61,41 @@ func TestRegisterSensitiveValues_PublishesTheScrubberForLogsAndDetail(t *testing
 		t.Errorf("gateway log line does not carry the scrub marker in the credential's place:\n%s", b)
 	}
 }
+
+// Given a registered credential with a character in U+00A0..U+00FF
+// When the same text goes through the published scrubber and the config's
+// own replacer
+// Then both answer identically for the plain text and for the escaped
+// one-byte spelling of that character, and both scrub the plain text.
+func TestRegisterSensitiveValues_RegisteredSpellingParityWithPublishedScrubber(t *testing.T) {
+	t.Cleanup(logger.SetSensitiveValueReplacer(nil))
+	const cred = "sk-live-parité-6W"
+	spelling := "sk-live-parit\\xe9-6W"
+
+	cfg := &Config{}
+	cfg.RegisterSensitiveValues([]string{cred})
+
+	t.Run("plain", func(t *testing.T) {
+		in := "key=" + cred
+		got := logger.ScrubSensitiveValues(in)
+		own := cfg.SensitiveDataReplacer().Replace(in)
+		if got != own {
+			t.Errorf("published scrub %q disagrees with the config's own replacer %q", got, own)
+		}
+		if got != "key=[FILTERED]" {
+			t.Errorf("published scrub = %q, want %q", got, "key=[FILTERED]")
+		}
+	})
+
+	t.Run("lowercase_spelling", func(t *testing.T) {
+		in := "key=" + spelling
+		got := logger.ScrubSensitiveValues(in)
+		own := cfg.SensitiveDataReplacer().Replace(in)
+		if got != own {
+			t.Errorf("published scrub %q disagrees with the config's own replacer %q", got, own)
+		}
+		if got != "key=[FILTERED]" {
+			t.Errorf("published scrub = %q, want %q", got, "key=[FILTERED]")
+		}
+	})
+}
