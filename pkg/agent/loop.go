@@ -2045,6 +2045,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			},
 		)
 	}()
+	// #1651: retire the turn BEFORE turn.end on every exit (registered after
+	// the emit, so LIFO runs it first), as finalizeTurn does inline on the
+	// completed path. Its own defer: a panic here cannot skip the emit.
+	defer rz.rc.rx.rr.rq.ri.rf.rt.al.clearActiveTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts)
 
 	// A turn that ended in error must never close by claiming success.
 	//

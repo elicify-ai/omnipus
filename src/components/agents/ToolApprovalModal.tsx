@@ -119,6 +119,7 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { forceLogout } from '@/lib/authLogout'
 import { humanizeToolName } from '@/lib/humanizeToolName'
+import { isAlwaysAskTool, ONE_REQUEST_APPROVAL_NOTICE } from '@/lib/alwaysAskTools'
 import { queryClient } from '@/lib/queryClient'
 import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
 import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
@@ -419,8 +420,10 @@ function ToolApprovalCard({
     : typeof args.path === 'string' ? args.path.trim()
     : ''
   // Always Allow remembers the exact arguments. A request_mount with no
-  // folder path has nothing safe to remember — hide the button.
-  const hideAlwaysAllow = toolName === 'request_mount' && !mountPath
+  // folder path has nothing safe to remember — hide the button. An always-ask
+  // tool's approval is never remembered (channels FR-038): no Always Allow.
+  const alwaysAsk = isAlwaysAskTool(toolName)
+  const hideAlwaysAllow = alwaysAsk || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
   // Agent display name (D-87): a permission prompt is exactly where the human
@@ -653,6 +656,13 @@ function ToolApprovalCard({
               </div>
             )}
           </div>
+        )}
+
+        {/* Channels FR-038 / S-29: an always-ask tool's approval covers only this call. */}
+        {!hasExpired && alwaysAsk && (
+          <p className="px-[var(--space-3)] pb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+            {ONE_REQUEST_APPROVAL_NOTICE}
+          </p>
         )}
 
         {/* Countdown */}

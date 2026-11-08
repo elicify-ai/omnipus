@@ -276,7 +276,84 @@ export function resetRealStores(): void {
   document.cookie = 'csrf=room-red-test; Path=/'
 }
 
+// ── Lifecycle generation (#1572) ────────────────────────────────────────────
+// stopHarness invalidates pending openRoom/mountAt work. A suite whose test
+// timed out (or otherwise aborted) while openRoom was still importing or
+// mounting must not let the late continuation leak a socket or a rendered
+// root into the next test — the K45 cascade on RoomScreen.history.test.tsx.
+// Every entry captures the current generation as its ticket; a continuation
+// that resumes after stopHarness raised the generation rejects EXPLICITLY and
+// disposes only what it itself registered — never silently, never a later
+// test's resources.
+let harnessGeneration = 0
+
+function currentGeneration(): number {
+  return harnessGeneration
+}
+
+function ensureCurrentGeneration(ticket: number, what: string): void {
+  if (ticket !== harnessGeneration) {
+    throw new Error(
+      `Harness lifecycle: ${what} was abandoned — stopHarness ran while it was in flight ` +
+      `(ticket generation ${ticket}, current generation ${harnessGeneration}); ` +
+      'a late continuation must not create resources for later tests (#1572).',
+    )
+  }
+}
+
+// Every connection and root registers for cleanup the moment it exists, so an
+// aborted openRoom's leftovers are disposable — by stopHarness (everything
+// alive) or by the stale continuation itself (only its own ticket's entries).
+interface HarnessRegistration {
+  ticket: number
+  dispose(): void
+  done: boolean
+}
+const liveRegistrations = new Set<HarnessRegistration>()
+
+function registerDisposable(ticket: number, dispose: () => void): HarnessRegistration {
+  const registration: HarnessRegistration = { ticket, dispose, done: false }
+  liveRegistrations.add(registration)
+  return registration
+}
+
+function disposeRegistration(registration: HarnessRegistration): void {
+  if (registration.done) return
+  registration.done = true
+  liveRegistrations.delete(registration)
+  registration.dispose()
+}
+
+// Both drains collect disposer failures instead of letting them propagate:
+// one throwing disposer must never stop the disposal of the registrations
+// after it (#1572, CHECK F3). The caller surfaces the collected failures.
+function disposeAllRegistrations(): unknown[] {
+  const failures: unknown[] = []
+  for (const registration of [...liveRegistrations]) {
+    try {
+      disposeRegistration(registration)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  return failures
+}
+
+function disposeRegistrationsOfTicket(ticket: number): unknown[] {
+  const failures: unknown[] = []
+  for (const registration of [...liveRegistrations]) {
+    if (registration.ticket !== ticket) continue
+    try {
+      disposeRegistration(registration)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  return failures
+}
+
 export function connectSocket() {
+  const ticket = currentGeneration()
   TestSocket.instances = []
   const receivedFrames: ServerFrame[] = []
   vi.stubGlobal('WebSocket', TestSocket)
@@ -290,6 +367,10 @@ export function connectSocket() {
     onError: (message) => useConnectionStore.getState().setConnectionError(message),
     onReconnectStateChange: (phase, attempt) => useConnectionStore.getState().setReconnectState(phase, attempt),
   })
+  // #1572: registered for cleanup the moment it exists, so stopHarness — or
+  // the stale continuation itself — can dispose a connection an aborted
+  // openRoom left behind. disconnect() is safe to call twice.
+  registerDisposable(ticket, () => connection.disconnect())
   act(() => {
     useConnectionStore.getState().setConnection(connection)
     connection.connect()
@@ -308,6 +389,7 @@ export function connectSocket() {
 }
 
 export async function mountAt(node: ReactNode, path = `/workspaces/${WS}/rooms/${ROOM_ID}`) {
+  const ticket = currentGeneration()
   const root = createRootRoute({ component: () => <QueryClientProvider client={queryClient}><Outlet /></QueryClientProvider> })
   const app = createRoute({ getParentRoute: () => root, id: '_app', component: Outlet })
   const wsRoute = createRoute({ getParentRoute: () => app, path: 'workspaces/$workspaceId', component: Outlet })
@@ -320,31 +402,113 @@ export async function mountAt(node: ReactNode, path = `/workspaces/${WS}/rooms/$
     history: createMemoryHistory({ initialEntries: [path] }), defaultPendingMinMs: 0,
   })
   await act(async () => { await router.load() })
+  // #1572: render() is synchronous, so this check and the render below are one
+  // atomic step — a root can only ever be created while this call's generation
+  // is current, and a late root after cleanup is impossible by construction.
+  ensureCurrentGeneration(ticket, 'mountAt (the router loaded after cleanup)')
   const result = render(<RouterProvider router={router} />)
+  // #1572: registered for cleanup the moment it exists. RTL's cleanup()
+  // removes the container from the document, so a container still connected is
+  // one nobody has torn down yet; one already removed must not be unmounted twice.
+  const container = result.container
+  registerDisposable(ticket, () => { if (container.isConnected) result.unmount() })
   return { ...result, router }
 }
 
 export async function openRoom(net: Network, state: RoomSnapshotFrame = snapshot()) {
+  const ticket = currentGeneration()
   const RoomScreen = await loadRoomScreen()
+  // #1572: the import is the long pole under pod load — exactly where an
+  // aborted test's continuation used to resume and leak.
+  ensureCurrentGeneration(ticket, 'openRoom (the RoomScreen import resolved after cleanup)')
   const store = await loadRoomStore()
+  ensureCurrentGeneration(ticket, 'openRoom (the room store import resolved after cleanup)')
   act(() => store.setState(store.getInitialState(), true))
   const { connection, socket, emit } = connectSocket()
-  const mounted = await mountAt(<RoomScreen workspaceId={net.currentRoom.workspace_id} roomId={net.currentRoom.id} />)
-  await waitFor(() => {
-    if (!socket.sent.some((frame) => frame.type === 'attach_room' && frame.room_id === net.currentRoom.id)) {
-      throw new Error('K45: RoomScreen must attach its room on the existing hub connection')
+  let mounted: Awaited<ReturnType<typeof mountAt>>
+  try {
+    mounted = await mountAt(<RoomScreen workspaceId={net.currentRoom.workspace_id} roomId={net.currentRoom.id} />)
+    ensureCurrentGeneration(ticket, 'openRoom (the mount finished after cleanup)')
+    await waitFor(() => {
+      if (!socket.sent.some((frame) => frame.type === 'attach_room' && frame.room_id === net.currentRoom.id)) {
+        throw new Error('K45: RoomScreen must attach its room on the existing hub connection')
+      }
+    })
+    ensureCurrentGeneration(ticket, 'openRoom (attach_room arrived after cleanup)')
+    await emit(state)
+    ensureCurrentGeneration(ticket, 'openRoom (the snapshot was emitted after cleanup)')
+    // All complete-room tests start from an observable successful mount, not empty negatives.
+    if (state.complete) await screen.findByTestId('room-header')
+    ensureCurrentGeneration(ticket, 'openRoom (the room header arrived after cleanup)')
+    return { ...mounted, connection, socket, emit, store }
+  } catch (error) {
+    if (ticket !== harnessGeneration) {
+      // The owning test is already gone. Dispose only what THIS call created
+      // (its own ticket's registrations — never a later test's resources) and
+      // reject explicitly; a silent late continuation is the #1572 leak.
+      const disposalFailures = disposeRegistrationsOfTicket(ticket)
+      if (disposalFailures.length > 0) {
+        // Disposal itself failed: surface everything — the original failure
+        // first, then each disposer failure. Nothing is swallowed (#1572).
+        throw new AggregateError(
+          [error, ...disposalFailures],
+          `Harness lifecycle: openRoom was abandoned (ticket generation ${ticket}, current generation ${harnessGeneration}); ` +
+          `its leftovers are disposed and it rejects instead of leaking (#1572). Disposal failures follow the original error.`,
+          { cause: error },
+        )
+      }
+      if (error instanceof Error && error.message.startsWith('Harness lifecycle:')) throw error
+      throw new Error(
+        `Harness lifecycle: openRoom (work between mounting and the room header) was abandoned — ` +
+        `stopHarness ran while it was in flight (ticket generation ${ticket}, current generation ${harnessGeneration}); ` +
+        `its leftovers are disposed and it rejects instead of leaking (#1572). Original failure: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      )
     }
-  })
-  await emit(state)
-  // All complete-room tests start from an observable successful mount, not empty negatives.
-  if (state.complete) await screen.findByTestId('room-header')
-  return { ...mounted, connection, socket, emit, store }
+    throw error
+  }
 }
 
 export function stopHarness(connection?: WsConnection): void {
-  cleanup()
-  connection?.disconnect()
-  queryClient.clear()
+  // #1572: raise the generation FIRST — every openRoom/mountAt continuation
+  // resuming from here on is stale and rejects explicitly instead of mounting
+  // late into the next test.
+  harnessGeneration++
+  // Every step is failure-safe (CHECK F3): an RTL cleanup or disposer that
+  // throws must not strand the remaining teardown — a registered socket stays
+  // registered for retirement even when an earlier step failed. Failures are
+  // collected and surfaced AFTER all teardown ran; the original error is
+  // rethrown unchanged, or kept as the first error of an AggregateError.
+  const failures: unknown[] = []
+  try {
+    cleanup()
+  } catch (error) {
+    failures.push(error)
+  }
+  // Dispose everything alive, including what an aborted openRoom left behind
+  // before its stale continuation ever got to run — even when cleanup() above
+  // threw.
+  failures.push(...disposeAllRegistrations())
+  if (connection) {
+    try {
+      connection.disconnect()
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  try {
+    queryClient.clear()
+  } catch (error) {
+    failures.push(error)
+  }
   document.cookie = 'csrf=; Max-Age=0; Path=/'
-  vi.unstubAllGlobals()
+  try {
+    vi.unstubAllGlobals()
+  } catch (error) {
+    failures.push(error)
+  }
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) {
+    throw new AggregateError(failures, 'stopHarness: teardown steps failed — every registered resource was still disposed; failures surfaced after the teardown ran (#1572)')
+  }
 }

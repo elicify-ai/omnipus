@@ -165,12 +165,13 @@ export function AppShell() {
   }, [])
 
   return (
-    // Shell pinned to the VISUAL viewport (see the --app-vh / --app-top hook
-    // above): `fixed inset-x-0` for width, `top`/`height` from the vars so it
-    // tracks the visible area through toolbar collapse + keyboard. `overflow-
-    // hidden` (with the html/body locks) keeps the inner message list the sole
-    // scroller. NB: do NOT add a transform here — overlays (toasts/modals/
-    // lightbox) rely on descendant `position:fixed` staying viewport-relative.
+    <>
+    {/* Shell pinned to the VISUAL viewport (see the --app-vh / --app-top hook
+        above): `fixed inset-x-0` for width, `top`/`height` from the vars so it
+        tracks the visible area through toolbar collapse + keyboard. `overflow-
+        hidden` (with the html/body locks) keeps the inner message list the sole
+        scroller. NB: do NOT add a transform here — overlays (modals/lightbox)
+        rely on descendant `position:fixed` staying viewport-relative. */}
     <div
       data-app-shell
       className="fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"
@@ -293,9 +294,6 @@ export function AppShell() {
           from the sidebar search icon and the /sessions slash command (step 6). */}
       <SearchModal />
 
-      {/* Global toast notifications */}
-      <ToastContainer />
-
       {/* Tool approval modal — FR-011, FR-082. L1 stage 1: the release modal
           shows every pending approval while the inline card is hidden. */}
       {!INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalModal />}
@@ -317,5 +315,15 @@ export function AppShell() {
           GodModeIndicators.tsx for the full geometry. */}
       <GodModeCornerDot />
     </div>
+
+    {/* Global toast notifications — deliberately OUTSIDE the shell (#1639).
+        A `position: fixed` element always forms its own stacking context, so
+        inside the fixed shell the toast region's z-index only ranked among the
+        shell's children. Radix sheets and dialogs portal to <body> at z-50 and
+        painted over every toast — a refused save in an open editor sheet showed
+        no error. As a sibling of the shell, the toast region's z-index ranks
+        against those portals directly. */}
+    <ToastContainer />
+    </>
   )
 }

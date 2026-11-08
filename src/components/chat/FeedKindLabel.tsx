@@ -61,7 +61,7 @@ import type { Session } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { feedKindLabel, feedParentLabel } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { IconButton } from '@/components/ui/icon-button'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -190,12 +190,12 @@ export function FeedKindLabel() {
         {namesUnavailable && (
           <>
             <span id={warningId} className="sr-only">{warningText}</span>
-            {/* The wrapper keeps the no-shrink rule: the Tooltip's own span is
+            {/* The wrapper keeps the no-shrink rule: the warning control is
                 a plain inline-flex item, and a squeezed header line must
                 never clip the warning. */}
             <span className="flex shrink-0 items-center">
               {/* The warning is a REAL control, not a bare glyph: the
-                  catalogued IconButton inside the Tooltip's interactive mode
+                  catalogued IconButton as the Tooltip's own trigger (TooltipTrigger asChild)
                   (design-system rule 14) gives it a named, focusable trigger
                   and a touch-sized box on a coarse pointer — the same
                   composition the "Add participant" control beside it uses.
@@ -205,11 +205,8 @@ export function FeedKindLabel() {
                   The trigger is a SIBLING of the labelled warning text, never
                   a child of it: a named element inside the region's name
                   source would repeat itself in the accessible name. */}
-              <Tooltip
-                content="Agent names could not be loaded. Reload the page to try again."
-                side="bottom"
-                interactive
-              >
+              <Tooltip>
+                <TooltipTrigger asChild>
                 <IconButton
                   aria-label="Agent names unavailable"
                   data-testid="feed-kind-warning"
@@ -219,6 +216,8 @@ export function FeedKindLabel() {
                 >
                   <WarningCircle size={14} aria-hidden="true" />
                 </IconButton>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Agent names could not be loaded. Reload the page to try again.</TooltipContent>
               </Tooltip>
             </span>
           </>

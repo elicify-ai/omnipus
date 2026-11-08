@@ -35,7 +35,7 @@ For device-code sign-in, Omnipus shows the provider's verification link and a sh
 
 **Omnipus's model.** Omnipus, the system agent that creates and changes your agents, uses a model like any agent. If none works, it cannot plan — fix it without a chat: open **Settings → System agents**, choose **Edit** on Omnipus and pick a model from a connected provider. Saving works even while no model works, because it is a settings change, not a chat with the model.
 
-For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
+For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Give it an ID that is not already the ID of a listed provider, for example `my-azure` rather than `azure`. Once the provider list has loaded, the form refuses a listed provider's ID. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
 ## Picking a model when two providers offer it
 
@@ -86,6 +86,8 @@ For any other model, check the provider's documentation for **tool use**, **tool
 
 Some providers cannot be enumerated from a published catalog. Ollama and other local providers depend on what is installed on your machine, so Omnipus requests their live list. A custom endpoint has no catalog to enumerate; you maintain its model names under **Models** in that provider's settings.
 
+Editing a custom endpoint's model names keeps its saved base URL and protocol; you do not need to enter them again. You only enter both when you first add the endpoint. If a save is refused, Settings shows the reason and keeps your unsaved model names in the editor so you can fix the problem and save again. If the endpoint was removed or changed while you were saving, the save fails and asks you to reload.
+
 ## What the provider check proves
 
 When Omnipus configures a provider with `configure_provider`, it checks the saved entry straight away: the configured endpoint (your own address if you set one, otherwise the catalog's) is asked for its model list over that provider's protocol, with the saved key. A local provider such as Ollama is checked without a key. The result is `working` when the list comes back and `saved but not working` with the reason otherwise — a refused key, an unreachable address, or a protocol that has no model list. A passing check does not prove that a particular model runs, that you have quota, or that the model supports tools.
@@ -122,5 +124,6 @@ The catalog changes over time. Use the provider and model lists in **Settings �
 
 - [Agents](agents.md) — choose the main model and fallback models for each agent.
 - [Settings](settings.md) — find the Providers tab and other installation controls.
+- [Custom endpoint](custom-endpoint.md) — connect Azure OpenAI or another unlisted service in the setup wizard.
 - [Tools](tools.md) — understand the tools sent with every model request.
 - [Troubleshooting](troubleshooting.md) — diagnose connection and credential failures.
