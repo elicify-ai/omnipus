@@ -130,6 +130,14 @@ type onboardingProviderChoice struct {
 	// (catalog.Provider.Regions). Only the api_key variant carries it on
 	// the wire — Bedrock is api_key-only (ADR-053).
 	Region string
+	// Protocol is the api_key variant's optional `protocol` (#1700): present
+	// only when the wizard's Custom endpoint form names an endpoint the
+	// catalog does not carry. Trimmed at decode, like Endpoint.
+	Protocol string
+	// Custom is set by decodeAndValidate, never by the decode: true when the
+	// id is not a catalog id and the request took the custom path (design
+	// §2.4), so the key check and the persisted row treat it as a custom row.
+	Custom bool
 	// Preferences is step 1's name/tone/detail (FR-OB-010..-018), carried in
 	// the same request because onboarding has no per-step persistence.
 	// Optional (WP5, ADR-0010): a body may omit it entirely, in which case
@@ -306,7 +314,10 @@ func decodeOnboardingCompleteBody(
 		choice.Model = *variant.Model
 	}
 	if variant.Endpoint != nil {
-		choice.Endpoint = *variant.Endpoint
+		choice.Endpoint = strings.TrimSpace(*variant.Endpoint)
+	}
+	if variant.Protocol != nil {
+		choice.Protocol = strings.TrimSpace(string(*variant.Protocol))
 	}
 	if variant.Region != nil {
 		choice.Region = *variant.Region
@@ -326,6 +337,26 @@ func decodeOnboardingCompleteBody(
 // "onboarding state unknown" or "an authentication authority already
 // exists" — see onboardingWindowGate / preAuthOnboardingWindowGate.
 const onboardingClosedMsg = "onboarding already complete"
+
+// Refusals of the custom-endpoint path of POST /onboarding/complete (#1700,
+// design §2.5). The wizard shows them after "Could not complete setup: ".
+const (
+	// onboardingListedNameMsgFmt (M1) takes the id twice.
+	onboardingListedNameMsgFmt = `"%s" is the name of a listed provider. ` +
+		`Choose a different name for your custom endpoint, for example "my-%s".`
+	onboardingCustomIDShapeMsg          = `Choose a custom endpoint name of up to 64 characters, without "/", "\" or "..".`
+	onboardingCustomBadProtocolMsg      = `The protocol must be "openai-compatible" or "anthropic".`
+	onboardingCustomEndpointRequiredMsg = "Enter the base URL of your custom endpoint, " +
+		"for example https://llm.example.com/v1."
+	onboardingCustomProtocolRequiredMsg = `Choose the protocol your custom endpoint uses: ` +
+		`"openai-compatible" or "anthropic".`
+	onboardingCustomRegionRefusedMsg = "A region can't be set for a custom endpoint. Remove the region and try again."
+	onboardingCustomModelRequiredMsg = "Enter the model name your custom endpoint should use."
+	// onboardingCustomEndpointBlockedMsg (M8) is identical to the hosted
+	// fork's providerEndpointBlockedMsg, so the two code bases converge.
+	onboardingCustomEndpointBlockedMsg = "The provider address points at an internal network, " +
+		"which is not reachable from here. Use the provider's public address."
+)
 
 // probeWindowClosedMsg is POST /onboarding/probe-provider's refusal body. It
 // is the message that route already returned for "onboarding complete", now
@@ -757,20 +788,40 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 		jsonErrField(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID), "id")
 		return true
 	}
-	// Reject ids the catalog does not carry at the boundary, so the gateway
-	// never persists a config that fails the post-save rewire and flips to
-	// degraded. The message names the id the caller sent and offers NO
-	// canonical alternative (ADR-067 FR-015, SC-010).
+	// Which path the id takes (#1700, design §2.2).
 	//
-	// Membership only, deliberately: FR-019's tier gate belongs to the two
-	// sites the spec maps it to — PUT /providers/{id} (T067-10) and the
-	// onboarding PROBE below (T067-12). This wizard step must not become the
-	// third, because it would also make the "no endpoint resolved" skip
+	// Catalog ids: membership only, deliberately: FR-019's tier gate belongs
+	// to the two sites the spec maps it to — PUT /providers/{id} (T067-10) and
+	// the onboarding PROBE below (T067-12). This wizard step must not become
+	// the third, because it would also make the "no endpoint resolved" skip
 	// branch below unreachable — every supported catalog row carries a URL,
-	// so the only ids that reach it are the unsupported ones.
-	if !providers.IsCatalogProvider(ro.provider.ID) {
+	// so the only ids that reach it are the unsupported ones. The one new
+	// refusal: only the Custom endpoint form sends `protocol`, so a catalog id
+	// carrying one means the user named their custom endpoint after a listed
+	// provider (the "azure" trap) — say so instead of saving another row.
+	//
+	// Other ids: a sign-in body, or a body with neither `protocol` nor
+	// `endpoint` (every client older than #1700), gets today's field-less
+	// refusal, byte for byte. The message names the id the caller sent and
+	// offers NO canonical alternative (ADR-067 FR-015, SC-010). Anything else
+	// is a custom endpoint, admitted by the same rule the probe and PUT
+	// /providers/{id} apply (ADR-067 §3.2 item 3, clarification 2026-11-08).
+	switch {
+	case providers.IsCatalogProvider(ro.provider.ID):
+		if ro.provider.Protocol != "" {
+			jsonErrField(ro.w, http.StatusBadRequest,
+				fmt.Sprintf(onboardingListedNameMsgFmt, ro.provider.ID, ro.provider.ID), "id")
+			return true
+		}
+	case ro.provider.AuthMethod == config.AuthMethodSignIn,
+		ro.provider.Protocol == "" && ro.provider.Endpoint == "":
 		jsonErr(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID))
 		return true
+	default:
+		if ro.refuseCustomProvider() {
+			return true
+		}
+		ro.provider.Custom = true
 	}
 	// The two variants diverge for the first time here: the api_key variant
 	// must carry a key, and the sign_in variant must name a row whose catalog
@@ -789,6 +840,50 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	} else if ro.provider.APIKey == "" {
 		jsonErr(ro.w, http.StatusBadRequest, "provider.api_key is required")
 		return true
+	}
+	return false
+}
+
+// refuseCustomProvider runs the custom path's request checks C1-C7 (#1700,
+// design §2.4) in order, writing the refusal and returning true on the first
+// that fails. C8 (api_key present) is decodeAndValidate's shared check, and
+// the address and key checks run later, in validateAndStoreOnboardingKey,
+// after the credential store is known to be ready.
+func (ro *restAPIHandleCompleteOnboarding) refuseCustomProvider() bool {
+	p := ro.provider
+	refuse := func(msg, field string) bool {
+		jsonErrField(ro.w, http.StatusBadRequest, msg, field)
+		return true
+	}
+	// C1: the PUT /providers/{id} id rule — the id becomes a providers[] row
+	// and a "<id>_API_KEY" credential ref.
+	if validateEntityID(p.ID) != nil || len(p.ID) > maxProviderIDLen {
+		return refuse(onboardingCustomIDShapeMsg, "id")
+	}
+	// C2: enforced here because inbound schema validation is off by default.
+	if p.Protocol != "" && !providers.IsCustomRowProtocol(p.Protocol) {
+		return refuse(onboardingCustomBadProtocolMsg, "protocol")
+	}
+	if p.Endpoint == "" { // C3
+		return refuse(onboardingCustomEndpointRequiredMsg, "endpoint")
+	}
+	if p.Protocol == "" { // C4
+		return refuse(onboardingCustomProtocolRequiredMsg, "protocol")
+	}
+	// C5: the shared admission rule. C2-C4 make a refusal unreachable while a
+	// catalog is loaded; it stays so the three entry points cannot drift.
+	// With no catalog loaded (E7) Admit admits with custom=false; the row is
+	// still saved as a custom row, since the id is not a catalog id.
+	if _, admitErr := providers.Admit(p.ID, p.Endpoint, p.Protocol); admitErr != nil {
+		return refuse(admitErr.Error(), "id")
+	}
+	if strings.TrimSpace(p.Region) != "" { // C6
+		return refuse(onboardingCustomRegionRefusedMsg, "region")
+	}
+	// C7: without a model the completion default would write a vendor model
+	// (gpt-4o) the custom endpoint may not serve.
+	if p.Model == "" {
+		return refuse(onboardingCustomModelRequiredMsg, "model")
 	}
 	return false
 }
@@ -906,6 +1001,11 @@ func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool 
 	// catalog row's own base URL (ADR-067 FR-012).
 	if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 		ro.newProviderEntry["api_base"] = ep
+	}
+	// A custom row (#1700) is saved in exactly the shape Settings writes and
+	// the runtime factory reads: api_base, protocol and custom=true.
+	if ro.provider.Custom {
+		applyProviderIdentity(ro.newProviderEntry, ro.provider.Endpoint, ro.provider.Protocol, "", true)
 	}
 	// Issue #800 (Bedrock region contract): a per-provider-row region
 	// selected during onboarding, persisted verbatim as the row's `region`.
@@ -1053,6 +1153,9 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 			}
 			if region := strings.TrimSpace(ro.provider.Region); region != "" {
 				entryMap["region"] = region
+			}
+			if ro.provider.Custom {
+				applyProviderIdentity(entryMap, ro.provider.Endpoint, ro.provider.Protocol, "", true)
 			}
 			providerList[i] = entryMap
 			found = true
@@ -1407,7 +1510,15 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 	// why it could not, for the audit trail.
 	probeSkipReason := ""
 	providerDisplayName := providers.DisplayName(provider.ID)
-	if probeBase == "" {
+	if provider.Custom {
+		// A custom row (#1700, design D3): a blocked address is REFUSED with
+		// 422, as the probe and PUT /providers/{id} refuse it — not the
+		// catalog rows' skip-with-warning below, whose reason (a local model
+		// server such as ollama must still finish setup) is about catalog rows.
+		if a.refuseBlockedCustomEndpoint(w, r, provider) {
+			return "", "", false
+		}
+	} else if probeBase == "" {
 		// A known protocol with no vendor default and no operator-supplied
 		// endpoint (azure is the live example — it has no fixed base). There is
 		// nothing to probe against, which is "we could not find out", not "the
@@ -1453,22 +1564,32 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 	}
 
 	if probeSkipReason == "" {
-		// ADR-067 FR-022: NO `GET /models` pre-fetch. provider.ID is gated
-		// above to a catalog id, so ValidateKey resolves its probe candidates
-		// straight from the registry catalog (the first active, tool-calling
-		// text models in document order) and falls through to the next one on
-		// a model_not_found answer, at most three times. The live fetch this
-		// used to make was a round trip whose answer the catalog already
-		// carries — and on a provider whose /models is public it returned a
-		// reassuring 200 that said nothing about the key.
+		// ADR-067 FR-022: NO `GET /models` pre-fetch. For a catalog id,
+		// ValidateKey resolves its probe candidates straight from the registry
+		// catalog (the first active, tool-calling text models in document
+		// order) and falls through to the next one on a model_not_found
+		// answer, at most three times. The live fetch this used to make was a
+		// round trip whose answer the catalog already carries — and on a
+		// provider whose /models is public it returned a reassuring 200 that
+		// said nothing about the key.
+		//
+		// A custom row has no catalog models, so the key is checked against
+		// the model the operator chose (decodeAndValidate requires it), as PUT
+		// /providers/{id} does with its request's model. Without it ValidateKey
+		// would fall back to a live /models call and a guessed model — wrong
+		// where the model is a deployment name.
 		//
 		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
-		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
+		in := providers.ValidateInput{
 			ProviderID:   provider.ID,
 			ProviderName: providerDisplayName,
 			BaseURL:      probeBase,
 			APIKey:       provider.APIKey,
-		}, a.ssrfChk())
+		}
+		if provider.Custom {
+			in.ProbeModels = []string{provider.Model}
+		}
+		result := providers.ValidateKey(r.Context(), in, a.ssrfChk())
 		slog.Debug("onboarding: provider key validation result",
 			"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
 
@@ -1479,12 +1600,12 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 			// releases the onboarding reservation so the operator can retry
 			// immediately with a corrected key.
 			//
-			// 400 rather than the PUT path's 422 purely because
-			// /onboarding/complete's contract (contracts/openapi.yaml) declares
-			// 400/409/429/500/503 and not 422, and a rejected api_key is a
-			// rejected request field exactly like the checks above it. The
-			// decision itself — which outcomes reject — is shared with PUT via
-			// Blocks(); only the status code differs.
+			// 400 rather than the PUT path's 422: a rejected api_key is a
+			// rejected request field exactly like the checks above it, and
+			// first-run clients have always received 400 here. (The contract
+			// declares 422 too since #1700, for a custom endpoint's refused
+			// address only.) The decision itself — which outcomes reject — is
+			// shared with PUT via Blocks(); only the status code differs.
 			jsonErr(w, http.StatusBadRequest, result.Message)
 			return "", "", false
 		}
@@ -1539,6 +1660,27 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 	}
 
 	return credRefName, keyWarning, true
+}
+
+// refuseBlockedCustomEndpoint is the custom row's address check (#1700, design
+// §2.4): when the address (SSRF) guard is on and refuses the endpoint, the
+// request is refused with 422 before any outbound call and before anything is
+// stored. On a release build the checker is nil unless sandbox.ssrf.enabled
+// is set. This is the one place a hosted build swaps in its always-on
+// endpoint checker and refusal text (design §6, port note step 2).
+func (a *restAPI) refuseBlockedCustomEndpoint(
+	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
+) bool {
+	if a.ssrfChecker == nil {
+		return false
+	}
+	if err := a.ssrfChecker.CheckURL(r.Context(), provider.Endpoint); err != nil {
+		slog.Warn("onboarding: SSRF guard refused a custom endpoint",
+			"provider", provider.ID, "error", err)
+		jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
+		return true
+	}
+	return false
 }
 
 // Wire-format limits from contracts/components/schemas/ProbeProviderRequest.yaml,
