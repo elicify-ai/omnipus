@@ -13587,12 +13587,15 @@ paths:
         still apply an executable-extension lookup (documented limitation). A signed-in person only (T11,
         RequirePersonSession): CLI-token, development-bypass and user-less
         requests get 403 before the body is read. Before anything starts,
-        the shared program-file check (clitrust.CheckProgramPath against the
-        agent-writable roots) must accept cli_path: an absolute path whose
-        final file, every link and every link's folder lie outside the
-        Omnipus home, agent homes, workspaces and mounts, and whose final
-        file is a regular file (executable for the gateway user on
-        Linux/macOS). Ownership and writability of the program are the
+        the shared program-file check (thirdpartycli.CheckProgramPath against
+        the folders agents can write to) must accept cli_path: an absolute
+        path whose final file, every link and every link's folder lie outside
+        the Omnipus home, agent homes, workspaces, mounts and the extra
+        folders the sandbox lets agents write, under any spelling the volume
+        treats as the same folder, and whose final file is a regular file
+        (executable for the gateway user on Linux/macOS). When the list of
+        those folders cannot be read in full, the candidate is refused with
+        the check location_unverifiable. Ownership and writability of the program are the
         operator's responsibility and are not checked. A refusal is classified "path-not-allowed" and
         nothing is spawned; an accepted candidate launches exactly the
         checked resolved file. An empty cli_path is "missing-binary". Applies
