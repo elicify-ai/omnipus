@@ -540,9 +540,31 @@ func (sc *SSRFChecker) CheckURL(ctx context.Context, rawURL string) error {
 	return err
 }
 
-// extractHost extracts the hostname (without port) from a URL.
+// extractHost extracts the hostname (without port) from a URL, with an IP
+// literal normalised so CheckHost recognises it (see normalizeHostLiteral).
 func extractHost(rawURL string) string {
 	host, _, _ := stripURLToAuthority(rawURL)
+	return normalizeHostLiteral(host)
+}
+
+// normalizeHostLiteral turns the IP-literal spellings a URL can carry into
+// the bare address CheckHost's literal check expects: an IPv6 literal written
+// without a port keeps its brackets after stripURLToAuthority ("[::1]"), an
+// IPv6 zone ("fe80::1%25eth0") makes net.ParseIP fail, and so does an IP
+// literal's trailing dot ("127.0.0.1."). Left as they were, each fell through
+// to a DNS lookup and an untyped resolution error instead of the address-
+// policy refusal its explicit-port form gets (#1700 re-check F1). Host names
+// are returned unchanged.
+func normalizeHostLiteral(host string) string {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if i := strings.IndexByte(host, '%'); i > 0 && net.ParseIP(host[:i]) != nil {
+		host = host[:i]
+	}
+	if trimmed := strings.TrimSuffix(host, "."); trimmed != host && net.ParseIP(trimmed) != nil {
+		host = trimmed
+	}
 	return host
 }
 
