@@ -1,6 +1,6 @@
 // http.ts: Transport core — base URL, CSRF, the fetch wrapper, schema validation
 
-import { ApiError, isApiError as isApiErrorFn } from '../api-error'
+import { ApiError, isApiError as isApiErrorFn, isPlantedCookieClearedError } from '../api-error'
 import { maybeDevToast } from '../dev-toast'
 import { logError } from '../telemetry'
 import type { ZodType } from 'zod'
@@ -226,7 +226,6 @@ export interface RequestOptions { // not-wire-format: in-browser transport switc
 //   • a FAILED retry never stacks a second toast — the retry goes through
 //     requestOnce directly, so no recursive toast raise (S-4.2: duplicate
 //     toasts fail the test).
-const PLANTED_COOKIE_CODE = 'planted_cookie_cleared'
 const PLANTED_COOKIE_FALLBACK_MESSAGE =
   'Omnipus cleared cookies set by a preview — please retry'
 const PLANTED_COOKIE_TOAST_DEDUP_MS = 5_000
@@ -314,7 +313,7 @@ export async function request<T>(
   try {
     return await requestOnce(path, init, schema, onResponseHeaders, options)
   } catch (err) {
-    if (isApiErrorFn(err) && err.code === PLANTED_COOKIE_CODE) {
+    if (isPlantedCookieClearedError(err)) {
       await raisePlantedCookieToast(err, () => requestOnce<T>(path, init, schema, onResponseHeaders, options))
     }
     throw err
