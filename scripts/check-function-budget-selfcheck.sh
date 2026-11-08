@@ -664,6 +664,19 @@ NOT_WS=("zwsp-u200b:\\342\\200\\213" "mvs-u180e:\\341\\240\\216")
 # mark), so it is exercised through TS only.
 NOT_WS_TS_ONLY=("bom-ufeff:\\357\\273\\277")
 
+# Second accepted difference (CHECK 6 finding C6-F1; accepted 2026-11-08,
+# scanners unchanged), recorded next to the U+FEFF note above: a `//` comment
+# holding CR, U+2028 or U+2029 followed by more text counts differently in the
+# two languages. The TypeScript parser ends a line comment at each of those
+# characters (they are ECMAScript line terminators), so the text after one is
+# real code and its line counts as a code line; a `//budget:exception` reason
+# edged or split by one of them is empty or cut short there. Go ends a `//`
+# comment only at LF, so Go counts the whole line as comment text and reads the
+# reason to the end of the line (trimmed with the shared blank set). The same
+# function can therefore measure 240 code lines in Go and 241 in TS. Accepted
+# rather than unified: it follows each language's own comment rules, and no
+# scanned file contains these characters.
+
 for entry in "${WS_SET[@]}"; do
   vname="${entry%%:*}"; vbytes="${entry#*:}"
   fresh_tree
@@ -764,7 +777,9 @@ done
 for entry in "${WS_SET[@]}"; do
   vname="${entry%%:*}"; vbytes="${entry#*:}"
   # U+2028 and U+2029 end a TS line comment (a JavaScript line terminator), so
-  # text after one is code there; az already covers them as empty reasons.
+  # text after one is code there — the accepted cross-language difference
+  # documented next to NOT_WS_TS_ONLY above; az already covers them as empty
+  # reasons.
   case "$vname" in lf|cr|u2028|u2029) continue ;; esac
   fresh_tree
   gen_go_padded "$TMP/tree/pkg/fixture_ba.go" "TrimGo" 260 0 0 "//budget:exception $(printf '%b' "$vbytes")real reason$(printf '%b' "$vbytes")"
