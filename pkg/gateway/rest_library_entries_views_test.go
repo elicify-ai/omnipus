@@ -24,6 +24,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -508,11 +509,11 @@ func TestLibraryEntriesViews_StorageSymlinkRowStaysUndecorated(t *testing.T) {
 	require.Nil(t, stow.View,
 		"the storage annotation must not attach a view object to a leaf link")
 
-	real, ok := findEntryByPath(rows, storageRel+"/invoices--outstanding.yaml")
+	decorated, ok := findEntryByPath(rows, storageRel+"/invoices--outstanding.yaml")
 	require.True(t, ok, "fixture drift: the real storage file must be present")
-	require.NotNil(t, real.IsView, "control: a real storage file's row is decorated")
-	require.True(t, *real.IsView, "control: a real storage file's row is a view row")
-	require.NotNil(t, real.View, "control: a real storage file's row carries its view object")
+	require.NotNil(t, decorated.IsView, "control: a real storage file's row is decorated")
+	require.True(t, *decorated.IsView, "control: a real storage file's row is a view row")
+	require.NotNil(t, decorated.View, "control: a real storage file's row carries its view object")
 }
 
 // --- L7 ---------------------------------------------------------------------
@@ -947,4 +948,242 @@ func TestLibraryEntriesViews_MutationResponsesCarryNoViewFacts(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	assert.NotContains(t, w.Body.String(), `"is_view"`, "L17: an upload response never sets is_view")
 	assert.NotContains(t, w.Body.String(), `"view":`, "L17: an upload response never sets view")
+}
+
+// --- Listing limits and the knowledge views endpoint (round 6) --------------
+
+// The listing limits, quoted from the contract text (contracts/openapi.yaml,
+// include_views, commit 9ce7b0cc8): "at most 256 KiB per file, 128 files per
+// folder and 4 MiB per listing". Literals on purpose: the contract is the
+// oracle, and restating it through the implementation's constants would pass
+// whatever the code did.
+const (
+	contractLimitFileBytes      = 256 << 10
+	contractLimitFilesPerFolder = 128
+	contractLimitListingBytes   = 4 << 20
+	limitVaultSchema            = "schema_version: 1\ntype: invoice\nproperties:\n  client: { type: text }\n"
+)
+
+// limitVaultViewFile returns one valid authored view file of exactly size
+// bytes. Padding is a YAML comment the parser ignores: the loader's limits
+// count the file's bytes, and comment bytes are honest weight.
+func limitVaultViewFile(t *testing.T, slug string, size int) string {
+	t.Helper()
+	header := "name: " + slug + "\ntype: invoice\nlabel: Padded " + slug + "\nproperties: [client]\n"
+	require.GreaterOrEqual(t, size, len(header)+2, "fixture size must leave room for a YAML comment")
+	body := header + "#" + strings.Repeat("x", size-len(header)-2) + "\n"
+	require.Len(t, body, size, "fixture drift: the file has exactly the requested byte length")
+	return body
+}
+
+// seedLimitVault writes a knowledge base and a valid minimal invoice schema.
+// The aggregate-budget fixture counts the schema's bytes as well as the views.
+func seedLimitVault(t *testing.T, vault, displayName string, viewFiles map[string]string) {
+	t.Helper()
+	makeKnowledgeBase(t, vault, displayName)
+	writeNote(t, vault, ".omnipus-vault/records/invoice.yaml", limitVaultSchema)
+	for name, body := range viewFiles {
+		writeNote(t, vault, ".omnipus-vault/views/"+name, body)
+	}
+}
+
+// TestLibraryEntriesViews_ListingLimitsHoldAtTheBoundaries pins each listing
+// limit at its boundary on the REST listing (include_views=true, storage
+// folder shape): a view file at exactly the per-file limit is decorated and
+// one byte more is left out as a plain row; 128 candidates in one folder are
+// all decorated and the surplus is not; once the listing budget is spent,
+// later candidates are left out. Every refusal stays a plain row, never an
+// error — the listing answers 200 with every file present as a row.
+//
+// Numbers come from the contract text, not from the code. The budget case
+// uses sixteen views, the minimum needed alongside the small schema: fifteen
+// full-size files and one file adjusted for the schema's exact byte count.
+func TestLibraryEntriesViews_ListingLimitsHoldAtTheBoundaries(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+
+	t.Run("a file at the per-file limit is decorated, one byte more is not", func(t *testing.T) {
+		vault := filepath.Join(workDir(api, ws), "limits-file")
+		seedLimitVault(t, vault, "Limits vault", map[string]string{
+			"limits--fit.yaml":  limitVaultViewFile(t, "limits--fit", contractLimitFileBytes),
+			"limits--over.yaml": limitVaultViewFile(t, "limits--over", contractLimitFileBytes+1),
+			"limits--base.yaml": limitVaultViewFile(t, "limits--base", 120),
+		})
+		storageRel := "limits-file/.omnipus-vault/views"
+		rows := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+		require.Len(t, rows, 3, "fixture drift: the storage folder lists exactly the three files")
+
+		fit, ok := findEntryByPath(rows, storageRel+"/limits--fit.yaml")
+		require.True(t, ok, "fixture drift: the at-limit file is listed")
+		require.NotNil(t, fit.IsView, "a view file at exactly the per-file limit is a view row")
+		require.True(t, *fit.IsView, "a view file at exactly the per-file limit is decorated")
+		require.NotNil(t, fit.View, "the at-limit file's view object is attached")
+		require.Equal(t, "limits--fit", fit.View.Name, "the decorated view is the at-limit file's own view")
+
+		over, ok := findEntryByPath(rows, storageRel+"/limits--over.yaml")
+		require.True(t, ok, "fixture drift: the oversize file is still an ordinary row")
+		require.Nil(t, over.IsView, "a file one byte over the per-file limit is not a view row")
+		require.Nil(t, over.View, "the oversize file carries no view object")
+
+		base, ok := findEntryByPath(rows, storageRel+"/limits--base.yaml")
+		require.True(t, ok, "fixture drift: the small file is listed")
+		require.NotNil(t, base.IsView, "instrument: a small file loads in this fixture")
+	})
+
+	t.Run("one hundred twenty-eight candidates are decorated, the surplus is not", func(t *testing.T) {
+		files := map[string]string{}
+		for i := 1; i <= contractLimitFilesPerFolder; i++ {
+			slug := fmt.Sprintf("limits--c%03d", i)
+			files[slug+".yaml"] = limitVaultViewFile(t, slug, 120)
+		}
+		vault := filepath.Join(workDir(api, ws), "limits-count")
+		seedLimitVault(t, vault, "Limits vault", files)
+		storageRel := "limits-count/.omnipus-vault/views"
+		atLimit := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+		require.Len(t, atLimit, contractLimitFilesPerFolder, "fixture drift: exactly 128 candidates")
+		require.Len(t, viewRowNames(t, atLimit), contractLimitFilesPerFolder,
+			"all 128 candidates are decorated at the boundary")
+		writeNote(t, vault, ".omnipus-vault/views/limits--c129.yaml", limitVaultViewFile(t, "limits--c129", 120))
+		rows := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+		require.Len(t, rows, contractLimitFilesPerFolder+1,
+			"fixture drift: every candidate is listed as an ordinary row")
+
+		want := make([]string, 0, contractLimitFilesPerFolder)
+		for i := 1; i <= contractLimitFilesPerFolder; i++ {
+			want = append(want, fmt.Sprintf("limits--c%03d.yaml", i))
+		}
+		require.ElementsMatch(t, want, viewRowNames(t, rows),
+			"every candidate up to the per-folder count is a view row, and the surplus is not")
+
+		surplus, ok := findEntryByPath(rows, storageRel+"/limits--c129.yaml")
+		require.True(t, ok, "fixture drift: the surplus file is still listed")
+		require.Nil(t, surplus.IsView, "the surplus candidate is not a view row")
+		require.Nil(t, surplus.View, "the surplus candidate carries no view object")
+
+		writeNote(t, vault, ".omnipus-vault/views/limits--c130.yaml", limitVaultViewFile(t, "limits--c130", 120))
+		laterRows := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+		require.Len(t, laterRows, contractLimitFilesPerFolder+2)
+		require.ElementsMatch(t, want, viewRowNames(t, laterRows), "later surplus candidates do not change the accepted set")
+		for _, name := range []string{"limits--c129.yaml", "limits--c130.yaml"} {
+			later, found := findEntryByPath(laterRows, storageRel+"/"+name)
+			require.True(t, found, "the later candidate remains an ordinary row")
+			require.Nil(t, later.IsView, "later surplus candidates are not view rows")
+			require.Nil(t, later.View, "later surplus candidates carry no view object")
+		}
+	})
+
+	t.Run("the listing budget is spent by full-limit files, later candidates are not decorated", func(t *testing.T) {
+		files := map[string]string{}
+		usedBytes := len(limitVaultSchema)
+		for i := 1; i <= contractLimitListingBytes/contractLimitFileBytes; i++ {
+			slug := fmt.Sprintf("limits--b%02d", i)
+			size := min(contractLimitFileBytes, contractLimitListingBytes-usedBytes)
+			files[slug+".yaml"] = limitVaultViewFile(t, slug, size)
+			usedBytes += size
+		}
+		require.Equal(t, contractLimitListingBytes, usedBytes,
+			"fixture drift: schema plus the sixteen views spend exactly 4 MiB")
+		files["limits--z-after.yaml"] = limitVaultViewFile(t, "limits--z-after", 120)
+		vault := filepath.Join(workDir(api, ws), "limits-budget")
+		seedLimitVault(t, vault, "Limits vault", files)
+		storageRel := "limits-budget/.omnipus-vault/views"
+		rows := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+		require.Len(t, rows, contractLimitListingBytes/contractLimitFileBytes+1,
+			"fixture drift: every file is listed as an ordinary row")
+
+		want := make([]string, 0, contractLimitListingBytes/contractLimitFileBytes)
+		for i := 1; i <= contractLimitListingBytes/contractLimitFileBytes; i++ {
+			want = append(want, fmt.Sprintf("limits--b%02d.yaml", i))
+		}
+		require.ElementsMatch(t, want, viewRowNames(t, rows),
+			"the files that spend the budget are view rows, and later candidates are not")
+
+		after, ok := findEntryByPath(rows, storageRel+"/limits--z-after.yaml")
+		require.True(t, ok, "fixture drift: the later candidate is still listed")
+		require.Nil(t, after.IsView, "a candidate past the spent budget is not a view row")
+		require.Nil(t, after.View, "a candidate past the spent budget carries no view object")
+
+		last := fmt.Sprintf("limits--b%02d", contractLimitListingBytes/contractLimitFileBytes)
+		writeNote(t, vault, ".omnipus-vault/views/"+last+".yaml",
+			limitVaultViewFile(t, last, len(files[last+".yaml"])+1))
+		overBudget := listEntries(t, api, ws, storageRel, "&include_views=true&include_hidden=true")
+		require.ElementsMatch(t, want[:len(want)-1], viewRowNames(t, overBudget),
+			"one additional byte in the final file crosses the aggregate budget, not the per-file limit")
+		lastRow, found := findEntryByPath(overBudget, storageRel+"/"+last+".yaml")
+		require.True(t, found, "the file crossing the aggregate budget remains an ordinary row")
+		require.Nil(t, lastRow.IsView, "one byte beyond the aggregate boundary is not decorated")
+		require.Nil(t, lastRow.View, "one byte beyond the aggregate boundary carries no view object")
+	})
+}
+
+// TestLibraryKnowledgeViewsEndpointFollowsTheListingRules pins the loading
+// rules on GET .../knowledge/views that include_views=true follows (#1017):
+// a leaf-linked view file is not served, a view file beyond the per-file
+// listing limit is not served, and bytes living outside the knowledge base
+// are not served through a leaf link. The oracle is the contract's saved-view
+// sentence — a saved view is a file the loader accepted "reading only regular
+// files inside the knowledge base, within the listing's size limits"
+// (contracts/components/schemas/LibraryEntryView.yaml, commit 9ce7b0cc8) —
+// with design.md L4/L18: the endpoint's set is the set the listing reads, so
+// the listing's loading rules are its rules.
+//
+// RED on the current tree: the endpoint still loads through the unchecked
+// pair (loadKnowledgeViewSet), so all three serve today.
+func TestLibraryKnowledgeViewsEndpointFollowsTheListingRules(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	vault := filepath.Join(workDir(api, ws), "limits")
+	viewsDir := filepath.Join(vault, ".omnipus-vault", "views")
+
+	seedLimitVault(t, vault, "Endpoint vault", nil)
+	writeNote(t, vault, ".omnipus-vault/views/limits--control.yaml",
+		limitVaultViewFile(t, "limits--control", 120))
+	// In-knowledge-base leaf link: the payload is a real file inside a
+	// subfolder the candidate rule skips, so its bytes reach the set only
+	// through the link.
+	writeNote(t, vault, ".omnipus-vault/views/nested-target/payload.yaml",
+		limitVaultViewFile(t, "limits--alias", 120))
+	require.NoError(t, os.Symlink(
+		filepath.Join(viewsDir, "nested-target", "payload.yaml"),
+		filepath.Join(viewsDir, "limits--alias.yaml")))
+	writeNote(t, vault, ".omnipus-vault/views/limits--oversize.yaml",
+		limitVaultViewFile(t, "limits--oversize", contractLimitFileBytes+1))
+	// Bytes outside the knowledge base: the payload lives in an ordinary
+	// workspace folder with no knowledge base marker.
+	away := filepath.Join(workDir(api, ws), "away-stash")
+	writeNote(t, away, "limits--away.yaml", limitVaultViewFile(t, "limits--away", 120))
+	require.NoError(t, os.Symlink(
+		filepath.Join(away, "limits--away.yaml"),
+		filepath.Join(viewsDir, "limits--planted.yaml")))
+
+	storageRows := listEntries(t, api, ws, "limits/.omnipus-vault/views", "&include_views=true&include_hidden=true")
+	require.Equal(t, []string{"limits--control.yaml"}, viewRowNames(t, storageRows),
+		"instrument: the checked listing accepts only the ordinary small view in the same fixture")
+	for _, name := range []string{"limits--alias.yaml", "limits--oversize.yaml", "limits--planted.yaml"} {
+		entry, found := findEntryByPath(storageRows, "limits/.omnipus-vault/views/"+name)
+		require.True(t, found, "instrument: each refused candidate remains an ordinary row")
+		require.Nil(t, entry.IsView, "instrument: the listing does not decorate the refused candidate")
+		require.Nil(t, entry.View, "instrument: the refused candidate carries no view object")
+	}
+
+	collectionID := collectionIDOf(t, api, ws, "limits")
+	w := knowledgeGet(t, api, "/api/v1/library/"+ws+"/knowledge/views?collection_id="+url.QueryEscape(collectionID))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	served := map[string]bool{}
+	for _, v := range decodeJSON[gen.KnowledgeCollectionViews](t, w).Views {
+		served[v.Name] = true
+	}
+	require.True(t, served["limits--control"],
+		"fixture drift: an ordinary small view is served")
+
+	t.Run("a leaf-linked view file is not served", func(t *testing.T) {
+		require.False(t, served["limits--alias"],
+			"a leaf link is not a regular file inside the knowledge base; its payload is not served")
+	})
+	t.Run("a view file beyond the listing limit is not served", func(t *testing.T) {
+		require.False(t, served["limits--oversize"],
+			"a view file beyond the per-file listing limit is not served")
+	})
+	t.Run("bytes outside the knowledge base are not served", func(t *testing.T) {
+		require.False(t, served["limits--away"],
+			"view bytes living outside the knowledge base must not reach the set through a leaf link")
+	})
 }
