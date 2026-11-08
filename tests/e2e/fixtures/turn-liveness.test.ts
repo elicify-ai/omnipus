@@ -1,23 +1,27 @@
 // turn-liveness.test.ts — vitest coverage for the server-side active-turn-at-
 // attach proof used by replay-fidelity (c) (CHECK 3 F1, CHECK 4 F1/F2).
 //
-// Faked edge: the frames themselves (the Playwright socket wiring in
-// observeAttachTurn is a thin adapter over AttachTurnTracker and is covered by
-// the Playwright suite, not here). The tracker's pairing of request, the
-// attach's own session_state and its catch_up_complete runs for REAL.
+// Faked edge: Playwright's Page/WebSocket event delivery (an EventEmitter
+// stand-in) and the tracker-level frame sequences. The tracker, the socket
+// adapter (observeAttachTurn), the attachWhileObservingTurn wrapper and the
+// generated runtime WsFrame validation all run for REAL.
 // Expectations are the contract: SessionStateFrame.active_turn is present only
 // when the attached session has a foreground turn in flight at emit time, and
-// the attach response is session_state ... catch_up_complete for the session.
+// the attach response carries session_state then catch_up_complete for the
+// session (snapshot attaches send a session_snapshot prefix first); a refused
+// attach sends an error and no completion.
 //
-// Deliberately NOT covered here: that replay-fidelity.spec.ts calls
-// requireActiveTurnAtAttach at all (call-site wiring is only exercised by the
-// live Playwright run) and the real gateway's frames.
+// Deliberately NOT covered here: that replay-fidelity.spec.ts uses the wrapper
+// at its call site (a change that bypasses it is not caught offline; only the
+// live Playwright run exercises that path), the real browser socket, and the
+// real gateway's frames.
 
 // @vitest-environment node
 import { EventEmitter } from 'node:events'
 import type { Page } from '@playwright/test'
 import { describe, expect, it } from 'vitest'
 import {
+  ATTACH_REJECTED,
   AttachTurnTracker,
   attachWhileObservingTurn,
   observeAttachTurn,
@@ -407,6 +411,115 @@ describe('attachWhileObservingTurn', () => {
         throw new Error('attach exploded')
       }),
     ).rejects.toThrow('attach exploded')
+    obs.dispose()
+  })
+})
+
+// ── CHECK 6 R1: a rejected attach fails its own queue slot ──────────────────
+
+const errorFrame = (sid: string | undefined = SID, message = 'history_min_rows exceeds history_limit'): ObservedFrame => ({
+  type: 'error',
+  ...(sid ? { session_id: sid } : {}),
+  message,
+})
+
+describe('AttachTurnTracker rejected attach (CHECK 6 R1)', () => {
+  it('a rejected marked request fails the prerequisite even if a later request succeeds', () => {
+    const t = new AttachTurnTracker()
+    const mark = t.mark
+    t.sent(attach()) // A, rejected before bind: no state, no completion
+    t.received(errorFrame())
+    t.sent(attach()) // B, valid
+    t.received(state())
+    t.received(complete())
+    expect(() => requireActiveTurnAtAttach(t, mark, SID)).toThrow(ATTACH_REJECTED)
+  })
+
+  it('names the server message in the failure', () => {
+    const t = new AttachTurnTracker()
+    const mark = t.mark
+    t.sent(attach())
+    t.received(errorFrame(SID, 'history_min_rows exceeds history_limit'))
+    expect(() => requireActiveTurnAtAttach(t, mark, SID)).toThrow('history_min_rows exceeds history_limit')
+  })
+
+  it('a rejected PRE-mark request does not lend its slot: the marked request keeps its own response', () => {
+    const t = new AttachTurnTracker()
+    t.sent(attach()) // A, before the mark, rejected
+    const mark = t.mark
+    t.sent(attach()) // B, the marked request
+    t.received(errorFrame()) // answers A, not B
+    t.received(state())
+    t.received(complete())
+    expect(() => requireActiveTurnAtAttach(t, mark, SID), 'B was active').not.toThrow()
+    expect(requireActiveTurnAtAttach(t, mark, SID)).toEqual(TURN)
+  })
+
+  it('an error AFTER the attach state is not an attach rejection', () => {
+    const t = new AttachTurnTracker()
+    const mark = t.mark
+    t.sent(attach())
+    t.received(state())
+    t.received(errorFrame(SID, 'some tool failed')) // unrelated, in-turn
+    t.received(complete())
+    expect(() => requireActiveTurnAtAttach(t, mark, SID), 'the attach itself succeeded').not.toThrow()
+    expect(requireActiveTurnAtAttach(t, mark, SID)).toEqual(TURN)
+  })
+
+  it('an error for another session or without a session id is not an attach rejection', () => {
+    const t = new AttachTurnTracker()
+    const mark = t.mark
+    t.sent(attach())
+    t.received(errorFrame('other'))
+    t.received({ type: 'error', message: 'connection-level error without a session id' })
+    t.received(state())
+    t.received(complete())
+    expect(() => requireActiveTurnAtAttach(t, mark, SID), 'neither error addressed this attach').not.toThrow()
+    expect(requireActiveTurnAtAttach(t, mark, SID)).toEqual(TURN)
+  })
+
+  it('a rejected marked request with no later request fails with the rejection, not "no completed attach"', () => {
+    const t = new AttachTurnTracker()
+    const mark = t.mark
+    t.sent(attach())
+    t.received(errorFrame())
+    expect(() => requireActiveTurnAtAttach(t, mark, SID)).toThrow(ATTACH_REJECTED)
+  })
+})
+
+describe('observeAttachTurn real-frame edge cases (CHECK 6 R1/R2)', () => {
+  it('R1 through the adapter: a rejected attach then a valid one still fails', () => {
+    const { page, open } = fakePage()
+    const obs = observeAttachTurn(page)
+    const s = new FakeSocket()
+    open(s)
+    const mark = obs.mark()
+    s.sendFrame(wireAttach())
+    s.recvFrame({ type: 'error', session_id: SID, message: 'history_min_rows exceeds history_limit' })
+    s.sendFrame(wireAttach())
+    s.recvFrame(wireState())
+    s.recvFrame(wireComplete())
+    expect(() => obs.require(mark, SID)).toThrow(ATTACH_REJECTED)
+    obs.dispose()
+  })
+
+  it('R2: a nonzero mark earned on an earlier socket stays valid after a reconnect', () => {
+    const { page, open } = fakePage()
+    const obs = observeAttachTurn(page)
+    const first = new FakeSocket()
+    open(first)
+    first.sendFrame(wireAttach('root'))
+    first.recvFrame(wireState('root', false))
+    first.recvFrame(wireComplete('root'))
+    const mark = obs.mark()
+    expect(mark, 'the root attach earned ordinal 1').toBe(1)
+    const second = new FakeSocket()
+    open(second) // reconnect
+    second.sendFrame(wireAttach())
+    second.recvFrame(wireState())
+    second.recvFrame(wireComplete())
+    expect(() => obs.require(mark, SID), 'ordinals must keep counting across generations').not.toThrow()
+    expect(obs.require(mark, SID)).toEqual(TURN)
     obs.dispose()
   })
 })

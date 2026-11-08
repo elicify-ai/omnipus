@@ -803,8 +803,11 @@ test(
         // builds the state afterwards, so a fast turn that ended in between is
         // rejected as a prerequisite failure (accepted and documented in
         // fixtures/turn-liveness.ts). There is no post-sample, so a turn that
-        // ends right after the attach passes. The helper returns the attach's own
-        // result, so this check cannot be dropped without dropping the attach.
+        // ends AFTER the state was built passes. A rejected attach (error frame)
+        // fails the prerequisite with the server message. The wrapper returns the
+        // attach result only after the check has run, and this spec uses the
+        // wrapper; unit tests cover the wrapper, not this call site, so a change
+        // that bypasses the wrapper here would not be caught offline.
         const [, targetProof] = await attachWhileObservingTurn(attachTurn2, sessionId, () =>
           Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
         )

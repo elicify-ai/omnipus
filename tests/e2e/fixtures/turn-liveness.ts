@@ -6,8 +6,9 @@
 // attach cannot prove the backend was live at the second viewer's attach (Stop
 // is a client render of the first viewer's own store and can lag the backend).
 // The signal used instead is the server's own answer to THIS attach: the
-// attach_session response starts with a session_state frame for the bound
-// session, and its `active_turn` is "present only when the attached session
+// attach_session response carries a session_state frame for the bound
+// session (incremental attach: first; snapshot attach: after the
+// session_snapshot prefix), and its `active_turn` is "present only when the attached session
 // has a foreground turn in flight at emit time" (SessionStateFrame /
 // SessionStateActiveTurn, ADR-082 D4), and the response ends with
 // catch_up_complete for that session.
@@ -53,6 +54,7 @@ import { WsFrame } from '../../../src/lib/api/generated/ws-schemas'
 export interface ObservedFrame {
   type: string
   session_id?: string
+  message?: string
   active_turn?: { turn_id: string; agent_id: string; started_at: string }
 }
 
@@ -62,6 +64,8 @@ export interface AttachObservation {
   sessionId: string
   /** The first session_state for the session inside this attach's window, if any. */
   sessionState?: ObservedFrame
+  /** The server's error message when this attach was rejected before binding. */
+  rejection?: string
 }
 
 interface OpenRequest {
@@ -96,6 +100,18 @@ export class AttachTurnTracker {
     } else if (frame.type === 'catch_up_complete') {
       this.pending.get(frame.session_id)?.shift()
       this.done.push({ ordinal: head.ordinal, sessionId: frame.session_id, sessionState: head.sessionState })
+    } else if (frame.type === 'error' && !head.sessionState) {
+      // A session-addressed error before this attach's own session_state is a
+      // refusal before binding (e.g. validateHistoryAttach): it completes THIS
+      // request as rejected and consumes its queue slot, so it can neither be
+      // skipped nor lend its slot to the next request. An error after the state
+      // (an in-turn failure) or without a session id is not an attach answer.
+      this.pending.get(frame.session_id)?.shift()
+      this.done.push({
+        ordinal: head.ordinal,
+        sessionId: frame.session_id,
+        rejection: frame.message ?? '(no message)',
+      })
     }
   }
 
@@ -110,6 +126,8 @@ export class AttachTurnTracker {
     return this.done.find((o) => o.ordinal > mark && o.sessionId === sessionId)
   }
 }
+
+export const ATTACH_REJECTED = 'PREREQUISITE: the marked attach was REJECTED by the server (error frame): '
 
 export const NO_COMPLETED_ATTACH =
   'PREREQUISITE: no completed attach_session -> catch_up_complete was observed on the current chat socket for the ' +
@@ -135,6 +153,7 @@ export function requireActiveTurnAtAttach(
 ): NonNullable<ObservedFrame['active_turn']> {
   const attach = tracker.completedAfter(mark, sessionId)
   if (!attach) throw new Error(NO_COMPLETED_ATTACH)
+  if (attach.rejection !== undefined) throw new Error(ATTACH_REJECTED + attach.rejection)
   if (!attach.sessionState) throw new Error(NO_SESSION_STATE_AT_ATTACH)
   if (!attach.sessionState.active_turn) throw new Error(NO_ACTIVE_TURN_AT_ATTACH)
   return attach.sessionState.active_turn
@@ -148,8 +167,9 @@ export interface AttachTurnObserver {
 
 /**
  * Marks, runs the attach, then requires the active-turn observation for the
- * marked attach. Returns the attach's own result, so a caller that uses the
- * result cannot drop the check without dropping the attach.
+ * marked attach, and returns the attach's own result only after that check has
+ * run. Unit tests cover this wrapper; they do not cover the spec's call site,
+ * so a caller that bypasses the wrapper is not caught offline.
  */
 export async function attachWhileObservingTurn<T>(
   observer: AttachTurnObserver,
