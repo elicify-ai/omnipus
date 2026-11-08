@@ -53,7 +53,16 @@ type agentLoopRunTurnToolsExecute struct {
 	// ruleAskSettled is true when this bash call's one upfront prompt also
 	// settled an operator D3 ask rule (§5.7); guardAndDispatch pins it so
 	// the bash tool does not prompt again. Reset for every call.
-	ruleAskSettled    bool
+	ruleAskSettled bool
+	// preApprovalRefusal is the tool's own refusal before any approval card
+	// (tools.PreApprovalChecker); guardAndDispatch records it as the call's
+	// result instead of executing. Reset for every call.
+	preApprovalRefusal *tools.ToolResult
+	// approvalPin is the pin a tools.ApprovalPreparer returned for this call
+	// before its card (Channels Q2-B); guardAndDispatch puts it on the
+	// tool's context (tools.WithApprovalPin), never in the arguments. Reset
+	// for every call.
+	approvalPin       any
 	toolCallID        string
 	asyncCallback     func(_ context.Context, result *tools.ToolResult)
 	asyncCallbackGate *asyncToolCallbackGate
@@ -817,6 +826,8 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	ex.shellModePin = rt.al.bashShellModeFor(rt.ts, ex.toolName)
 	ex.autoPin = tools.AutoVerdict{}
 	ex.ruleAskSettled = false
+	ex.preApprovalRefusal = nil
+	ex.approvalPin = nil
 	if ex.toctouPolicy != "ask" {
 		return agentLoopRunTurnToolsExecuteNext
 	}
@@ -906,13 +917,13 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 		decisionKind = "rule_ask"
 	}
-	// A tool may show server-derived facts on its approval card (e.g.
-	// remove_secret's consumers, FR-077); the call still executes with
-	// ex.toolArgs unchanged.
-	if rt.ts.agent != nil && rt.ts.agent.Tools != nil {
-		if tool, ok := rt.ts.agent.Tools.Get(ex.toolName); ok {
-			requestArgs = tools.WithApprovalContext(rt.turnCtx, tool, requestArgs)
-		}
+	// A tool may refuse before any card, and may show server-derived facts
+	// on its approval card (e.g. remove_secret's consumers, FR-077;
+	// set_channel_outbound's current and new setting, Channels Q2-B); the
+	// call still executes with ex.toolArgs unchanged.
+	requestArgs, refused := ex.prepareApprovalRequest(tc, requestArgs)
+	if refused {
+		return agentLoopRunTurnToolsExecuteNext
 	}
 	// §5.7 fix: re-check the standing grant, with the SAME args
 	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
@@ -1438,6 +1449,9 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
 		return flow
 	}
+	// Channels Q2-B: the state a tool checked and showed on its card rides
+	// the context, so the approved arguments are never rewritten (S1).
+	execCtx = tools.WithApprovalPin(execCtx, ex.approvalPin)
 	if ex.skillWriteKey != "" {
 		// Skills spec r15 §10.1 item 7: the composed decision for this
 		// skill key, checked again by PathHandle.WriteFile.
@@ -1456,14 +1470,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.ret0 = agentLoopRunTurnToolsReturn
 		return agentLoopRunTurnToolsExecuteReturn
 	}
-	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
-		execCtx,
-		ex.toolName,
-		ex.toolArgs,
-		ex.rx.rr.rq.ri.rf.rt.ts.channel,
-		ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-		ex.asyncCallback,
-	)
+	ex.toolResult = ex.executeOrPreRefused(execCtx)
 	ex.toolDuration = time.Since(toolStart)
 	noteGoalExecutedTool(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolResult)
 
