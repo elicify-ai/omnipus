@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -151,4 +152,95 @@ func TestListDirTool_FoldersWithoutViewsRenderUnchanged(t *testing.T) {
 	t.Logf("GUARD ok: root and vault listings carry no VIEW: line")
 	assert.NotContains(t, vault.ForLLM, "VIEW:",
 		"a knowledge base with no saved views must list exactly as before")
+}
+
+// TestListDirTool_ListingCannotPresentUnreadableViews pins the read rule for
+// implicit view loading (design L16, founder answer LQ2 A): a listing is a
+// read, so it may only present views the turn itself may read. The oracle is
+// that rule, not the code; the fixture's payload is entirely synthetic. The
+// instrument is checked first against the real turn policy and the ordinary
+// read path, and both contexts a listing can run in are covered.
+func TestListDirTool_ListingCannotPresentUnreadableViews(t *testing.T) {
+	for _, mode := range []string{"host", "confined"} {
+		t.Run(mode, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("OMNIPUS_HOME", home)
+			ws := t.TempDir()
+			kb := filepath.Join(ws, "Vault")
+			ctx := context.Background()
+			confined := mode == "confined"
+			if confined {
+				ctx = WithReadConfined(ctx, true)
+			} else {
+				kb = t.TempDir()
+			}
+			writeListdirVault(t, kb, "Quietroom vault", nil)
+			require.NoError(t, os.MkdirAll(filepath.Join(kb, "CRM"), 0o700))
+			secluded := filepath.Join(home, "agents", "other", "quiet-room")
+			require.NoError(t, os.MkdirAll(secluded, 0o700))
+			viewFile := filepath.Join(secluded, "alpha.yaml")
+			require.NoError(t, os.WriteFile(viewFile,
+				[]byte("name: alpha-view\ntype: invoice\nlabel: SYNTH_LABEL_QUIETROOM\nkind: summary\nproperties: [client]\nsource: CRM/Gone.base\n"),
+				0o600))
+			require.NoError(t, os.Remove(filepath.Join(kb, ".omnipus-vault", "views")))
+			require.NoError(t, os.Symlink(secluded, filepath.Join(kb, ".omnipus-vault", "views")))
+
+			policy, err := ResolveTurnFSPolicy(ctx, ws, confined)
+			require.NoError(t, err)
+			require.True(t, fspolicy.IsCarveOut(viewFile, policy),
+				"instrument: the synthetic file sits where the real turn policy refuses reads")
+			read := NewReadFileTool(ws, confined, MaxReadFileSize).Execute(ctx, map[string]any{"path": viewFile})
+			require.True(t, read.IsError,
+				"instrument: the ordinary read path must refuse the synthetic file: %s", read.ForLLM)
+
+			out := NewListDirTool(ws, confined).Execute(ctx, map[string]any{"path": filepath.Join(kb, "CRM")})
+			require.False(t, out.IsError,
+				"a views load failure must never fail the listing (L14): %s", out.ForLLM)
+			assert.NotContains(t, out.ForLLM, "SYNTH_LABEL_QUIETROOM",
+				"a listing must not present a label the turn itself may not read")
+			assert.NotContains(t, out.ForLLM, "alpha-view",
+				"a listing must not present a view slug the turn itself may not read")
+			assert.NotContains(t, out.ForLLM, "kind summary",
+				"a listing must not present a view kind the turn itself may not read")
+		})
+	}
+}
+
+// TestListDirTool_ViewLinesPageWithExplicitOffsetAndLimit pins the paging
+// oracle for a combined listing (founder LQ2 A: VIEW lines are entries of the
+// folder's listing): an explicit offset/limit window cuts across the
+// file-to-view boundary exactly, with no duplicated and no omitted entry.
+// The footer spelling is the established paging interface, pinned as
+// characterization; the oracle is the window arithmetic itself.
+func TestListDirTool_ViewLinesPageWithExplicitOffsetAndLimit(t *testing.T) {
+	ws := t.TempDir()
+	vault := filepath.Join(ws, "Vault")
+	writeListdirVault(t, vault, "Finance vault", map[string]string{
+		"invoices--outstanding.yaml": "name: invoices--outstanding\ntype: invoice\nlabel: Outstanding\nkind: summary\nproperties: [client]\nsource: CRM/Invoices.base\n",
+	})
+	require.NoError(t, os.MkdirAll(filepath.Join(vault, "CRM"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(vault, "CRM", "invoice-1.md"), []byte("# Invoice\n"), 0o600))
+
+	file := "FILE: invoice-1.md\n"
+	view := "VIEW: Outstanding (kind summary, view invoices--outstanding, knowledge base Finance vault)\n"
+	cases := []struct {
+		name          string
+		offset, limit int
+		want          string
+	}{
+		{"ordinary-only page", 0, 1, file + "[listing: entries 0-1 of 2, offset=0, next_offset=1]\n"},
+		{"window opens on the view", 1, 1, view + "[listing: entries 1-2 of 2, offset=1, next_offset=end]\n"},
+		{"at end", 2, 1, "[listing: entries 2-2 of 2, offset=2, next_offset=end]\n"},
+		{"beyond end", 3, 1, "[listing: entries 2-2 of 2, offset=2, next_offset=end]\n"},
+		{"whole list in one window", 0, 2, file + view},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := NewListDirTool(ws, true).Execute(context.Background(),
+				map[string]any{"path": "Vault/CRM", "offset": tc.offset, "limit": tc.limit})
+			require.False(t, out.IsError, out.ForLLM)
+			assert.Equal(t, tc.want, out.ForLLM,
+				"a view is an entry of the existing page window, not an unpaged suffix")
+		})
+	}
 }

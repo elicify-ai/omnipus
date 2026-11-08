@@ -23,6 +23,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // viewVaultRel is the workspace-relative path of the shared fixture knowledge
@@ -430,6 +432,9 @@ func TestLibraryEntriesViews_ViewRowDescribesTheStorageFile(t *testing.T) {
 	require.Equal(t, "invoices--outstanding", row.View.Name,
 		"L7: view.name is the view's slug, not the file name")
 	require.Equal(t, "Outstanding", row.View.Label, "L7: view.label is the declared label")
+	require.NotNil(t, row.View.Kind,
+		"L8: this fixture declares kind summary — a declared kind must not be dropped from the row")
+	require.Equal(t, "summary", *row.View.Kind, "L8: a declared kind is echoed verbatim")
 	require.Equal(t, collectionIDOf(t, api, ws, viewVaultRel), row.View.CollectionId,
 		"L7: view.collection_id is the same opaque id the detect endpoint reports for the knowledge base")
 }
@@ -609,9 +614,64 @@ func TestLibraryEntriesViews_PlainYamlFilesAreNeverViewRows(t *testing.T) {
 
 // --- L14 --------------------------------------------------------------------
 
+// captureListingWarnings captures the gateway's native warnings while run
+// runs, at WARN level, into a JSONL file. A control warning of its own is
+// emitted first and REQUIRED to appear in the capture, so a broken instrument
+// fails the test instead of silently passing it. Returns every captured
+// record.
+func captureListingWarnings(t *testing.T, run func()) []map[string]any {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "warnings.jsonl")
+	level := logger.GetLevel()
+	logger.SetLevel(logger.WARN)
+	t.Cleanup(func() { logger.SetLevel(level) })
+	require.NoError(t, logger.EnableFileLogging(path))
+	t.Cleanup(logger.DisableFileLogging)
+	logger.WarnCF("rest", "TA4_ONLY_WARNING_INSTRUMENT", map[string]any{"receipt": "instrument"})
+	run()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &record),
+			"every captured log line must be a JSON record")
+		records = append(records, record)
+	}
+	return records
+}
+
+// requireLoadFailureWarning asserts the L14 warning half on the captured
+// records: a fatal schemas/views load must produce a warning naming the
+// workspace, the knowledge base and the error. The instrument control must be
+// seen exactly once, proving the capture works at this level.
+func requireLoadFailureWarning(t *testing.T, records []map[string]any, ws, kb string) {
+	t.Helper()
+	instrument, loadFailures := 0, 0
+	for _, record := range records {
+		if record["message"] == "TA4_ONLY_WARNING_INSTRUMENT" {
+			instrument++
+		}
+		if record["workspace_id"] == ws && record["knowledge_base"] == kb {
+			assert.Equal(t, "warn", record["level"], "L14: the diagnostic must be a warning")
+			assert.NotEmpty(t, record["error"], "L14: the diagnostic must carry the load error")
+			loadFailures++
+		}
+	}
+	assert.Equal(t, 1, instrument,
+		"instrument check: the capture must see a real warning at this level")
+	assert.GreaterOrEqual(t, loadFailures, 1,
+		"L14: a fatal views/schemas load must warn naming the workspace, the knowledge base and the error")
+}
+
 // TestLibraryEntriesViews_LoadFailureNeverFailsTheListing pins L14: when the
 // views or schemas cannot be LOADED, the listing still answers 200 with the
-// ordinary rows only — a views failure never fails the listing.
+// ordinary rows only, AND the server warns naming the workspace, the knowledge
+// base and the error. Both halves are asserted: the tolerated rows and the
+// required diagnostic.
 //
 // The trigger is a ReadDir-level load error, because records.LoadSchemas
 // REPORTS invalid yaml as a rejection instead of erroring (verified in
@@ -619,7 +679,8 @@ func TestLibraryEntriesViews_PlainYamlFilesAreNeverViewRows(t *testing.T) {
 // are written as FILES, so the loaders' directory reads fail outright.
 //
 // GUARD RULE: expected green on the pre-change code (nothing loads anything
-// yet); it refuses an implementation that lets a load failure fail the listing.
+// yet); it refuses an implementation that lets a load failure fail the listing
+// or drop the required warning.
 func TestLibraryEntriesViews_LoadFailureNeverFailsTheListing(t *testing.T) {
 	t.Run("views directory unreadable", func(t *testing.T) {
 		api, ws := buildLibraryTestAPI(t)
@@ -629,7 +690,10 @@ func TestLibraryEntriesViews_LoadFailureNeverFailsTheListing(t *testing.T) {
 		writeNote(t, vault, ".omnipus-vault/views", "this is a file, not a directory")
 		writeNote(t, vault, "note.md", "# n\n")
 
-		rows := listEntriesWithViews(t, api, ws, "livelock")
+		var rows []gen.LibraryEntry
+		records := captureListingWarnings(t, func() {
+			rows = listEntriesWithViews(t, api, ws, "livelock")
+		})
 		requireNoViewFacts(t, rows)
 		paths := make([]string, 0, len(rows))
 		for _, e := range rows {
@@ -637,6 +701,7 @@ func TestLibraryEntriesViews_LoadFailureNeverFailsTheListing(t *testing.T) {
 		}
 		require.Equal(t, []string{"livelock/note.md"}, paths,
 			"L14: the listing still returns the ordinary rows")
+		requireLoadFailureWarning(t, records, ws, "livelock")
 	})
 
 	t.Run("schema directory unreadable", func(t *testing.T) {
@@ -648,7 +713,10 @@ func TestLibraryEntriesViews_LoadFailureNeverFailsTheListing(t *testing.T) {
 			"name: ok\ntype: invoice\nlabel: OK\nproperties: [client]\n")
 		writeNote(t, vault, "note.md", "# n\n")
 
-		rows := listEntriesWithViews(t, api, ws, "schemabroke")
+		var rows []gen.LibraryEntry
+		records := captureListingWarnings(t, func() {
+			rows = listEntriesWithViews(t, api, ws, "schemabroke")
+		})
 		requireNoViewFacts(t, rows)
 		paths := make([]string, 0, len(rows))
 		for _, e := range rows {
@@ -656,6 +724,7 @@ func TestLibraryEntriesViews_LoadFailureNeverFailsTheListing(t *testing.T) {
 		}
 		require.Equal(t, []string{"schemabroke/note.md"}, paths,
 			"L14: a schema load error never fails the listing either")
+		requireLoadFailureWarning(t, records, ws, "schemabroke")
 	})
 }
 
