@@ -282,11 +282,11 @@ func (a *restAPI) auditThirdPartyChanges(r *http.Request, previous, saved map[st
 	for _, cli := range thirdpartycli.CLIs {
 		before, after := previous[cli], saved[cli]
 		if before.Path != after.Path {
-			a.logThirdPartyAudit("settings.third_party_agents.path_changed", actor, cli, "path", before.Path, after.Path)
+			a.logThirdPartyAudit(audit.EventThirdPartyAgentsPathChanged, actor, cli, "path", before.Path, after.Path)
 		}
 		if before.PresetArgs != after.PresetArgs {
 			filter := thirdpartycli.PresetAuditFilter(a.agentLoop.GetConfig())
-			a.logThirdPartyAudit("settings.third_party_agents.preset_changed", actor, cli, "preset_args", filter(before.PresetArgs), filter(after.PresetArgs))
+			a.logThirdPartyAudit(audit.EventThirdPartyAgentsPresetChanged, actor, cli, "preset_args", filter(before.PresetArgs), filter(after.PresetArgs))
 		}
 	}
 }

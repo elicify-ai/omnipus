@@ -370,6 +370,13 @@ var validEventNames = map[EventName]struct{}{
 	EventRoomChanged: {},
 	// 6b U2b: a held scheduled task fire that could not start. See events.go.
 	EventTaskTriggerFireNotStarted: {},
+	// Settings -> Third-party agents: a changed program path or standard
+	// parameters for one external command-line tool. See events.go. The
+	// gateway passes these names through a helper parameter, so the
+	// bare-literal emitter scan cannot see them; the constants put them under
+	// the exhaustive constant check instead.
+	EventThirdPartyAgentsPathChanged:   {},
+	EventThirdPartyAgentsPresetChanged: {},
 	// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
 	// See shell_permission_events.go for the wire shape contract.
 	EventShellModeChange:          {},

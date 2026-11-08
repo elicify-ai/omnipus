@@ -565,6 +565,20 @@ const (
 	// at the next start), or agent_missing (the task's agent is gone; a failed
 	// run is recorded on the task).
 	EventTaskTriggerFireNotStarted = "task.trigger.fire_not_started"
+
+	// EventThirdPartyAgentsPathChanged — INFO. A person saved a different
+	// program path for one external command-line tool under Settings ->
+	// Third-party agents. Emitted by pkg/gateway/rest_third_party_settings.go.
+	// User = the signed-in person. Fields: {cli, actor, old_path, new_path}.
+	EventThirdPartyAgentsPathChanged = "settings.third_party_agents.path_changed"
+
+	// EventThirdPartyAgentsPresetChanged — INFO. A person saved different
+	// standard parameters for one external command-line tool under Settings
+	// -> Third-party agents. Emitted by
+	// pkg/gateway/rest_third_party_settings.go. User = the signed-in person.
+	// Fields: {cli, actor, old_preset_args, new_preset_args}; both values pass
+	// through the sensitive-data filter while it is on.
+	EventThirdPartyAgentsPresetChanged = "settings.third_party_agents.preset_changed"
 )
 
 // ---------------------------------------------------------------------------
