@@ -129,10 +129,12 @@ Order: (1) edit the schemas → (2) edit `openapi.yaml` → (3) run `scripts/gen
 | Capability | Who | How it is reached | Proof |
 |---|---|---|---|
 | Guard fix | Any agent with `bash` | Existing `bash` tool (registered for every agent; ceiling `ask`, ADR-092) | U-1, U-2 |
-| Check CLI | Signed-in person | Existing route; the CLI-path hint in the agent editor (Slice A) and the Settings row (Slice B) | U-3 |
+| Check CLI | Signed-in person | Existing route; ~~the CLI-path hint in the agent editor (Slice A) and~~ the Settings row (Slice B) — corrected 2026-11-08, see the note below | U-3 |
 | Settings section | Signed-in person | New `src/components/settings/ThirdPartyAgentsSection.tsx` in the Settings navigation | U-4 |
 | Read-only preset in editor | Person | Workspace → Team → worker → Runtime tab (`src/components/agents/AgentProfile.tsx`) | U-5 |
 | Run with preset / refusal | Agents delegating to a third-party worker | Existing delegation; T8 spawn resolution | U-6 |
+
+**Correction (2026-11-08, architect, T11 gate finding F4): delivery statement only, no requirement changed.** The CLI-path hint in the agent editor is not a way to reach Check CLI. Nothing renders `src/components/agents/CliPathValidationHint.tsx::CliPathValidationHint`, and nothing calls `src/hooks/useCliPathValidation.ts::useCliPathValidation` outside tests. So the Slice A `path-not-allowed` and person-required hint states reach no screen. The frontend developer is deleting that orphaned hint and hook state (team-lead dispatch). The one reachable Check CLI is Settings → Third-party agents → "Check <CLI> CLI" (`src/components/settings/ThirdPartyAgentsSection.tsx::checkCli`), which `src/components/screens/SettingsScreen.tsx` renders.
 
 Delivery is reported as two separate lines: *code correct and tested* and *reachable by a user/agent*.
 
@@ -154,7 +156,14 @@ Delivery is reported as two separate lines: *code correct and tested* and *reach
 | FR-12 | Smoke test and preview take no free path | Given a request with `cli_path` / When received / Then 400 | `TestSmokeAndPreview_RejectFreePath` |
 | FR-13 | User docs updated in the same change (§10) | — | docs-verifier |
 
-Linux runs all tests in candidate CI. Windows adds the guard, shared program-path (`pkg/thirdpartycli`) and `cli-validate` tests to the existing Windows job (named `-run` per package; fake programs built from Go, not shell scripts). macOS adds them to the existing `phase3-macos.yml` core job. No new CI job.
+Linux runs all tests in candidate CI. Windows adds the guard, shared program-path (`pkg/thirdpartycli`) and `cli-validate` tests to the existing Windows job (named `-run` per package; fake programs built from Go, not shell scripts). ~~macOS adds them to the existing `phase3-macos.yml` core job.~~ No new CI job.
+
+**Correction (2026-11-08, architect, T11 gate finding F5): delivery statement only, no requirement changed.** The macOS CI wiring was not delivered, and no CI workflow runs these tests on macOS:
+- `.github/workflows/phase3-macos.yml` was not changed. Its path filter does not cover `pkg/tools/shell_*`, `pkg/thirdpartycli`, `pkg/gateway` or `pkg/agent`.
+- The macOS leg of `.github/workflows/cross-platform.yml` has been off since 2026-10-13, by founder ruling (GitHub billing for macOS runners).
+- This includes the darwin-only tests: `pkg/thirdpartycli/shared_port_darwin_case_test.go`, `pkg/thirdpartycli/shared_port_darwin_unicode_test.go`, `pkg/gateway/program_location_combined_darwin_test.go` and `pkg/agent/program_location_combined_darwin_test.go`.
+
+The actual macOS verification is as follows. Team-lead runs the darwin-only tests locally on the exact candidate and saves the receipt with the candidate's evidence. The macOS hands-on rows in §9 stay as planned (R1-FQ7).
 
 ## 9. Hands-on rows (macOS, exact candidate)
 
