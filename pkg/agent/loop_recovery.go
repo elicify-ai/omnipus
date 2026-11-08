@@ -9,8 +9,10 @@
 //
 // Per session, from durable state:
 //   - no loop metadata: every loop job of the session is an orphan and goes;
-//   - saved run count at the saved limit (a): every job goes and the stopped
-//     state is persisted, nothing is armed;
+//   - saved run count at the saved limit (a), or a selected step that is a
+//     stop-only step (the last run's stop, and maybe its count, was not
+//     saved): every job goes and the stopped state is persisted, nothing is
+//     armed;
 //   - otherwise exactly ONE next step survives (c): the selected step when it
 //     is still due in the future; a fresh step of the session's own mode
 //     otherwise — self-paced: an `at` at boot time plus the persisted positive
@@ -93,6 +95,11 @@ func (s *LoopScheduler) recoverSession(sessionID string) error {
 	}
 	if meta.LoopRunCount >= effectiveLoopMaxRuns(meta) {
 		return s.recoverStopped(store, sessionID, "saved run count reached its limit")
+	}
+	if selected, ok := selectStep(s.sessionJobs(sessionID)); ok && isStopOnlyStep(&selected) {
+		// The last permitted run finished but its stop (and maybe its
+		// count) was not saved: the loop is at its limit.
+		return s.recoverStopped(store, sessionID, "run limit reached; its stop was not saved")
 	}
 	keepID, created, err := s.recoverNextStep(sessionID, meta)
 	if err != nil {

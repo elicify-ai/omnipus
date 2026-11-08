@@ -312,6 +312,17 @@ func (e *loopJobsLeftError) Error() string {
 
 func (e *loopJobsLeftError) Unwrap() error { return e.err }
 
+// loopStopGuard is a stopSessionLoop caller's ownership check and failure
+// step, both run on the saved state under the session lock. owns runs before
+// anything changes: when it reports false the caller's view is stale (its
+// loop was stopped or replaced), so nothing changes and errLoopStopRevoked is
+// returned (FR-05, S-B.8). onSaveFailed runs when the stopped state could not
+// be saved, still under the lock and so still as the owner owns verified.
+type loopStopGuard struct {
+	owns         func(*session.UnifiedMeta) bool
+	onSaveFailed func(*session.UnifiedMeta)
+}
+
 // loopStopPrior is the loop a stopSessionLoop call stopped: its own mode,
 // run limit and run count as saved before the stop. mode is "" when the
 // session had no active loop.
@@ -337,22 +348,23 @@ type loopStopPrior struct {
 // fires, RunScheduled step 1), but a caller about to start a new loop must
 // not, because a leftover later step would outrank its first step.
 //
-// owns, when not nil, is the caller's ownership check, evaluated on the
-// saved state under the same lock before anything changes: when it reports
-// false the caller's view is stale (its loop was stopped or replaced), so
-// nothing changes and errLoopStopRevoked is returned (FR-05, S-B.8).
+// guard, when not nil, is the caller's ownership check and failure step;
+// see loopStopGuard.
 func (al *AgentLoop) stopSessionLoop(
-	sessionID string, store *session.UnifiedStore, ls *LoopScheduler, note string, owns func(*session.UnifiedMeta) bool,
+	sessionID string, store *session.UnifiedStore, ls *LoopScheduler, note string, guard *loopStopGuard,
 ) (loopStopPrior, error) {
 	var prior loopStopPrior
 	err := store.UpdateMetaLocked(sessionID, func(meta *session.UnifiedMeta, set func(session.MetaPatch) error) error {
-		if owns != nil && !owns(meta) {
+		if guard != nil && guard.owns != nil && !guard.owns(meta) {
 			return errLoopStopRevoked
 		}
 		if meta != nil && meta.LoopMode != "" {
 			prior = loopStopPrior{mode: meta.LoopMode, maxRuns: meta.LoopMaxRuns, run: meta.LoopRunCount}
 			if err := set(loopStoppedPatch()); err != nil {
 				prior = loopStopPrior{}
+				if guard != nil && guard.onSaveFailed != nil {
+					guard.onSaveFailed(meta)
+				}
 				return fmt.Errorf("save the stopped loop state: %w", err)
 			}
 			al.finishLoopStop(sessionID, prior.mode, prior.maxRuns, prior.run)

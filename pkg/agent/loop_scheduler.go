@@ -37,6 +37,18 @@ import (
 // heartbeatJobKind's convention, pkg/gateway/heartbeat_schedule.go).
 const loopJobKind = cron.KindLoop
 
+// loopStopOnlyCommand marks a loop step whose only purpose is to stop the
+// loop: it is armed when the loop's last permitted run finished but the
+// stopped state could not be saved. Such a step never runs a turn, whatever
+// run count is saved (the count of that last run may have been lost with the
+// stop), and boot recovery stops a loop whose selected step carries it.
+const loopStopOnlyCommand = "loop-stop-only"
+
+// isStopOnlyStep reports whether job is a stop-only loop step.
+func isStopOnlyStep(job *cron.CronJob) bool {
+	return job != nil && job.Payload.Command == loopStopOnlyCommand
+}
+
 // firstSelfPacedRunDelayMS is the delay used for a self-paced loop's very
 // first run. It is NOT zero: cron.CronService.computeNextRun's "at" branch
 // requires AtMS to be STRICTLY greater than "now" at creation time
@@ -78,6 +90,10 @@ type LoopScheduler struct {
 	// run limit, before the stop is attempted (SetRunLimitStopTestHook). nil
 	// in production.
 	runLimitStopHook atomic.Pointer[func()]
+	// runLimitStopFailedHook is a test seam run when a run-limit stop's save
+	// failed, after the session lock is released and before the fire returns
+	// (SetRunLimitStopFailedTestHook). nil in production.
+	runLimitStopFailedHook atomic.Pointer[func()]
 }
 
 // NewLoopScheduler registers a scheduler as the `loop`-kind handler of the
@@ -124,6 +140,17 @@ func (s *LoopScheduler) SetRunLimitStopTestHook(fn func()) {
 		return
 	}
 	s.runLimitStopHook.Store(&fn)
+}
+
+// SetRunLimitStopFailedTestHook installs fn to run when a run-limit stop's
+// save failed, after the session lock is released and before the fire
+// returns (tests only; nil clears).
+func (s *LoopScheduler) SetRunLimitStopFailedTestHook(fn func()) {
+	if fn == nil {
+		s.runLimitStopFailedHook.Store(nil)
+		return
+	}
+	s.runLimitStopFailedHook.Store(&fn)
 }
 
 // RunDueJobs drives dispatch deterministically for tests.
@@ -173,12 +200,19 @@ func (s *LoopScheduler) AddInterval(ownerAgentID, sessionID string, everyMS int6
 // Schedule.Kind=="at") — callers never need to remove it manually. Returns
 // the new job's ID.
 func (s *LoopScheduler) AddOneShot(ownerAgentID, sessionID string, delayMS int64) (string, error) {
+	return s.addOneShot(ownerAgentID, sessionID, delayMS, "")
+}
+
+// addOneShot is AddOneShot with the step's command marker ("" for a turn
+// step, loopStopOnlyCommand for a stop-only step).
+func (s *LoopScheduler) addOneShot(ownerAgentID, sessionID string, delayMS int64, command string) (string, error) {
 	at := s.cs.Now().UnixMilli() + delayMS
 	job, err := s.cs.AddJobFull(cron.JobSpec{
 		Kind:        loopJobKind,
 		Name:        loopJobName(sessionID),
 		Schedule:    cron.CronSchedule{Kind: "at", AtMS: &at},
 		Message:     sessionID,
+		Command:     command,
 		AgentID:     ownerAgentID,
 		SessionMode: cron.SessionModeContinue,
 	})
@@ -203,13 +237,15 @@ func (s *LoopScheduler) RemoveJob(jobID string) bool {
 //  1. A job whose session lost its loop state removes itself (FR-05(f)).
 //  2. A job that is not the session's selected step runs no turn and removes
 //     itself (FR-05 fire-time ownership).
-//  3. The owner must be registered and must not be a worker (FR-10 (a)/(b),
+//  3. A stop-only step, or a fire that finds the saved run count at the
+//     run limit, runs no turn: it stops the loop (stopAtRunLimit).
+//  4. The owner must be registered and must not be a worker (FR-10 (a)/(b),
 //     the schedule runner's rule universalized); otherwise an error is
 //     recorded and no turn runs.
-//  4. The turn runs via ProcessScheduled with the job identity on the context
+//  5. The turn runs via ProcessScheduled with the job identity on the context
 //     (auto-deny audit, FR-10(e)) and a per-run child-process tracker; the
 //     tracked children are terminated when the turn returns (FR-10(d)).
-//  5. Post-turn, under the session's lock and only while this job is still
+//  6. Post-turn, under the session's lock and only while this job is still
 //     the selected step (FR-05(g)): run_count and activity are persisted, the
 //     run cap stops the loop, and a self-paced loop schedules its next step
 //     from the reply's LOOP_NEXT marker (fixed fallback delay, WARN-logged).
@@ -240,14 +276,14 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 			map[string]any{"session_id": sessionID, "job_id": job.ID})
 		return "", nil
 	}
-	if meta.LoopRunCount >= effectiveLoopMaxRuns(meta) {
+	if isStopOnlyStep(job) || meta.LoopRunCount >= effectiveLoopMaxRuns(meta) {
 		// The run limit was reached but its stop was not saved (settleTurn
-		// failed to save it). No turn runs past the limit; the stop is
-		// retried here (spec section 8).
+		// or an earlier retry failed to save it). No turn runs past the
+		// limit; the stop is retried here (spec section 8).
 		if hook := s.runLimitStopHook.Load(); hook != nil {
 			(*hook)()
 		}
-		return "", s.stopAtRunLimit(store, sessionID, job, meta)
+		return "", s.stopAtRunLimit(store, sessionID, job)
 	}
 	if oerr := s.checkOwner(job.AgentID); oerr != nil {
 		logger.WarnCF("agent", "loop: run refused",
@@ -270,17 +306,23 @@ func (s *LoopScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (st
 	return reply, runErr
 }
 
-// stopAtRunLimit retries the stop of a loop whose saved run count already
-// reached its limit, without running a turn. The stop applies only while,
-// under the session lock, the loop is still active, still at its saved limit
-// and this job is still its selected step: a callback revoked in between (the
-// loop was stopped or replaced) changes nothing (FR-05, S-B.8). meta is the
-// state the fire read; a failed save of a self-paced loop arms a retry step.
-func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID string, job *cron.CronJob, meta *session.UnifiedMeta) error {
-	owns := func(m *session.UnifiedMeta) bool {
-		return m != nil && m.LoopMode != "" && m.LoopRunCount >= effectiveLoopMaxRuns(m) && s.isSelectedStep(sessionID, job.ID)
+// stopAtRunLimit retries the stop of a loop that reached its run limit,
+// without running a turn. The stop applies only while, under the session
+// lock, the loop is still active, this job is still its selected step and
+// the loop is still at its limit: the job is a stop-only step, or the saved
+// run count reached the saved limit. A callback revoked in between (the loop
+// was stopped or replaced) changes nothing (FR-05, S-B.8). A failed save
+// arms the next stop-only retry under the same lock, so a revoked callback
+// can never add a step next to a replacement.
+func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID string, job *cron.CronJob) error {
+	guard := &loopStopGuard{
+		owns: func(m *session.UnifiedMeta) bool {
+			return m != nil && m.LoopMode != "" && s.isSelectedStep(sessionID, job.ID) &&
+				(isStopOnlyStep(job) || m.LoopRunCount >= effectiveLoopMaxRuns(m))
+		},
+		onSaveFailed: func(m *session.UnifiedMeta) { s.armRunLimitStopRetry(sessionID, job, m) },
 	}
-	_, err := s.al.stopSessionLoop(sessionID, store, s, "run limit reached", owns)
+	_, err := s.al.stopSessionLoop(sessionID, store, s, "run limit reached", guard)
 	if errors.Is(err, errLoopStopRevoked) {
 		logger.InfoCF("agent", "loop: a run-limit stop was revoked before it applied; nothing changed",
 			map[string]any{"session_id": sessionID, "job_id": job.ID})
@@ -290,7 +332,9 @@ func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID st
 	if err != nil && !errors.As(err, &left) {
 		logger.ErrorCF("agent", "loop: at its run limit and the stopped state still cannot be saved; no turn runs",
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
-		s.armRunLimitStopRetry(sessionID, job, meta)
+		if hook := s.runLimitStopFailedHook.Load(); hook != nil {
+			(*hook)()
+		}
 		return fmt.Errorf("loop_scheduler: stop the loop at its run limit: %w", err)
 	}
 	if left != nil {
@@ -300,25 +344,55 @@ func (s *LoopScheduler) stopAtRunLimit(store *session.UnifiedStore, sessionID st
 	return nil
 }
 
-// armRunLimitStopRetry gives a self-paced loop whose run-limit stop could
-// not be saved a step to retry the stop on: the engine deletes the one-shot
-// that just fired, and without a step nothing would fire again in this
-// process. The delay is the one boot recovery uses (the loop's saved next
-// delay, else the first-step delay); the retry runs no turn. An interval
-// loop keeps its own repeating job and needs none. A failure is logged; the
-// next gateway start stops a loop at its run limit.
+// armRunLimitStopRetry gives a loop whose run-limit stop could not be saved
+// a stop-only step to retry the stop on. The caller holds the session lock
+// and has checked that job is the loop's selected step, so the step belongs
+// to the loop that reached its limit and a replacement removes it.
+//
+// A self-paced loop gets a new stop-only one-shot (the engine deletes the
+// one-shot that just fired) after the loop's saved next delay, else the
+// first-step delay. An interval loop keeps its repeating job, marked
+// stop-only, so its next tick retries the stop. The mark, not the saved run
+// count, makes the retry stop-only: the count of the last run may not have
+// been saved either. A failure is logged; the next gateway start stops a
+// loop whose saved count reached its limit.
 func (s *LoopScheduler) armRunLimitStopRetry(sessionID string, job *cron.CronJob, meta *session.UnifiedMeta) {
-	if meta == nil || meta.LoopMode != loopModeSelfPaced {
+	if meta == nil {
 		return
 	}
-	delay := meta.LoopNextDelayMS
-	if delay <= 0 {
-		delay = firstSelfPacedRunDelayMS
+	var err error
+	switch meta.LoopMode {
+	case loopModeSelfPaced:
+		delay := meta.LoopNextDelayMS
+		if delay <= 0 {
+			delay = firstSelfPacedRunDelayMS
+		}
+		_, err = s.addOneShot(job.AgentID, sessionID, delay, loopStopOnlyCommand)
+	case loopModeInterval:
+		err = s.markStopOnly(job.ID)
+	default:
+		return
 	}
-	if _, err := s.AddOneShot(job.AgentID, sessionID, delay); err != nil {
-		logger.ErrorCF("agent", "loop: could not arm the retry of an unsaved run-limit stop; the next gateway start stops the loop",
+	if err != nil {
+		logger.ErrorCF("agent", "loop: could not arm the retry of an unsaved run-limit stop; the next gateway start stops the loop only if its saved count reached the limit",
 			map[string]any{"session_id": sessionID, "job_id": job.ID, "error": err.Error()})
 	}
+}
+
+// markStopOnly marks the engine job jobID as a stop-only step.
+func (s *LoopScheduler) markStopOnly(jobID string) error {
+	j, ok := s.cs.GetJob(jobID)
+	if !ok {
+		return fmt.Errorf("loop_scheduler: mark job %s stop-only: job not found", jobID)
+	}
+	if isStopOnlyStep(&j) {
+		return nil
+	}
+	j.Payload.Command = loopStopOnlyCommand
+	if err := s.cs.UpdateJob(&j); err != nil {
+		return fmt.Errorf("loop_scheduler: mark job %s stop-only: %w", jobID, err)
+	}
+	return nil
 }
 
 // checkOwner applies the G5 owner rules of the schedule runner (FR-10 (a) and
@@ -378,8 +452,9 @@ func (s *LoopScheduler) settleTurn(store *session.UnifiedStore, sessionID string
 		if out.run >= out.maxRuns {
 			if perr := set(loopStoppedPatch()); perr != nil {
 				// Nothing else changes and nothing is published: the next
-				// fire runs no turn and retries the stop (RunScheduled). A
-				// self-paced loop gets a step for that fire.
+				// fire runs no turn and retries the stop (RunScheduled):
+				// the loop gets a stop-only step for that fire, so the
+				// retry runs no turn even if the count above was lost.
 				s.armRunLimitStopRetry(sessionID, job, meta)
 				return &loopCapStopError{err: perr}
 			}
