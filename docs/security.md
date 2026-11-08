@@ -716,9 +716,9 @@ Three named exceptions:
 
 ## Checking an external command-line program
 
-The check behind an external worker's **CLI path** field (`POST /api/v1/system/cli-validate`) runs the program you typed with `--version` to read its version.
+**Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field with `--version` to read its version. It saves nothing.
 
-Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. In the editor, the hint under the field then says the check is unavailable; saving still works.
+Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. Settings then shows an error notice. The check itself never saves a program path or an agent, and **Save** works without it.
 
 Before starting anything, Omnipus checks the program file with the same check that **Settings → Third-party agents** and every run use. The path must be absolute. Omnipus follows every link on the way to the real file and refuses the path — reason **path-not-allowed**, with a message naming the failed check, nothing started — when:
 

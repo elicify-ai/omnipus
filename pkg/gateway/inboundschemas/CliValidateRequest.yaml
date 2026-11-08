@@ -1,13 +1,13 @@
 title: CliValidateRequest
 description: >
-  Request body for POST /api/v1/system/cli-validate. Stateless, create-time
-  validation of an external-executor CLI: confirms the binary at cli_path
-  actually runs and reports a version, before the operator saves the
-  subagent_3p agent. The shared program-file check runs first; the version
-  handshake then runs on the checked pathname (runner.TestConnectionCheckedFile,
-  the same handshake the post-create /agents/{id}/runner/test endpoint uses,
-  without a second lookup — subject to the documented Windows
-  executable-extension limitation).
+  Request body for POST /api/v1/system/cli-validate. A stateless check of a
+  caller-supplied external CLI program, used by Check CLI in Settings ->
+  Third-party agents: confirms the binary at cli_path actually runs and
+  reports a version. It saves neither settings nor an agent. The shared
+  program-file check runs first; the version handshake then runs on exactly
+  the checked resolved pathname, with no second lookup, on Linux, macOS and
+  Windows (runner.TestConnectionCheckedFile, the same checked-file handshake
+  POST /api/v1/agents/{id}/runner/test uses).
 type: object
 required:
   - cli

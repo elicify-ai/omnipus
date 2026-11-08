@@ -4,10 +4,10 @@ description: >
   cli_path is a runnable, version-reporting instance of the selected CLI.
   The handshake only requires that the binary runs and returns a
   valid version-shaped response — no per-CLI identity/name match is
-  performed. Blocking is keyed off `reason` alone (never the raw `ok`
-  boolean): the SPA blocks Create/Save on "missing-binary" or
-  "handshake-failed", warns-but-allows on "unauthenticated", and allows on
-  "ok". "path-not-allowed" is shown as a refusal under the path field. `detail` is never raw stderr from
+  performed. Clients classify the result by `reason`, never by the raw `ok`
+  boolean, because "unauthenticated" also reports ok=true. Check CLI in
+  Settings -> Third-party agents shows the result as a notice and saves
+  nothing; the result does not gate saving settings or an agent. `detail` is never raw stderr from
   the spawned process: it is a fixed classified message per reason, except
   for "path-not-allowed", where it is "not allowed: <cli>: check <name>
   failed at <at>", naming the failed check and the path element concerned
@@ -23,7 +23,7 @@ properties:
     description: >
       True when the binary is present, runs, and returns a valid
       version-shaped response (reason "ok" or "unauthenticated"). Retained
-      for convenience only — clients MUST gate blocking on `reason`, not on
+      for convenience only — clients MUST classify on `reason`, not on
       this field, because "unauthenticated" also reports ok=true but must not
       be conflated with "ok".
     example: true
@@ -38,15 +38,14 @@ properties:
       - path-not-allowed
     description: >
       Classification of the validation result. "ok": binary runs and reports
-      a version, believed authenticated. "missing-binary": cli_path is empty —
-      blocks Create/Save. A non-empty cli_path that is missing, not a regular
+      a version, believed authenticated. "missing-binary": cli_path is empty;
+      nothing is started. A non-empty cli_path that is missing, not a regular
       file, or not executable is refused by the program-file check as
       "path-not-allowed" instead and is never started.
       "handshake-failed": the checked program could not be started, or ran but
-      did not return a valid version-shaped response within the timeout —
-      blocks Create/Save.
-      "unauthenticated": the binary runs and reports a version but has no
-      usable credentials — non-blocking warning, Create/Save allowed.
+      did not return a valid version-shaped response within the timeout.
+      "unauthenticated": the binary runs and reports a version, but the local
+      credential check found no usable credentials.
       "unknown-cli": the `cli` value is not one of the supported executors;
       no subprocess is spawned. "path-not-allowed": the shared program-file
       check refused cli_path (not absolute, missing, not a regular file, not

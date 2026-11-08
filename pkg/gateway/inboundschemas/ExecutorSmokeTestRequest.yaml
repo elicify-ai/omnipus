@@ -8,18 +8,16 @@ description: >
   real, authenticated subprocess and costs real model usage, so it is an
   explicit operator action, never automatic. Mirrors POST
   /agents/executor-preview and POST /system/cli-validate's body-driven
-  shape so it works from the create wizard too, but is NOT fully
-  agent-agnostic like those two: when agent_id names a real, saved agent,
-  the run happens in THAT agent's own dedicated directory
-  ($OMNIPUS_HOME/agents/{id}/, AgentConfig.Workspace — NOT the separate,
-  multi-agent pkg/workspace.Workspace feature; see agent.ResolveAgentWorkspace's
-  own doc comment) — matching exactly where a genuine delegation to this
-  agent would run, so the test is representative of real behavior (project
-  files, AGENTS.md/CLAUDE.md/opencode.json context the CLI would actually
-  see). Omitting agent_id (the create-wizard case, before the agent has
-  been saved) or naming an agent that doesn't resolve falls back to a
-  disposable, ephemeral scratch directory instead — the response's
-  used_agent_workspace field says which one happened. There is no
+  shape, so it needs no existing agent id; in the web app, Send a test
+  message is on an existing external worker's Runtime tab. When agent_id
+  identifies a saved agent, the test starts from that agent's resolved home
+  folder; if the agent belongs to a workspace team, that workspace's
+  project-work folder is used instead. These are persistent folders and are
+  not removed after the test. If agent_id is omitted, blank or does not
+  identify a saved agent, the test uses a fresh scratch folder that is
+  removed when the run ends. The response's used_agent_workspace field
+  distinguishes the persistent agent-associated branch from the disposable
+  scratch branch. There is no
   cli_path member (T11 C-B1): the program for the CLI is the path a person
   saved in Settings -> Third-party agents, and a request that carries
   cli_path is refused with 400 in every inbound-validation mode.
@@ -34,14 +32,12 @@ properties:
     type: string
     maxLength: 128
     description: >
-      Optional id of an existing, saved agent whose own dedicated
-      directory ($OMNIPUS_HOME/agents/{id}/ — a per-agent folder, not the
-      separate pkg/workspace.Workspace feature) this test should run in.
-      When it resolves to a real agent, the run uses that directory
-      (never deleted afterward — only the ephemeral scratch-directory
-      fallback is cleaned up). When omitted, empty, or naming an agent
-      that no longer exists, falls back to a disposable ephemeral scratch
-      directory instead.
+      Optional id of an existing, saved agent. When it resolves, the run
+      uses that agent's resolved home folder, or its workspace's
+      project-work folder when the agent belongs to a workspace team; that
+      persistent folder is never removed afterward. When omitted, empty, or
+      naming an agent that no longer exists, the run uses a disposable
+      scratch folder that is removed when the run ends.
   model:
     type: string
     maxLength: 256
