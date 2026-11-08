@@ -178,6 +178,13 @@ type FileMediaStore struct {
 	// live refs: resolving one returns its kept cause, never ErrNotFound, and
 	// SaveRegistry keeps writing the row so it is not lost. Guarded by mu.
 	failedRefs map[string]failedRegistryRef
+
+	// beforeSuccessorPinRegistration, when non-nil, runs in PinRef right
+	// before a successor's storeRef, with no lock held. It is a field only so
+	// a test can land a concurrent registration of the same ref in that
+	// window (SFH-4). Production code never sets it; nil changes nothing. A
+	// test sets it before the store is shared, so it is not guarded by mu.
+	beforeSuccessorPinRegistration func(successor *FileMediaStore, ref string)
 }
 
 // failedRegistryRef is one registry row LoadRegistry kept with its inspection
@@ -333,6 +340,9 @@ func (s *FileMediaStore) PinRef(ref, scope string) error {
 		// that a concurrent forward inserted after an earlier check; so the
 		// pin that follows, under the successor's own lock, is what certifies
 		// the result, and its failure is returned.
+		if s.beforeSuccessorPinRegistration != nil {
+			s.beforeSuccessorPinRegistration(succ, ref)
+		}
 		succ.storeRef(ref, entry.path, entry.meta, scope)
 		if err := succ.pinRef(ref, scope); err != nil {
 			return fmt.Errorf("media store: pin %s in successor: %w", ref, err)
