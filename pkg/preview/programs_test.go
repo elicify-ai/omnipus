@@ -113,22 +113,39 @@ func fakeOfficeProcess() int {
 }
 
 // T-06 / MV-2: exact child argv and environment (captured inside the real
-// launched process); parent credentials and variables must not leak.
+// launched process); parent credentials and variables must not leak. The
+// data folder is reached through a symlink (created here, not borrowed from
+// the platform's temp-folder layout, so the case is covered on every
+// platform): the spec (§3.4 D8d risk row, and the round-6 fix) has the
+// converter handed the REAL path of its call folder, so every call-folder
+// path in the argv and environment is expected in its resolved form — the
+// registry folder is the deliberate exception: it is passed through as the
+// component named it.
 func TestPreviewConverter_ArgvAndEnvironmentGolden(t *testing.T) {
 	t.Setenv("OFFICE_PREVIEW_PARENT_SECRET", "must-not-reach-child")
-	conv, c := fakeOfficeCall(t, t.TempDir(), "valid")
+	base := t.TempDir()
+	linked := filepath.Join(t.TempDir(), "through-link")
+	require.NoError(t, os.Symlink(base, linked), "instrument: the symlinked data-folder root is created")
+	home := filepath.Join(linked, "home")
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	conv, c := fakeOfficeCall(t, home, "valid")
 	defer c.finish()
 	conv.registry = filepath.Join(c.dir, "registry space")
 	pdf, _, err := conv.run(context.Background(), []byte("input"), ".xlsx")
 	require.NoError(t, err)
 	require.Equal(t, []byte("%PDF-fixture"), pdf)
+	// The call folder as the converter is handed it: the real path, links
+	// followed (§3.4 D8d). The folder still exists here — finish is deferred.
+	dir, err := filepath.EvalSymlinks(c.dir)
+	require.NoError(t, err, "instrument: the call folder resolves to the real path the converter was handed")
 	raw, err := os.ReadFile(filepath.Join(c.dir, "receipt.json"))
 	require.NoError(t, err)
 	var receipt fakeOfficeReceipt
 	require.NoError(t, json.Unmarshal(raw, &receipt))
-	wantArgs := []string{"--headless", "--invisible", "--nologo", "--nodefault", "--norestore", "--nolockcheck", "-env:UserInstallation=file://" + filepath.ToSlash(filepath.Join(c.dir, "profile")), "--convert-to", "pdf", "--outdir", filepath.Join(c.dir, "out"), filepath.Join(c.dir, "in", "document.xlsx")}
+	require.NotEqual(t, dir, c.dir, "instrument: the call folder really goes through the symlink, so this test covers the resolved-path contract")
+	wantArgs := []string{"--headless", "--invisible", "--nologo", "--nodefault", "--norestore", "--nolockcheck", "-env:UserInstallation=file://" + filepath.ToSlash(filepath.Join(dir, "profile")), "--convert-to", "pdf", "--outdir", filepath.Join(dir, "out"), filepath.Join(dir, "in", "document.xlsx")}
 	require.Equal(t, wantArgs, receipt.Args)
-	wantEnv := []string{"PATH=/usr/bin:/bin", "LANG=en_US.UTF-8", "HOME=" + filepath.Join(c.dir, "home"), "TMPDIR=" + filepath.Join(c.dir, "tmp")}
+	wantEnv := []string{"PATH=/usr/bin:/bin", "LANG=en_US.UTF-8", "HOME=" + filepath.Join(dir, "home"), "TMPDIR=" + filepath.Join(dir, "tmp")}
 	if c.socketDir != "" {
 		wantEnv = append(wantEnv, "OSL_SOCKET_PATH="+c.socketDir, "URE_MORE_SERVICES=<file://"+strings.ReplaceAll(filepath.ToSlash(conv.registry), " ", "%20")+">*")
 	}

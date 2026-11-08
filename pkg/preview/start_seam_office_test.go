@@ -34,16 +34,18 @@ func seatbeltProfileOf(t *testing.T, cs converterStart) string {
 }
 
 // previewLookupParentFolders computes, independently of any production code,
-// every folder above each listed folder of the captured policy (filesystem
+// every folder ABOVE each listed folder of the captured policy (filesystem
 // rules and unix-socket rules alike), from the real (symlink-resolved) path
-// of each rule, up to but not including `/` (spec §3.4 D8d). Sorted, deduped.
+// of each rule, up to but not including `/` (spec §3.4 D8d, FR-056). The
+// listed folders themselves are NOT in the set: they already carry their own
+// D8c grants — look-up is only for the folders above them. Sorted, deduped.
 func previewLookupParentFolders(t *testing.T, policy sandbox.SandboxPolicy) []string {
 	t.Helper()
 	seen := map[string]struct{}{}
 	consider := func(path string) {
 		resolved, err := filepath.EvalSymlinks(path)
 		require.NoError(t, err, "T-102/T-11: a listed folder of the captured policy must exist to compute its parents: %s", path)
-		for cur := resolved; cur != "/" && cur != "." && cur != string(filepath.Separator); cur = filepath.Dir(cur) {
+		for cur := filepath.Dir(resolved); cur != "/" && cur != "." && cur != string(filepath.Separator); cur = filepath.Dir(cur) {
 			seen[cur] = struct{}{}
 		}
 	}

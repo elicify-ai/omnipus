@@ -61,6 +61,12 @@ import (
 // Landlock cannot restrict look-up, and the Linux listing/reading variant is
 // Unknown until run (T-102 row).
 //
+// Captured paths are resolved once, inside the hook, while the call is live:
+// the call folder and socket folder are removed by design when the call
+// returns, so no post-call assertion may resolve a captured path again — and
+// none of that resolution weakens the scan, which still compares real
+// (links-followed) paths on both sides.
+//
 // Not a pass if: the policy is built by hand; the "later" folder is created
 // before the start (it is created inside the hook, after the start began);
 // an unconfined run is counted as a pass; a missing component skips instead
@@ -76,7 +82,8 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 
 	// The home lies under a symlink so folders computed from unresolved paths
 	// fail visibly (§3.4 D8d risk row): the policy's paths are resolved, and
-	// this test computes its expected look-up folders from those.
+	// this test computes its expected look-up folders from those. homeReal is
+	// the resolved prefix every captured rule path is compared against.
 	symRoot := t.TempDir()
 	twisted := filepath.Join(t.TempDir(), "through-link")
 	require.NoError(t, os.Symlink(symRoot, twisted), "instrument: the symlinked home root is created")
@@ -86,6 +93,8 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	// timing-independent, and a real entry must be there for the
 	// no-other-data-folder-rule check to mean something.
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "tmp"), 0o700))
+	homeReal, linkErr := filepath.EvalSymlinks(home)
+	require.NoError(t, linkErr, "instrument: the data folder resolves to its real prefix")
 
 	officeRoot := os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
 	if officeRoot == "" {
@@ -108,30 +117,21 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 
 	// The real registry folder of the registered LibreOffice, and a file in
 	// it the probe must be able to read (D8c grants the registry read-only;
-	// macOS only — a Linux registration carries no services registry).
+	// macOS only — a Linux registration carries no services registry). The
+	// comparison prefix is the resolved registry folder: the component's
+	// paths are real paths, the test-built path goes through the symlink.
 	registryFile := ""
+	registryDirReal := ""
 	if runtime.GOOS == "darwin" {
 		regDir := filepath.Join(component.RegisteredDir(home, component.KindOffice), "services")
 		registryFile = filepath.Join(regDir, "services.rdb")
 		_, statErr := os.Stat(registryFile)
 		require.NoError(t, statErr, "instrument: the registered LibreOffice's filtered registry holds services.rdb")
+		registryDirReal, linkErr = filepath.EvalSymlinks(regDir)
+		require.NoError(t, linkErr, "instrument: the registry folder resolves to its real prefix")
 	}
 
-	// Planted targets, each verified to exist and be readable by the test —
-	// so a probe that fails on one fails because of the sandbox, never
-	// because the target is missing (T-102 false-pass note).
-	workspaceFile := filepath.Join(t.TempDir(), "turn-note.txt")
-	require.NoError(t, os.WriteFile(workspaceFile, []byte("workspace payload"), 0o600))
-	_, readErr := os.ReadFile(workspaceFile)
-	require.NoError(t, readErr, "instrument: the workspace target exists and is readable outside the sandbox")
-	plantedFile := filepath.Join(home, "planted-in-data.txt")
-	require.NoError(t, os.WriteFile(plantedFile, []byte("planted in the data folder"), 0o600))
-	_, readErr = os.ReadFile(plantedFile)
-	require.NoError(t, readErr, "instrument: the planted data-folder target exists and is readable outside the sandbox")
-	outsideSystem := filepath.Join(home, "system", "t102-not-registry.txt")
-	require.NoError(t, os.WriteFile(outsideSystem, []byte("not the registry"), 0o600))
-	_, readErr = os.ReadFile(outsideSystem)
-	require.NoError(t, readErr, "instrument: the <home>/system target outside the registry exists and is readable outside the sandbox")
+	targets := officePlantTargets(t, home)
 
 	// The accepted seam (§3.4 D8d ruling): set only here, reset with
 	// t.Cleanup, this test never runs in parallel, and zero captured starts
@@ -139,69 +139,8 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	// through the captured hooks — inside the start path, on this test's own
 	// goroutine, so the call cannot finish under it — and records what the
 	// probe found.
-	type startProbe struct {
-		start   converterStart
-		parents []string
-		receipt previewProbeReceipt
-	}
-	var (
-		starts []converterStart
-		probes []startProbe
-	)
-	testHookConverterStart = func(cs converterStart) {
-		if isPreviewProbeStart(cs.args) {
-			return // the probe's own start through the same hooks: record nothing, recurse no further
-		}
-		starts = append(starts, cs)
-		if runtime.GOOS != "darwin" {
-			return // Landlock cannot restrict look-up; the Linux probe variant is Unknown until run (T-102 row)
-		}
-		workDir := previewWorkDirOf(t, cs.args)
-		parents := previewLookupParentFolders(t, cs.policy)
-		// The "later" call folder is created HERE — after this call started —
-		// with a planted file inside, and never before (T-102 false-pass note).
-		later := filepath.Join(filepath.Dir(filepath.Dir(workDir)), fmt.Sprintf("t102-later-%d", len(starts)))
-		require.NoError(t, os.MkdirAll(later, 0o700), "instrument: the later call folder is created inside the hook")
-		laterFile := filepath.Join(later, "later-note.txt")
-		require.NoError(t, os.WriteFile(laterFile, []byte("created after the call started"), 0o600))
-		spec := previewProbeSpec{
-			Receipt:      previewProbeReceiptPath,
-			Lookup:       parents,
-			Planted:      plantedFile,
-			OtherCall:    later,
-			OtherFile:    laterFile,
-			Owner:        filepath.Join(filepath.Dir(workDir), "owner.json"),
-			Workspace:    workspaceFile,
-			Outside:      outsideSystem,
-			RegistryFile: registryFile,
-		}
-		specData, specErr := json.Marshal(spec)
-		if specErr != nil {
-			t.Errorf("T-102: the probe spec does not encode: %v", specErr)
-			return
-		}
-		if writeErr := os.WriteFile(filepath.Join(workDir, "probe-spec.json"), specData, 0o600); writeErr != nil {
-			t.Errorf("T-102: the probe spec cannot be written into the live work folder %s: %v", workDir, writeErr)
-			return
-		}
-		probe := exec.Command(self, "--office-preview-probe", "probe-spec.json")
-		probe.Dir = workDir
-		if prepareErr := cs.hooks.prepare(probe); prepareErr != nil {
-			t.Errorf("T-102: the captured hooks refuse to prepare the probe with the same policy: %v", prepareErr)
-			return
-		}
-		raw, runErr := probe.CombinedOutput()
-		if runErr != nil {
-			t.Errorf("T-102: the probe did not run cleanly under the captured policy: %v\n%s", runErr, raw)
-			return
-		}
-		receipt, _, receiptErr := previewReadProbeReceipt(workDir)
-		if receiptErr != nil {
-			t.Errorf("T-102: the probe receipt cannot be read from the live work folder: %v\n%s", receiptErr, raw)
-			return
-		}
-		probes = append(probes, startProbe{start: cs, parents: parents, receipt: receipt})
-	}
+	oc := &officeCapture{t: t, self: self, registryFile: registryFile, targets: targets}
+	testHookConverterStart = oc.hook
 	t.Cleanup(func() { testHookConverterStart = nil })
 
 	docx := minimalDocx(t)
@@ -237,83 +176,15 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	}
 
 	// Zero captured starts fails, never skips (seam ruling, §3.4 D8d).
-	require.NotEmpty(t, starts, "T-102: the hook captured zero converter starts — a test expecting a confined start fails, never skips")
+	require.NotEmpty(t, oc.records, "T-102: the hook captured zero converter starts — a test expecting a confined start fails, never skips")
 	if runtime.GOOS == "darwin" {
-		require.Len(t, probes, len(starts), "T-102: every converter start ran the probe at its in-call barrier")
+		for i, rec := range oc.records {
+			require.True(t, rec.probed, "T-102: every converter start ran the probe at its in-call barrier — start %d did not", i+1)
+			assertOfficeRepeatProbe(t, rec)
+		}
 	}
-
-	for _, probeRun := range probes {
-		receipt := probeRun.receipt
-		require.ElementsMatch(t, probeRun.parents, receipt.LookupOK,
-			"T-102 §3.4 D8d: the probe can look up (stat) every folder above the converter's own folders — computed here from the captured policy's real paths; failures: %v", receipt.LookupFail)
-		require.Empty(t, receipt.ListOK,
-			"T-102 §3.4 D8d: the probe cannot list any folder above the converter's own folders; unexpectedly listed: %v", receipt.ListOK)
-		require.ElementsMatch(t, probeRun.parents, receipt.ListFail,
-			"T-102 §3.4 D8d: listing is refused on every look-up folder")
-		require.NotEmpty(t, receipt.PlantedStatErr, "T-102 §3.4 D8d/B-70: the probe cannot look up a file planted directly in the data folder")
-		require.NotEmpty(t, receipt.PlantedReadErr, "T-102 §3.4 D8d/B-70: the probe cannot read a file planted directly in the data folder")
-		require.NotEmpty(t, receipt.OtherCallStatErr, "T-102 §3.4 D8d/B-70: the probe cannot look up another call folder (created after this call started)")
-		require.NotEmpty(t, receipt.OtherFileReadErr, "T-102: the probe cannot read a file in another call folder")
-		require.NotEmpty(t, receipt.OwnerReadErr, "T-102 §3.4 D8c: the probe cannot read this call's owner record (§3.4 D1 keeps it out of the converter's reach)")
-		require.NotEmpty(t, receipt.WorkspaceReadErr, "T-102 §3.4 D8c: the probe cannot read a file in the agent's workspace")
-		require.NotEmpty(t, receipt.OutsideReadErr, "T-102 §3.4 D8c: the probe cannot read <home>/system outside the registry")
-		require.Equal(t, "", receipt.RegistryReadErr, "T-102 §3.4 D8c: the probe reads the registry folder")
-		require.NotEmpty(t, receipt.RegistryWriteErr, "T-102 §3.4 D8c: the probe cannot change the registry folder")
-		require.Equal(t, "", receipt.WorkWriteErr, "T-102 §3.4 D8c: the probe writes in this call's work folder")
-	}
-
-	for _, cs := range starts {
-		require.False(t, cs.policy.ReadsOpen, "T-102 §3.4 D8c: ReadsOpen is false")
-		require.False(t, cs.policy.ExecOpen, "T-102 §3.4 D8c: ExecOpen is false")
-		require.Empty(t, cs.policy.DeniedPaths, "T-102 §3.4 D8c: the converter policy carries no deny list")
-		require.Empty(t, cs.policy.DeniedNodes, "T-102 §3.4 D8c: the converter policy carries no deny list")
-		require.Empty(t, cs.policy.DeniedPathPrefixes, "T-102 §3.4 D8c: the converter policy carries no deny list")
-		require.Empty(t, cs.policy.WriteDeniedPaths, "T-102 §3.4 D8c: the converter policy carries no deny list")
-		workDir := previewWorkDirOf(t, cs.args)
-		for _, rule := range cs.policy.FilesystemRules {
-			resolved, linkErr := filepath.EvalSymlinks(rule.Path)
-			require.NoError(t, linkErr, "instrument: a captured rule path resolves: %s", rule.Path)
-			if !previewWithinDir(home, resolved) {
-				continue // outside the data folder: not this check's subject
-			}
-			inWork := previewWithinDir(workDir, resolved)
-			inRegistry := registryFile != "" && previewWithinDir(filepath.Dir(filepath.Dir(registryFile)), resolved)
-			require.True(t, inWork || inRegistry,
-				"T-102 §3.4 D8c: no rule covers any part of the data folder other than that call's work and, on macOS, the registry folder — found rule on %s", resolved)
-		}
-		if runtime.GOOS != "darwin" {
-			continue // the profile look-up lines and posture are macOS rows; Linux is Unknown until run
-		}
-		// D8d: the profile's look-up lines, in the policy section (after the
-		// filesystem-allows marker, never the platform preamble), are exactly
-		// the folders above the listed folders, recomputed here from the
-		// captured policy's real paths — and no broader grant covers any of
-		// them.
-		profile := seatbeltProfileOf(t, cs)
-		marker := strings.Index(profile, ";; --- Filesystem allows")
-		require.NotEqual(t, -1, marker, "T-102: the profile marks its policy section")
-		section := profile[marker:]
-		parents := previewLookupParentFolders(t, cs.policy)
-		for _, parent := range parents {
-			require.Contains(t, section, previewAllowLineExact(parent),
-				"T-102 §3.4 D8d: the profile carries exactly one look-up line for %s", parent)
-		}
-		metadataCount := 0
-		for _, line := range previewParseAllows(section) {
-			if line.verb == "file-read-metadata" && line.path != "" {
-				metadataCount++
-				require.Contains(t, parents, line.path,
-					"T-102 §3.4 D8d: every look-up line names a folder above a listed folder (computed independently), never anything else — found %s", line.path)
-				continue
-			}
-			for _, parent := range parents {
-				require.NotEqual(t, parent, line.path,
-					"T-102 §3.4 D8d/MV-3: no %s line covers the look-up folder %s (look-up only)", line.verb, parent)
-			}
-		}
-		require.Equal(t, len(parents), metadataCount,
-			"T-102 §3.4 D8d: the profile carries exactly one look-up line per folder above the listed folders, %d expected", len(parents))
-		assertConverterProfilePosture(t, cs, profile)
+	for _, rec := range oc.records {
+		assertOfficeRepeatStartPolicy(t, rec, homeReal, registryDirReal)
 	}
 
 	for i, outcome := range outcomes {
@@ -324,16 +195,218 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	}
 }
 
+// officeTargets are the planted probe targets, each verified readable by the
+// test before any converter runs.
+type officeTargets struct {
+	workspace string
+	planted   string
+	outside   string
+}
+
+// officePlantTargets plants and verifies the probe's targets — so a probe
+// that fails on one fails because of the sandbox, never because the target
+// is missing (T-102 false-pass note).
+func officePlantTargets(t *testing.T, home string) officeTargets {
+	t.Helper()
+	workspaceFile := filepath.Join(t.TempDir(), "turn-note.txt")
+	require.NoError(t, os.WriteFile(workspaceFile, []byte("workspace payload"), 0o600))
+	_, readErr := os.ReadFile(workspaceFile)
+	require.NoError(t, readErr, "instrument: the workspace target exists and is readable outside the sandbox")
+	plantedFile := filepath.Join(home, "planted-in-data.txt")
+	require.NoError(t, os.WriteFile(plantedFile, []byte("planted in the data folder"), 0o600))
+	_, readErr = os.ReadFile(plantedFile)
+	require.NoError(t, readErr, "instrument: the planted data-folder target exists and is readable outside the sandbox")
+	outsideSystem := filepath.Join(home, "system", "t102-not-registry.txt")
+	require.NoError(t, os.WriteFile(outsideSystem, []byte("not the registry"), 0o600))
+	_, readErr = os.ReadFile(outsideSystem)
+	require.NoError(t, readErr, "instrument: the <home>/system target outside the registry exists and is readable outside the sandbox")
+	return officeTargets{workspace: workspaceFile, planted: plantedFile, outside: outsideSystem}
+}
+
+// officeStartRecord is one captured converter start plus everything the
+// in-call barrier recorded about it. Its paths are resolved once, inside the
+// seam hook, while the call is live — the call folder and socket folder are
+// removed by design when the call returns, so the post-call assertions
+// compare recorded real paths and never resolve a removed folder again.
+type officeStartRecord struct {
+	start    converterStart
+	probed   bool
+	parents  []string            // darwin: look-up folders, computed at capture time
+	resolved map[string]string   // captured rule path -> real path, resolved in the hook
+	socket   string              // darwin: the captured socket folder, resolved in the hook
+	receipt  previewProbeReceipt // darwin: what the probe found under the captured policy
+}
+
+// officeCapture collects the converter starts; hook is the seam callback.
+type officeCapture struct {
+	t            *testing.T
+	self         string
+	registryFile string
+	targets      officeTargets
+	records      []officeStartRecord
+}
+
+// hook records one start: rule and socket paths resolved while the call is
+// live; on macOS the probe run at the in-call barrier.
+func (oc *officeCapture) hook(cs converterStart) {
+	if isPreviewProbeStart(cs.args) {
+		return // the probe's own start through the same hooks: record nothing, recurse no further
+	}
+	rec := officeStartRecord{start: cs, resolved: map[string]string{}}
+	for _, rule := range cs.policy.FilesystemRules {
+		resolved, linkErr := filepath.EvalSymlinks(rule.Path)
+		require.NoError(oc.t, linkErr, "instrument: a captured rule path resolves while the call is live: %s", rule.Path)
+		rec.resolved[rule.Path] = resolved
+	}
+	if len(cs.policy.UnixSocketRules) == 1 {
+		socket, linkErr := filepath.EvalSymlinks(cs.policy.UnixSocketRules[0].Path)
+		require.NoError(oc.t, linkErr, "instrument: the captured socket folder resolves while the call is live")
+		rec.socket = socket
+	}
+	if runtime.GOOS != "darwin" {
+		oc.records = append(oc.records, rec)
+		return // Landlock cannot restrict look-up; the Linux probe variant is Unknown until run (T-102 row)
+	}
+	workDir := previewWorkDirOf(oc.t, cs.args)
+	rec.parents = previewLookupParentFolders(oc.t, cs.policy)
+	// The "later" call folder is created HERE — after this call started —
+	// with a planted file inside, and never before (T-102 false-pass note).
+	later := filepath.Join(filepath.Dir(filepath.Dir(workDir)), fmt.Sprintf("t102-later-%d", len(oc.records)+1))
+	require.NoError(oc.t, os.MkdirAll(later, 0o700), "instrument: the later call folder is created inside the hook")
+	laterFile := filepath.Join(later, "later-note.txt")
+	require.NoError(oc.t, os.WriteFile(laterFile, []byte("created after the call started"), 0o600))
+	spec := previewProbeSpec{
+		Receipt:      previewProbeReceiptPath,
+		Lookup:       rec.parents,
+		Planted:      oc.targets.planted,
+		OtherCall:    later,
+		OtherFile:    laterFile,
+		Owner:        filepath.Join(filepath.Dir(workDir), "owner.json"),
+		Workspace:    oc.targets.workspace,
+		Outside:      oc.targets.outside,
+		RegistryFile: oc.registryFile,
+	}
+	specData, specErr := json.Marshal(spec)
+	if specErr != nil {
+		oc.t.Errorf("T-102: the probe spec does not encode: %v", specErr)
+		return
+	}
+	if writeErr := os.WriteFile(filepath.Join(workDir, "probe-spec.json"), specData, 0o600); writeErr != nil {
+		oc.t.Errorf("T-102: the probe spec cannot be written into the live work folder %s: %v", workDir, writeErr)
+		return
+	}
+	probe := exec.Command(oc.self, "--office-preview-probe", "probe-spec.json")
+	probe.Dir = workDir
+	if prepareErr := cs.hooks.prepare(probe); prepareErr != nil {
+		oc.t.Errorf("T-102: the captured hooks refuse to prepare the probe with the same policy: %v", prepareErr)
+		return
+	}
+	raw, runErr := probe.CombinedOutput()
+	if runErr != nil {
+		oc.t.Errorf("T-102: the probe did not run cleanly under the captured policy: %v\n%s", runErr, raw)
+		return
+	}
+	receipt, _, receiptErr := previewReadProbeReceipt(workDir)
+	if receiptErr != nil {
+		oc.t.Errorf("T-102: the probe receipt cannot be read from the live work folder: %v\n%s", receiptErr, raw)
+		return
+	}
+	rec.probed = true
+	rec.receipt = receipt
+	oc.records = append(oc.records, rec)
+}
+
+// assertOfficeRepeatProbe checks one start's probe receipt: the D8d look-up,
+// listing, planted-file and later-call-folder refusals, and the D8c
+// owner/workspace/system/registry/work edges.
+func assertOfficeRepeatProbe(t *testing.T, rec officeStartRecord) {
+	t.Helper()
+	receipt := rec.receipt
+	require.ElementsMatch(t, rec.parents, receipt.LookupOK,
+		"T-102 §3.4 D8d: the probe can look up (stat) every folder above the converter's own folders — computed here from the captured policy's real paths; failures: %v", receipt.LookupFail)
+	require.Empty(t, receipt.ListOK,
+		"T-102 §3.4 D8d: the probe cannot list any folder above the converter's own folders; unexpectedly listed: %v", receipt.ListOK)
+	require.ElementsMatch(t, rec.parents, receipt.ListFail,
+		"T-102 §3.4 D8d: listing is refused on every look-up folder")
+	require.NotEmpty(t, receipt.PlantedStatErr, "T-102 §3.4 D8d/B-70: the probe cannot look up a file planted directly in the data folder")
+	require.NotEmpty(t, receipt.PlantedReadErr, "T-102 §3.4 D8d/B-70: the probe cannot read a file planted directly in the data folder")
+	require.NotEmpty(t, receipt.OtherCallStatErr, "T-102 §3.4 D8d/B-70: the probe cannot look up another call folder (created after this call started)")
+	require.NotEmpty(t, receipt.OtherFileReadErr, "T-102: the probe cannot read a file in another call folder")
+	require.NotEmpty(t, receipt.OwnerReadErr, "T-102 §3.4 D8c: the probe cannot read this call's owner record (§3.4 D1 keeps it out of the converter's reach)")
+	require.NotEmpty(t, receipt.WorkspaceReadErr, "T-102 §3.4 D8c: the probe cannot read a file in the agent's workspace")
+	require.NotEmpty(t, receipt.OutsideReadErr, "T-102 §3.4 D8c: the probe cannot read <home>/system outside the registry")
+	require.Equal(t, "", receipt.RegistryReadErr, "T-102 §3.4 D8c: the probe reads the registry folder")
+	require.NotEmpty(t, receipt.RegistryWriteErr, "T-102 §3.4 D8c: the probe cannot change the registry folder")
+	require.Equal(t, "", receipt.WorkWriteErr, "T-102 §3.4 D8c: the probe writes in this call's work folder")
+}
+
+// assertOfficeRepeatStartPolicy checks one captured start's policy and
+// profile against the D8c list, the D8d look-up lines and the MV-3 posture,
+// from the real paths the hook recorded.
+func assertOfficeRepeatStartPolicy(t *testing.T, rec officeStartRecord, homeReal, registryDirReal string) {
+	t.Helper()
+	cs := rec.start
+	require.False(t, cs.policy.ReadsOpen, "T-102 §3.4 D8c: ReadsOpen is false")
+	require.False(t, cs.policy.ExecOpen, "T-102 §3.4 D8c: ExecOpen is false")
+	require.Empty(t, cs.policy.DeniedPaths, "T-102 §3.4 D8c: the converter policy carries no deny list")
+	require.Empty(t, cs.policy.DeniedNodes, "T-102 §3.4 D8c: the converter policy carries no deny list")
+	require.Empty(t, cs.policy.DeniedPathPrefixes, "T-102 §3.4 D8c: the converter policy carries no deny list")
+	require.Empty(t, cs.policy.WriteDeniedPaths, "T-102 §3.4 D8c: the converter policy carries no deny list")
+	workDir := previewWorkDirOf(t, cs.args)
+	for _, rule := range cs.policy.FilesystemRules {
+		resolved, recorded := rec.resolved[rule.Path]
+		require.True(t, recorded, "instrument: the hook resolved this rule while the call was live: %s", rule.Path)
+		if !previewWithinDir(homeReal, resolved) {
+			continue // outside the data folder: not this check's subject
+		}
+		inWork := previewWithinDir(workDir, resolved)
+		inRegistry := registryDirReal != "" && previewWithinDir(registryDirReal, resolved)
+		require.True(t, inWork || inRegistry,
+			"T-102 §3.4 D8c: no rule covers any part of the data folder other than that call's work and, on macOS, the registry folder — found rule on %s", resolved)
+	}
+	if runtime.GOOS != "darwin" {
+		return // the profile look-up lines and posture are macOS rows; Linux is Unknown until run
+	}
+	// D8d: the profile's look-up lines, in the policy section (after the
+	// filesystem-allows marker, never the platform preamble), are exactly
+	// the folders above the listed folders, computed at capture time from
+	// the captured policy's real paths — and no broader grant covers any of
+	// them.
+	profile := seatbeltProfileOf(t, cs)
+	marker := strings.Index(profile, ";; --- Filesystem allows")
+	require.NotEqual(t, -1, marker, "T-102: the profile marks its policy section")
+	section := profile[marker:]
+	parents := rec.parents
+	for _, parent := range parents {
+		require.Contains(t, section, previewAllowLineExact(parent),
+			"T-102 §3.4 D8d: the profile carries exactly one look-up line for %s", parent)
+	}
+	metadataCount := 0
+	for _, line := range previewParseAllows(section) {
+		if line.verb == "file-read-metadata" && line.path != "" {
+			metadataCount++
+			require.Contains(t, parents, line.path,
+				"T-102 §3.4 D8d: every look-up line names a folder above a listed folder (computed independently), never anything else — found %s", line.path)
+			continue
+		}
+		for _, parent := range parents {
+			require.NotEqual(t, parent, line.path,
+				"T-102 §3.4 D8d/MV-3: no %s line covers the look-up folder %s (look-up only)", line.verb, parent)
+		}
+	}
+	require.Equal(t, len(parents), metadataCount,
+		"T-102 §3.4 D8d: the profile carries exactly one look-up line per folder above the listed folders, %d expected", len(parents))
+	assertConverterProfilePosture(t, cs, profile, rec.socket)
+}
+
 // assertConverterProfilePosture checks the MV-3 posture facts that do not
 // depend on which folders are listed: the 3 socket rules (the socket
 // folder's read, write and bind/connect) rendered for the captured socket
-// folder, the explicit network deny, and exactly 2 Mach lookups.
-func assertConverterProfilePosture(t *testing.T, cs converterStart, profile string) {
+// folder — passed in its real, links-followed form, resolved while the call
+// was live — the explicit network deny, and exactly 2 Mach lookups.
+func assertConverterProfilePosture(t *testing.T, cs converterStart, profile, socketReal string) {
 	t.Helper()
 	require.Len(t, cs.policy.UnixSocketRules, 1, "T-102/MV-3: the converter carries exactly the socket folder rule")
-	socket := cs.policy.UnixSocketRules[0].Path
-	socketReal, linkErr := filepath.EvalSymlinks(socket)
-	require.NoError(t, linkErr, "instrument: the captured socket folder resolves")
 	require.Contains(t, profile, fmt.Sprintf("(allow network-bind (subpath %q))", socketReal), "T-102/MV-3: the socket bind rule is in the profile")
 	require.Contains(t, profile, fmt.Sprintf("(allow network-outbound (subpath %q))", socketReal), "T-102/MV-3: the socket connect rule is in the profile")
 	require.Contains(t, profile, fmt.Sprintf("(allow file-write* (subpath %q))", socketReal), "T-102/MV-3: the socket folder write rule is in the profile")

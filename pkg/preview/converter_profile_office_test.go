@@ -153,7 +153,9 @@ func TestPreviewConverterProfileMatchesOwnReadList(t *testing.T) {
 	require.Empty(t, cs.policy.DeniedPathPrefixes, "T-11 §3.4 D8c/MV-3: the converter policy carries no deny list")
 	require.Empty(t, cs.policy.WriteDeniedPaths, "T-11 §3.4 D8c/MV-3: the converter policy carries no deny list")
 	require.Len(t, cs.policy.UnixSocketRules, 1, "T-11/MV-3: the converter carries exactly the socket folder rule (the 3 socket rules: read, write, bind+connect)")
-	assertConverterProfilePosture(t, cs, profile)
+	socketReal, socketErr := filepath.EvalSymlinks(cs.policy.UnixSocketRules[0].Path)
+	require.NoError(t, socketErr, "instrument: the captured socket folder resolves (this test's call folder is still live — finish is deferred)")
+	assertConverterProfilePosture(t, cs, profile, socketReal)
 
 	// The captured start's command line is the wrapped sandbox-exec line, so
 	// the profile read above is the exact one this start used.
