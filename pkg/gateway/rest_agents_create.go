@@ -758,6 +758,16 @@ func (cra *restAPICreateAgent) buildToolConfig() bool {
 			return true
 		}
 	}
+	// Channels FR-037 (security S4): create stores tool policy just like the
+	// update writers, so an always-ask tool is refused as allow in both the
+	// complete (tools_cfg) and sparse (tool_policy_changes) forms before
+	// anything is built or persisted. ask and deny stay accepted.
+	if cra.toolsCfgIn != nil && refuseAlwaysAskAllow(cra.w, cra.toolsCfgIn.BuiltinPolicies) {
+		return true
+	}
+	if cra.policyChanges != nil && refuseAlwaysAskAllow(cra.w, cra.policyChanges.Set) {
+		return true
+	}
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
 	if cra.ac.Type == config.AgentTypeWorker {
 		coreagent.RestrictForWorkerTier(baseCfg)

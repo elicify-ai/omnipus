@@ -299,16 +299,23 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 // refuseOmnipusRules applies the Omnipus system agent's write rules before any
 // field is persisted: a rename to the reserved name is refused (FR-002), and a
 // per-agent "ask" for Omnipus in either capability form is refused (FR-022).
+// An always-ask tool set to allow is refused for every agent (channels FR-037).
 func (uf *restAPIUpdateAgentFlow) refuseOmnipusRules() bool {
 	if uf.ru.req.Name != nil && refuseReservedAgentName(uf.w, *uf.ru.req.Name) {
 		return true
 	}
 	if changes := uf.ru.req.ToolPolicyChanges; changes != nil && changes.Set != nil {
+		if refuseAlwaysAskAllow(uf.w, *changes.Set) {
+			return true
+		}
 		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(*changes.Set)) {
 			return true
 		}
 	}
 	if tc := uf.ru.req.ToolsCfg; tc != nil && tc.Builtin != nil {
+		if refuseAlwaysAskAllow(uf.w, tc.Builtin.Policies) {
+			return true
+		}
 		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(tc.Builtin.Policies)) {
 			return true
 		}

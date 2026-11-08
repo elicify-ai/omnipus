@@ -140,7 +140,8 @@
         "tests/e2e/preview-pdf.spec.ts",
         "tests/e2e/truncation-notice.spec.ts",
         "tests/e2e/stop-scope-tree.spec.ts",
-        "tests/e2e/chat-history-paging.open-scroll-anchor.spec.ts"
+        "tests/e2e/chat-history-paging.open-scroll-anchor.spec.ts",
+        "tests/e2e/tooltip-visibility.spec.ts"
       ]
     },
     {

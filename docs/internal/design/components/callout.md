@@ -1,0 +1,3 @@
+# Callout
+
+`Callout` is the inline notice (W2-1, R41 "error → Callout/Alert") in four variants: `info` (default) and `success` are `role="status"`, `warning` and `error` are `role="alert"`. Each variant has a decorative default icon in its colour token (`icon={false}` hides it, `icon` replaces it). Warning and error tint their border with `color-mix` over `--color-border`, and error also tints the surface; text stays on the secondary and muted tokens, never white (design-system rule 8). `CalloutTitle`, `CalloutDescription` and `CalloutActions` compose the content; actions sit at the end of the row. In forced-colours mode the border repaints to `CanvasText`.

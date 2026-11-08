@@ -6,7 +6,7 @@ import { AUTO_APPROVE_ASK_GROUPS, AUTO_APPROVE_ASK_GROUP_BY_TOOL } from './autoA
 // 2026-09-24) — every entry whose class is `AutoAsks`, i.e. every tool that
 // always asks under Auto-approve. `bash` is deliberately excluded: its own
 // class is `AutoShellMode`, a distinct mechanism (the shell-permission mode
-// UI), not a member of this 29-tool stage-1 ask-list. This is NOT derived from
+// UI), not a member of this 30-tool ask-list (29 stage-1 plus channels FR-032). This is NOT derived from
 // autoApproveAskGroups.ts — a mistake in that file's grouping (a dropped
 // tool, a duplicate, an extra invented one) must fail against this
 // independent transcription, not just agree with itself.
@@ -35,6 +35,8 @@ const EXPECTED_ASK_LIST_TOOLS = [
   'disable_channel',
   'configure_channel',
   'test_channel',
+  // channels-spec-r8 FR-032: the outbound-list writer joins the ask list.
+  'set_channel_outbound',
   // System (MCP)
   'add_mcp_server',
   'remove_mcp_server',
@@ -57,9 +59,9 @@ const EXPECTED_ASK_LIST_TOOLS = [
   'browser_upload_file',
 ].sort()
 
-describe('AUTO_APPROVE_ASK_GROUPS — covers all 29 stage-1 ADR-092/FR-021 always-ask tools', () => {
-  it('the stage-1 hand-transcribed reference list has exactly 29 tools (FR-021)', () => {
-    expect(EXPECTED_ASK_LIST_TOOLS).toHaveLength(29)
+describe('AUTO_APPROVE_ASK_GROUPS — covers all 30 ADR-092/FR-021 (+ channels FR-032) always-ask tools', () => {
+  it('the hand-transcribed reference list has exactly 30 tools (FR-021 stage 1 plus channels FR-032)', () => {
+    expect(EXPECTED_ASK_LIST_TOOLS).toHaveLength(30)
   })
 
   it('every group tool is unique to that group — no tool appears in two groups', () => {
@@ -82,7 +84,7 @@ describe('AUTO_APPROVE_ASK_GROUPS — covers all 29 stage-1 ADR-092/FR-021 alway
     }
   })
 
-  it('the grouped tools, flattened and sorted, exactly equal the stage-1 29-tool reference list (FR-021)', () => {
+  it('the grouped tools, flattened and sorted, exactly equal the 30-tool reference list (FR-021, channels FR-032)', () => {
     const grouped = AUTO_APPROVE_ASK_GROUPS.flatMap((g) => g.tools).sort()
     expect(grouped).toEqual(EXPECTED_ASK_LIST_TOOLS)
   })
