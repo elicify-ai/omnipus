@@ -250,9 +250,17 @@ const profileSettings = `<?xml version="1.0" encoding="UTF-8"?>
 
 // run converts input (named name with extension ext) and returns the PDF.
 func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]byte, string, error) {
+	// LibreOffice is handed the real path of its call folder: its sandbox
+	// rules and look-up folders are computed from real paths (spec §3.4
+	// D8d), so a path through a symlink would need look-ups that list
+	// never names.
+	callDir, err := filepath.EvalSymlinks(o.call.dir)
+	if err != nil {
+		return nil, "", programFailure("conversion failed: scratch unavailable")
+	}
 	dirs := map[string]string{}
 	for _, d := range []string{"in", "out", "home", "tmp", "profile/user"} {
-		p := filepath.Join(o.call.dir, filepath.FromSlash(d))
+		p := filepath.Join(callDir, filepath.FromSlash(d))
 		if err := os.MkdirAll(p, 0o700); err != nil {
 			return nil, "", programFailure("conversion failed: scratch unavailable")
 		}
@@ -297,7 +305,7 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	}
 	args := []string{
 		"--headless", "--invisible", "--nologo", "--nodefault", "--norestore", "--nolockcheck",
-		"-env:UserInstallation=" + fileURL(filepath.Join(o.call.dir, "profile")),
+		"-env:UserInstallation=" + fileURL(filepath.Join(callDir, "profile")),
 		"--convert-to", "pdf", "--outdir", dirs["out"], inPath,
 	}
 	hooks, hookFail := officeStartHooks(conf)
@@ -309,7 +317,7 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 		Target:  o.executable,
 		Args:    args,
 		Env:     env,
-		Dir:     o.call.dir,
+		Dir:     callDir,
 		Limits:  launcher.Limits{MemoryBytes: officeMemory, CPUSeconds: programCPUSeconds, FileSizeBytes: officeOutputLimit, OpenFiles: officeOpenFile, Processes: officeProcesses},
 		Prepare: hooks.prepare,
 		Start:   hooks.start,
