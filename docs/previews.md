@@ -28,7 +28,11 @@ Both addresses of one preview show exactly the same published site. The chat car
 
 An agent can have a finished-files preview and a live development server open at the same time. Each one gets its own link, and each link shows only its own site: the link to the finished files never shows the development server, and the reverse.
 
-The two addresses differ in separation, not in features: the site runs as a full web app either way. Its own stylesheets, scripts, images, data files and live connections load from inside its folder, and storage, cookies, login, forms, popups and downloads work on both (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
+The two addresses differ in separation, and in what the site may do. The isolated address gives the site a whole address of its own, so it runs as a full web app. The shared address fences the site into its private path, so a few things are limited there:
+
+- Every file the page loads must be addressed relative to the page (`./app.js`). A file addressed from the root (`/assets/app.js`) loads outside the preview and the page can render blank. For a bundler such as Vite, set a relative base (`base: './'`).
+- Service workers are refused on the shared address (the isolated address allows them).
+- Saved data and cookies are kept by your browser per address, so on the shared address they sit on Omnipus's own address, not on a private one (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
 
 - **Isolated address.** The preview has its own separate name, so it is a separate place from Omnipus: your Omnipus sign-in does not apply there, and none of Omnipus's cookies or API keys travel to it.
 - **Shared address.** The preview lives on Omnipus's own address. Omnipus fences it in: the page may make its network calls only within its own private path, and Omnipus removes its own sign-in and security cookies from everything the page sends through the gateway (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
@@ -60,7 +64,7 @@ The serving tool has two ways to publish. The agent picks one depending on wheth
 A few details behind the table:
 
 - The published folder must contain an `index.html` at its root. The link opens that file first.
-- Publishing the same folder again renews the same link. Publishing a **different** folder replaces the registration: the old link stops working, and the new link is a new address — so the site starts from scratch there (its saved data and any login are empty on the new address). That is expected, not a bug.
+- Publishing the same folder again renews the same link. Publishing a **different** folder replaces the registration: the old link stops working, and the new link is a new address — so on the isolated address the site starts from scratch (its saved data and any login are empty there). On the shared address your browser keeps saved data per address, which is Omnipus's own, so do not rely on it being empty. That is expected, not a bug.
 - The development command must come from a fixed list: `next dev`, `vite dev`, `astro dev`, `sveltekit dev`, `npm run dev`, `pnpm dev`, or `yarn dev`. An operator can extend the list in the config file.
 - At most two development servers run at once on a default install, and each agent can run only one at a time.
 
