@@ -7,6 +7,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -137,16 +138,44 @@ func (sec *Config) EnsureSensitiveValues(values []string) {
 }
 
 // sensitiveReplacementPairs builds the old/new pairs of a credential replacer:
-// every value longer than 3 bytes is replaced by "[FILTERED]". The one rule for
-// both this config's own replacer and the published process-wide one.
+// every value longer than 3 bytes is replaced by "[FILTERED]". A value with
+// characters in U+00A0..U+00FF is also replaced in its \xHH code-point
+// spelling (latin1EscapedSpelling), as other systems may echo it that way.
+// The one rule for both this config's own replacer and the published
+// process-wide one.
+//
+// Cost: at most one extra pair per such value, built once at registration
+// and at most four times the value's length; the work per logged field is
+// unchanged.
 func sensitiveReplacementPairs(values []string) []string {
 	var pairs []string
 	for _, v := range values {
-		if len(v) > 3 {
-			pairs = append(pairs, v, "[FILTERED]")
+		if len(v) <= 3 {
+			continue
+		}
+		pairs = append(pairs, v, "[FILTERED]")
+		if spelled, ok := latin1EscapedSpelling(v); ok {
+			pairs = append(pairs, spelled, "[FILTERED]")
 		}
 	}
 	return pairs
+}
+
+// latin1EscapedSpelling returns v with every character in U+00A0..U+00FF
+// written as a \xHH escape of its code point (lowercase hex). ok is false
+// when v has no such character.
+func latin1EscapedSpelling(v string) (string, bool) {
+	var b strings.Builder
+	changed := false
+	for _, r := range v {
+		if r >= 0xa0 && r <= 0xff {
+			fmt.Fprintf(&b, `\x%02x`, r)
+			changed = true
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String(), changed
 }
 
 // newSensitiveReplacer returns the credential replacer for values, or nil when
