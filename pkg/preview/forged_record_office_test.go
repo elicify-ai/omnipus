@@ -5,6 +5,7 @@ package preview
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,8 +38,9 @@ func forgeRecordOfficeProcess() int {
 	if json.Unmarshal(raw, &plan) != nil {
 		return 71
 	}
-	launcherPID := os.Getppid() // Unix: the run-limited launcher is the parent.
-	receipt := map[string]any{"launcher_pid": launcherPID, "pid": os.Getpid()}
+	// unix.Exec keeps the launcher's PID, so this process IS the recorded
+	// launcher. Its parent is the gateway. Both are recorded; the oracle is pid.
+	receipt := map[string]any{"launcher_pid": os.Getppid(), "pid": os.Getpid()}
 	data, err := json.Marshal(receipt)
 	if err != nil {
 		return 72
@@ -67,31 +69,35 @@ func forgeRecordOfficeProcess() int {
 	return 0
 }
 
-// T-93 / §3.4 D3 (FR-051, founder Q18 = A, B-64): during a real call the
-// converter plants a forged owner record in the folder it can write, naming a
-// harmless live process, that process's group, and a valid-shaped socket
-// folder. After a simulated crash, recovery must ignore the forged file: the
-// harmless process and the socket folder survive, and the REAL launcher is
-// stopped (Killed == 1). On the pre-amendment layout the forged file IS the
-// record, so this test's RED is recovery acting on it.
-func TestPreviewRecovery_ForgedRecordInScratchIsIgnored(t *testing.T) {
-	// The separate harmless process, in its own group.
+// forgedScratch is one mid-flight call whose scratch holds a forged record.
+type forgedScratch struct {
+	home         string
+	call         *call
+	harmlessPID  int
+	socketDir    string
+	converterPID int // the forged process; after unix.Exec this is the launcher's PID
+	finished     <-chan struct{}
+	convErr      func() error
+}
+
+// startForgedScratchCall runs a real call until the converter has planted the
+// forged record in scratch. The trusted record is whatever publish wrote.
+func startForgedScratchCall(t *testing.T) forgedScratch {
+	t.Helper()
 	harmless := exec.Command("/bin/sleep", "60")
 	harmless.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	require.NoError(t, harmless.Start())
 	harmlessPID := harmless.Process.Pid
 	harmlessDone := make(chan struct{})
 	go func() { _ = harmless.Wait(); close(harmlessDone) }()
-	defer func() {
+	t.Cleanup(func() {
 		_ = syscall.Kill(harmlessPID, syscall.SIGKILL)
 		select {
 		case <-harmlessDone:
 		case <-time.After(5 * time.Second):
 		}
-	}()
+	})
 
-	// The valid-shaped socket folder the forged record will name: a real,
-	// uniquely named, test-owned folder that must survive recovery.
 	socketID, err := randomID(4)
 	require.NoError(t, err)
 	socketDir := "/private/tmp/o-" + socketID
@@ -108,16 +114,12 @@ func TestPreviewRecovery_ForgedRecordInScratchIsIgnored(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(c.dir, "forge-plan.json"), plan, 0o600))
 
-	var recoveryReport RecoveryReport
 	finished := make(chan struct{})
 	var conversionErr error
 	go func() {
 		defer close(finished)
 		_, _, conversionErr = conv.run(context.Background(), []byte("authorized harmless input"), ".docx")
 	}()
-
-	// Wait for the forge, then simulate the crash: a DIFFERENT gateway's
-	// startup recovery runs while this call is still mid-flight.
 	ready := make(chan struct{})
 	go func() {
 		defer close(ready)
@@ -133,42 +135,146 @@ func TestPreviewRecovery_ForgedRecordInScratchIsIgnored(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("T-93: the fake converter never forged the record")
 	}
-	// The real launcher's PID, recorded by the fake before forging, for the
-	// in-run kill assertion and for cleanup.
 	receiptRaw, err := os.ReadFile(filepath.Join(c.dir, "forge-receipt.json"))
 	require.NoError(t, err, "instrument: the fake recorded the real launcher")
 	var receipt struct {
-		LauncherPID int `json:"launcher_pid"`
+		ParentPID    int `json:"launcher_pid"`
+		ConverterPID int `json:"pid"`
 	}
 	require.NoError(t, json.Unmarshal(receiptRaw, &receipt))
-	require.True(t, processAlive(receipt.LauncherPID), "instrument: the real launcher is alive before recovery")
-	t.Cleanup(func() { _ = syscall.Kill(-receipt.LauncherPID, syscall.SIGKILL) })
-
-	recoveryReport = Recover(home, -1, "simulated-crash-other-gateway")
-
-	// The forged file must have been IGNORED: the harmless process and its
-	// named socket folder survive recovery.
-	require.Never(t, func() bool { return !processAlive(harmlessPID) },
-		time.Second, 20*time.Millisecond,
-		"T-93: recovery acted on the converter's forged record and stopped the harmless process it names")
-	require.Never(t, func() bool {
-		_, statErr := os.Stat(socketDir)
-		return statErr != nil
-	}, time.Second, 20*time.Millisecond,
-		"T-93: recovery acted on the forged socket folder and removed it")
-	data, err := os.ReadFile(filepath.Join(socketDir, "decoy"))
-	require.NoError(t, err)
-	require.Equal(t, "must survive", string(data), "the forged socket folder's contents survive")
-
-	// The kill path was reached IN THIS RUN: the real launcher is stopped, so
-	// the call ends instead of hanging, and recovery counts exactly one kill.
-	select {
-	case <-finished:
-		require.Error(t, conversionErr, "the recovery stop ends the conversion")
-	case <-time.After(20 * time.Second):
-		t.Fatal("T-93: the real launcher was never stopped — recovery did not act on the trusted record in this run")
+	// child_unix.go::Main replaces the launcher with the target via unix.Exec,
+	// so the converter's own PID is the launcher the record named. Its parent
+	// is the gateway, not the launcher.
+	require.True(t, processAlive(receipt.ConverterPID), "instrument: the converter (the recorded launcher, after exec) is alive before recovery")
+	require.NotEqual(t, receipt.ParentPID, receipt.ConverterPID, "instrument: the receipt distinguishes the parent from the converter")
+	t.Cleanup(func() {
+		_ = syscall.Kill(-receipt.ConverterPID, syscall.SIGKILL)
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	return forgedScratch{
+		home: home, call: c, harmlessPID: harmlessPID, socketDir: socketDir,
+		converterPID: receipt.ConverterPID, finished: finished,
+		convErr: func() error { return conversionErr },
 	}
-	require.Eventually(t, func() bool { return !processAlive(receipt.LauncherPID) },
-		5*time.Second, 20*time.Millisecond, "T-93: the REAL launcher died in the same run")
-	require.Equal(t, 1, recoveryReport.Killed, "exactly the real launcher's group is stopped")
+}
+
+// deadGateway is a process that has already exited, plus a start time that is
+// not that process's start. gatewayAlive is false on both checks (§3.4 D3).
+func deadGateway(t *testing.T) (int, string) {
+	t.Helper()
+	cmd := exec.Command("/bin/sleep", "60")
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	real := mustProcessStart(t, pid)
+	require.NoError(t, cmd.Process.Kill())
+	_, _ = cmd.Process.Wait()
+	require.False(t, processAlive(pid), "instrument: the stand-in gateway is dead")
+	return pid, "gone-" + real
+}
+
+// retireTrustedGateway rewrites the gateway identity on the call folder's
+// owner.json (<id>/owner.json, one level above work, §3.4 D1) so the record
+// names a gateway that is gone. The launcher identity publish wrote is kept.
+// publish itself is not used: on the pre-D1 layout it writes the scratch file
+// and would replace the forge, hiding the bug this test exists to catch.
+// A missing file means that layout, and the rewrite is skipped. The returned
+// PID is the launcher publish recorded, or 0 when there was no call-folder record.
+func retireTrustedGateway(t *testing.T, c *call) int {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(c.dir), ownerFile)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	require.NoError(t, err)
+	var rec ownerRecord
+	require.NoError(t, json.Unmarshal(data, &rec))
+	require.Equal(t, stateRunning, rec.State, "instrument: running was published before the forge")
+	require.NotNil(t, rec.Launcher, "instrument: the published record names the launcher")
+	recorded := rec.Launcher.PID
+	pid, start := deadGateway(t)
+	require.False(t, gatewayAlive(pid, start), "instrument: the stand-in gateway is not alive")
+	rec.GatewayPID = pid
+	rec.GatewayStart = start
+	out, err := json.Marshal(rec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, out, 0o600))
+	return recorded
+}
+
+// trustedCallFolder is the folder whose owner.json recovery reads. On the D1
+// layout that is the call folder, one level above work. On the pre-D1 layout
+// the only record is inside the scratch folder, which is c.dir.
+func trustedCallFolder(c *call) string {
+	above := filepath.Dir(c.dir)
+	if st, err := os.Stat(filepath.Join(above, ownerFile)); err == nil && !st.IsDir() {
+		return above
+	}
+	return c.dir
+}
+
+// T-93 / §3.4 D3 (FR-051, founder Q18 = A, B-64): during a real call the
+// converter plants a forged owner record in the folder it can write. Recovery
+// reads only the call folder's record. With that record's gateway gone, the
+// harmless process and the forged socket folder survive and the real launcher
+// is stopped (Killed == 1). A live matching gateway is the keep-and-warn
+// branch D3 keeps: the record stays and nothing is stopped.
+func TestPreviewRecovery_ForgedRecordInScratchIsIgnored(t *testing.T) {
+	t.Run("dead_gateway_stops_the_real_launcher", func(t *testing.T) {
+		fx := startForgedScratchCall(t)
+		recorded := retireTrustedGateway(t, fx.call)
+		if recorded != 0 {
+			require.Equal(t, fx.converterPID, recorded,
+				"instrument: unix.Exec keeps the launcher PID, so the published launcher is the converter")
+		}
+		report := Recover(fx.home, -1, "simulated-crash-other-gateway")
+
+		require.Never(t, func() bool { return !processAlive(fx.harmlessPID) },
+			time.Second, 20*time.Millisecond,
+			"T-93: recovery acted on the converter's forged record and stopped the harmless process it names")
+		require.Never(t, func() bool {
+			_, statErr := os.Stat(fx.socketDir)
+			return statErr != nil
+		}, time.Second, 20*time.Millisecond,
+			"T-93: recovery acted on the forged socket folder and removed it")
+		data, err := os.ReadFile(filepath.Join(fx.socketDir, "decoy"))
+		require.NoError(t, err)
+		require.Equal(t, "must survive", string(data), "the forged socket folder's contents survive")
+
+		select {
+		case <-fx.finished:
+			require.Error(t, fx.convErr(), "the recovery stop ends the conversion")
+		case <-time.After(20 * time.Second):
+			t.Fatal("T-93: the real launcher was never stopped — recovery did not act on the trusted record in this run")
+		}
+		require.Eventually(t, func() bool { return !processAlive(fx.converterPID) },
+			5*time.Second, 20*time.Millisecond, "T-93: the REAL launcher died in the same run")
+		require.Equal(t, 1, report.Killed, "exactly the real launcher's group is stopped")
+	})
+
+	// D3 keeps the existing keep-and-warn branch: a live owner gateway (two
+	// gateways sharing a home) is not stopped. The warning sentence is that
+	// branch's existing text.
+	t.Run("live_gateway_is_kept_with_the_warning", func(t *testing.T) {
+		fx := startForgedScratchCall(t)
+		callFolder := trustedCallFolder(fx.call)
+		report := Recover(fx.home, -1, "simulated-crash-other-gateway")
+		want := fmt.Sprintf("preview folder %s kept: its gateway (pid %d) is still running — two gateways share this home",
+			filepath.Base(callFolder), os.Getpid())
+		require.Contains(t, report.Warnings, want,
+			"D3: a live matching gateway is kept and warned, not stopped; killed=%d removed=%d warnings=%v",
+			report.Killed, report.Removed, report.Warnings)
+		require.Equal(t, 0, report.Killed, "D3 keep: nothing is stopped")
+		require.Equal(t, 0, report.Removed, "D3 keep: the call folder is not removed")
+		_, err := os.Stat(callFolder)
+		require.NoError(t, err, "D3 keep: the call folder stays")
+		require.Never(t, func() bool {
+			return !processAlive(fx.harmlessPID) || !processAlive(fx.converterPID)
+		}, time.Second, 20*time.Millisecond, "D3 keep: a live gateway stops nothing")
+		_, err = os.Stat(fx.socketDir)
+		require.NoError(t, err, "D3 keep: the forged socket folder survives")
+	})
 }
