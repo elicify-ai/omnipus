@@ -70,6 +70,9 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: update prompt_injection_level", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}

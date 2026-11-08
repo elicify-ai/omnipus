@@ -2590,6 +2590,8 @@ paths:
       responses:
         '204':
           description: Session revoked successfully. No response body.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '500':
@@ -5542,6 +5544,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChannelEnabledResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
@@ -6040,6 +6044,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MailboxRemovalResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
@@ -6148,6 +6154,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RotateTokenResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '405':
@@ -8681,6 +8689,8 @@ paths:
       responses:
         '204':
           description: MCP server deleted.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':

@@ -72,6 +72,9 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 			return nil
 		}); err != nil {
 			slog.Error("rest: update sandbox audit_log", "error", err)
+			if writeRequestRefusal(w, err) {
+				return
+			}
 			jsonErr(w, http.StatusInternalServerError, "could not save config")
 			return
 		}

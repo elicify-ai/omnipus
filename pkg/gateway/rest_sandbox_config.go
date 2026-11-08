@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"errors"
 	"log/slog"
 	"net/http"
 
@@ -535,9 +534,7 @@ func actorUsername(r *http.Request) string {
 // writeSandboxSaveError answers a failed save: a refusal keeps its own text
 // (office preview spec §3.2), anything else stays the generic failure.
 func writeSandboxSaveError(w http.ResponseWriter, err error) {
-	var refusal *requestRefusalError
-	if errors.As(err, &refusal) {
-		jsonErr(w, http.StatusBadRequest, refusal.Error())
+	if writeRequestRefusal(w, err) {
 		return
 	}
 	slog.Error("rest: update sandbox config", "error", err)

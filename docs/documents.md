@@ -159,6 +159,26 @@ reads any other file.
   these before every preview. Any overlap turns the component off for everyone
   until that access is removed; the preview then says which access is in the
   way.
+- **An entry like that written straight into `config.json`** (for example by
+  editing the file by hand) blocks every save Omnipus makes to that file, not
+  only a save of that entry. Until you remove the entry from `config.json`,
+  each of these is refused with the same `config error: …` text and nothing is
+  saved:
+  - any settings change, adding or removing a channel, connected (MCP) server
+    or mailbox, deleting a provider (the provider stays) or a workspace whose
+    channels must be unbound (the workspace stays), rotating the gateway token
+    and finishing onboarding;
+  - **signing in**: the text appears only after the right password, so a wrong
+    password still gets the usual answer; **changing your password**; and
+    **signing out**: the screen still signs you out, but Omnipus could not end
+    the session on the server;
+  - **signing in to a provider**: the provider's sign-in is kept, and the text
+    starts with `failed to configure signed-in provider: `;
+  - **a channel's Configure** when its credential was already saved: the
+    message says the credential was saved but the settings were not, followed
+    by the same text;
+  - **a channel's starting messages**, which instead show
+    `config error: config.json holds a write entry that would give agents write access to a document preview program folder; nothing was saved. Saving any other setting shows the entry.`
 - A write allowance that names the start of a path rather than a whole folder
   (for example `^/srv/data`, which also matches `/srv/data2`) counts as
   covering the folder it sits in (`/srv`). A pattern Omnipus cannot reduce to

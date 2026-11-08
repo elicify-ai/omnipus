@@ -1701,6 +1701,9 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	if _, err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
 		unlock()
 		logsafeError("rest: delete workspace: cascade channel unbind", "id", rd.id, "error_type", fmt.Sprintf("%T", err))
+		if writeRequestRefusal(rd.w, err) {
+			return true
+		}
 		jsonErr(rd.w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
 		return true
 	}
@@ -2149,8 +2152,14 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 			"workspace_id", workspaceID, "agent_ids", boundAgentIDs)
 		return nil
 	}); err != nil {
-		logsafeWarn("rest: workspace delete: cascade mailboxes: config write failed",
-			"workspace_id", workspaceID, "agent_ids", boundAgentIDs, "error_type", fmt.Sprintf("%T", err))
+		args := []any{"workspace_id", workspaceID, "agent_ids", boundAgentIDs, "error_type", fmt.Sprintf("%T", err)}
+		// §3.4 D9b: a refusal has no answer to a person here, so its text goes
+		// to the log (it holds no credential).
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			args = append(args, "refusal", refusal.Error())
+		}
+		logsafeWarn("rest: workspace delete: cascade mailboxes: config write failed", args...)
 		return
 	}
 
