@@ -16,6 +16,12 @@ import (
 // entered. The registered HTTP route must preserve a nonblank pathname.
 func TestCliValidate_HTTPPreservesLiteralProgramPath(t *testing.T) {
 	p := t11ProgramIdentity(t) // includes an isolated PATH and two real programs
+	// Give this private fixture a unique request-edge rate-limit identity.
+	chain := p.settings.handler
+	p.settings.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = t.Name() + ":0"
+		chain.ServeHTTP(w, r)
+	})
 	checked, err := filepath.EvalSymlinks(p.checked)
 	require.NoError(t, err)
 	require.NotEqual(t, p.other, checked, "instrument: the literal program is not its sibling")
@@ -45,6 +51,12 @@ func TestCliValidate_HTTPBlankProgramPathIsMissing(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := t11ProgramIdentity(t)
+			// Give this private fixture a unique request-edge rate-limit identity.
+			chain := p.settings.handler
+			p.settings.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				r.RemoteAddr = t.Name() + ":0"
+				chain.ServeHTTP(w, r)
+			})
 			spawns, launched := t11CountSpawns(t)
 			w := p.settings.call(t, http.MethodPost, "/api/v1/system/cli-validate",
 				map[string]string{"cli": "codex", "cli_path": tc.path}, "person")
