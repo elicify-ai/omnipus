@@ -38,10 +38,14 @@ import (
 // catalog cannot size, so the real unknown-window primer
 // (live_limits_boot.go::primeUnknownWindows) starts a real rung-4 fetch,
 // and holds that fetch's HTTP answer open. Returns the run context, a
-// channel delivering the fetch's request context once it started, and a
+// channel delivering the fetch's request context once it started, a
 // releaseNow function that unblocks the held answer (safe to call any
-// number of times; the cleanup calls it too, on every path).
-func bootPrimedLocalFetch(t *testing.T) (*runContextWithOptions, <-chan context.Context, func()) {
+// number of times; the cleanup calls it too, on every path), and the
+// fetch's exit witness: closed when the held fetch's HTTP edge has returned,
+// on either path (answer released, or request context cancelled). A drain
+// that closed the rung but did not JOIN its writer is back while this
+// witness is still open — CHECK 3 (2026-11-08) finding R1's probe shape.
+func bootPrimedLocalFetch(t *testing.T) (*runContextWithOptions, <-chan context.Context, func(), <-chan struct{}) {
 	t.Helper()
 	home, _ := bootFixture(t)
 	bootEditedPlan(t, home)
@@ -52,6 +56,8 @@ func bootPrimedLocalFetch(t *testing.T) (*runContextWithOptions, <-chan context.
 	releaseOnce := new(sync.Once)
 	release := make(chan struct{})
 	entered := make(chan context.Context, 1)
+	fetchExited := make(chan struct{})
+	exitOnce := new(sync.Once)
 	old := http.DefaultTransport
 	http.DefaultTransport = bootDownloadTransport(func(r *http.Request) (*http.Response, error) {
 		// Ollama's shipped catalog row can supply localhost rather than the
@@ -63,6 +69,10 @@ func bootPrimedLocalFetch(t *testing.T) (*runContextWithOptions, <-chan context.
 		if r.URL.Path != "/api/ps" {
 			return nil, errors.New("boot live-limits instrument refuses unexpected endpoint: " + r.URL.Path)
 		}
+		// The exit witness sits AFTER the guards: a refused request (the boot's
+		// browser preprovision also rides this transport) is not the held
+		// fetch, and must not close the witness.
+		defer exitOnce.Do(func() { close(fetchExited) })
 		select {
 		case entered <- r.Context():
 		default:
@@ -109,7 +119,7 @@ func bootPrimedLocalFetch(t *testing.T) (*runContextWithOptions, <-chan context.
 	err, stop = rc.initializeAgentLoop()
 	require.NoError(t, err)
 	require.False(t, stop)
-	return rc, entered, func() { releaseOnce.Do(func() { close(release) }) }
+	return rc, entered, func() { releaseOnce.Do(func() { close(release) }) }, fetchExited
 }
 
 // TestExplicitLiveLimitsCloseCancelsPrimedFetch is the positive control for
@@ -118,7 +128,7 @@ func bootPrimedLocalFetch(t *testing.T) (*runContextWithOptions, <-chan context.
 // the defect-1 write if an abort left the writer alive — without it, a
 // silent pass below could only mean the fetch never started.
 func TestExplicitLiveLimitsCloseCancelsPrimedFetch(t *testing.T) {
-	rc, entered, releaseNow := bootPrimedLocalFetch(t)
+	rc, entered, releaseNow, _ := bootPrimedLocalFetch(t)
 	var query context.Context
 	select {
 	case query = <-entered:
@@ -149,7 +159,7 @@ func TestExplicitLiveLimitsCloseCancelsPrimedFetch(t *testing.T) {
 // only AFTER the abort returned, so any writer the abort failed to join
 // lands its write exactly then.
 func TestSandboxAbortClosesLiveLimitsBeforeReturn(t *testing.T) {
-	rc, entered, releaseNow := bootPrimedLocalFetch(t)
+	rc, entered, releaseNow, _ := bootPrimedLocalFetch(t)
 	var query context.Context
 	select {
 	case query = <-entered:
@@ -188,6 +198,71 @@ func TestSandboxAbortClosesLiveLimitsBeforeReturn(t *testing.T) {
 	// teardown closes must stay idempotent — never a double-close panic.
 	require.NotPanics(t, func() {
 		rc.liveLimits.Close()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootAbortDrainTimeout)
+		defer stopCancel()
+		rc.stopBootBackgroundWriters(stopCtx)
+	})
+}
+
+// TestSharedCleanupClosesLiveLimitsBeforeReturn is CHECK 3 (2026-11-08)
+// finding R1's regression: the shared non-reload teardown drained the boot
+// WaitGroup and the catalog/orphan-GC handles but never closed the RETAINED
+// LiveLimits instance, so a primer fetch held mid-flight stayed live past
+// the return and wrote cache/model_limits.json the moment its answer was
+// released — into a home the caller already treats as removed. The services
+// value carries the exact three attachments startServices makes
+// (gateway.go::startServices: LiveLimits + the boot cancel/done handles),
+// and the oracle is the actual cache file, exactly as in the sandbox-abort
+// regression above; the fetch-exit witness additionally pins the JOIN (a
+// close that fired but was not awaited would cancel the answer away while
+// leaving the writer unjoined at the boundary). Reload is excluded by the
+// same !isReload guard that excludes every boot writer — the process-lifetime
+// instance survives reload (gateway_reload.go r17 TK-30) — and the later
+// teardown closes stay idempotent (agent.LiveLimits.Close is once-guarded).
+func TestSharedCleanupClosesLiveLimitsBeforeReturn(t *testing.T) {
+	rc, entered, releaseNow, fetchExited := bootPrimedLocalFetch(t)
+	var query context.Context
+	select {
+	case query = <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("instrument: the real unknown-window primer did not start the local live-limit fetch")
+	}
+
+	// The exact production attachment startServices makes.
+	rs := &services{
+		LiveLimits:           rc.liveLimits,
+		bootBackgroundCancel: rc.bootBackgroundCancel,
+		bootBackgroundDone:   rc.bootBackgroundDone,
+	}
+	stopAndCleanupServices(rs, 5*time.Second, false)
+
+	if !rc.liveLimits.Closed() {
+		t.Error("shared non-reload cleanup returned with the retained live-limits instance still open")
+	}
+	select {
+	case <-query.Done():
+	default:
+		t.Error("shared non-reload cleanup returned with the primer-started live-limit query still active")
+	}
+	select {
+	case <-fetchExited:
+	default:
+		t.Error("shared non-reload cleanup returned before the held fetch's HTTP edge exited: the live-limits writer was not joined")
+	}
+
+	// Release the held answer only after the cleanup returned.
+	releaseNow()
+	rc.liveLimits.Wait()
+	data, readErr := os.ReadFile(rc.liveLimits.CachePath())
+	if readErr == nil {
+		t.Errorf("real boot writer persisted cache after the shared cleanup returned: %s", data)
+	} else {
+		require.ErrorIs(t, readErr, os.ErrNotExist)
+	}
+
+	// Double close stays safe: the cleanup already closed the rung; the later
+	// teardown close must stay idempotent — never a double-close panic.
+	require.NotPanics(t, func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootAbortDrainTimeout)
 		defer stopCancel()
 		rc.stopBootBackgroundWriters(stopCtx)

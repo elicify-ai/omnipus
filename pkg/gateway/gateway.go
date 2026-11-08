@@ -161,6 +161,9 @@ type services struct {
 	CronService          *cron.CronService
 	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
 	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
+	// Both drains close it: the graceful shutdown's stopBackgroundWriters and
+	// the shared non-reload teardown's drainBootBackgroundWriters (CHECK 3
+	// finding R1, 2026-11-08); the reload teardown must not.
 	LiveLimits *agent.LiveLimits
 	// catalogRefreshCancel / catalogRefreshDone are startCatalogRefreshLoop's
 	// handles; shutdown cancels, then waits on done (bounded).
@@ -2076,8 +2079,10 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	// stopBackgroundWriters drains: the provider-catalog refresh loop (cancel
 	// + join — its startup pull writes providers_catalog.json at homePath and
 	// raced t.TempDir removal), the browser cache-trim schedule, the
-	// managed-Chromium preprovision download and the library orphan-GC
-	// goroutine (whose boot pass repairs associations under workspaces/).
+	// managed-Chromium preprovision download, the library orphan-GC
+	// goroutine (whose boot pass repairs associations under workspaces/) and
+	// the retained live-limits instance (close + join — the unknown-window
+	// primer's fetch boundary; CHECK 3 finding R1, 2026-11-08).
 	// RELOAD MUST NOT STOP THEM — same rule as the channel manager and the
 	// knowledge lifecycle above: reload restarts into the same process with
 	// these loops still live, and nothing here reconstructs them.
@@ -2088,16 +2093,42 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 
 // drainBootBackgroundWriters cancels and joins the background writers that
 // outlive the services they were started by: the provider-catalog refresh
-// loop, the boot-stage browser/preprovision/prime goroutines and the media
-// orphan-GC goroutine. Every handle is nil-safe — a services object built by
-// a harness that never started a given writer has nothing to drain. Waits
-// are bounded by ctx, mirroring stopBackgroundWriters' budgeted waits.
+// loop, the boot-stage browser/preprovision/prime goroutines, the media
+// orphan-GC goroutine and the retained live-limits instance. Every handle is
+// nil-safe — a services object built by a harness that never started a given
+// writer has nothing to drain. Waits are bounded by ctx, mirroring
+// stopBackgroundWriters' budgeted waits.
 func drainBootBackgroundWriters(ctx context.Context, rs *services) {
 	if rs == nil {
 		return
 	}
 	// Cancel everything first, then join, so the writers settle concurrently
 	// instead of serializing their exit waits.
+	//
+	// The retained LiveLimits instance joins the same scheme (CHECK 3 finding
+	// R1, 2026-11-08): the non-reload teardown used to drain the three
+	// goroutine handles but never Close the instance, so a fetch the
+	// unknown-window primer (or a settings write) had started stayed live
+	// past the return and wrote cache/model_limits.json when its answer
+	// landed afterwards. Close IS LiveLimits' cancel and join in one — it
+	// aborts every in-flight fetch and then waits for the writer goroutine —
+	// so it runs on its own goroutine here and is awaited with the other
+	// joins below. It is once-guarded (agent.LiveLimits.Close), so a drain
+	// racing the graceful shutdown's close or the boot-abort paths'
+	// stopBootBackgroundWriters close stays idempotent, never a double-close
+	// panic. Reload never reaches this drain (the !isReload guard in
+	// stopAndCleanupServices), so the process-lifetime instance survives a
+	// reload untouched, exactly like the channel manager and the knowledge
+	// lifecycle above.
+	var liveLimitsClosed <-chan struct{}
+	if rs.LiveLimits != nil {
+		closed := make(chan struct{})
+		go func() {
+			rs.LiveLimits.Close()
+			close(closed)
+		}()
+		liveLimitsClosed = closed
+	}
 	if rs.catalogRefreshCancel != nil {
 		rs.catalogRefreshCancel()
 	}
@@ -2115,6 +2146,9 @@ func drainBootBackgroundWriters(ctx context.Context, rs *services) {
 	}
 	if rs.orphanGCDone != nil {
 		waitBootBackgroundDone(ctx, rs.orphanGCDone, "media library orphan-GC goroutine")
+	}
+	if liveLimitsClosed != nil {
+		waitBootBackgroundDone(ctx, liveLimitsClosed, "live model-limits close")
 	}
 }
 
