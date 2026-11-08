@@ -304,7 +304,9 @@ func (s *FileMediaStore) forwardToSuccessors(ref, localPath string, meta MediaMe
 // lifetime instead of expiring with its original scope (for example the
 // person's upload). The ref ID, path and metadata do not change. Returns
 // ErrNotFound when ref is not registered, e.g. it expired before the pin. The
-// change is persisted and forwarded down the handover chain like Store.
+// change is persisted and forwarded down the handover chain like Store: on
+// success every successor, including the live store users are served from,
+// holds ref pinned.
 func (s *FileMediaStore) PinRef(ref, scope string) error {
 	if !isPinnedScope(scope) {
 		return fmt.Errorf("media store: pin %s: scope %q is not a pinned scope", ref, scope)
@@ -312,16 +314,28 @@ func (s *FileMediaStore) PinRef(ref, scope string) error {
 	if err := s.pinRef(ref, scope); err != nil {
 		return err
 	}
+	s.mu.RLock()
+	entry, ok := s.refs[ref]
+	s.mu.RUnlock()
+	if !ok {
+		// Released between the pin and this read: nothing is left to send.
+		return fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
 	s.scheduleSave()
 	s.succMu.Lock()
 	succ := s.successor
 	s.succMu.Unlock()
 	for succ != nil {
-		// pinRef's only error is ErrNotFound: a successor that never received
-		// this ref has nothing to pin.
-		if err := succ.pinRef(ref, scope); err == nil {
-			succ.scheduleSave()
+		if err := succ.pinRef(ref, scope); err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("media store: pin %s in successor: %w", ref, err)
+			}
+			// The successor no longer holds ref (its copy expired after the
+			// handover): forward the complete registration, pinned, as Store
+			// does, so the ref this store reports resolves in the live store.
+			succ.storeRef(ref, entry.path, entry.meta, scope)
 		}
+		succ.scheduleSave()
 		succ.succMu.Lock()
 		next := succ.successor
 		succ.succMu.Unlock()
