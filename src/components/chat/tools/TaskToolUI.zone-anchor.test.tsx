@@ -231,3 +231,62 @@ describe('end date — a repeating schedule names its end date in the trigger zo
     expect(card.textContent ?? '').not.toMatch(RAW_RULE_RE)
   })
 })
+
+// ── Round 5 / D9 — one sentence: the run time and zone, then the end date ───
+//
+// CHECK round 2, developer note 3: the line is built by appending the run's
+// clock time after the recurrence helper's end-date clause, so a schedule
+// that ends on 10 November reads "…, ends November 10, 2026 at 09:00 (Los
+// Angeles time)". That reads as a 09:00 cut-off, but FR-006a (see the D2
+// block above) means the rule ends at 23:59:59 on the end date; and on a
+// weekly rule the last run may not even fall on that date. Team-lead decision
+// D9 (2026-11-08): the run time comes BEFORE the zone, the end date carries NO
+// clock time, and the line is the sentence
+//   "Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026."
+// The same fixture values as the D2 rows are used (Los Angeles DTSTART 9 Nov
+// 09:00 PST, UNTIL 10 Nov 23:59:59 PST; Auckland DTSTART 11 Nov 09:00 NZDT,
+// UNTIL 11 Nov 23:59:59 NZDT); both are daily rules, so the frequency words
+// are the same in both lines and only the zone name and end date change.
+// The whole line is pinned with toBe (trailing full stop included, as quoted
+// in the decision): the loose D2 regexes above cannot tell the two orders
+// apart — "ends November 10, 2026" is a substring of both.
+describe('D9 — a repeating schedule with an end date reads run time and zone first, the end date last', () => {
+  const LA = { zone: 'America/Los_Angeles', dtstart: Date.UTC(2026, 10, 9, 17, 0, 0), until: '20261111T075959Z' }
+  const AUCKLAND = { zone: 'Pacific/Auckland', dtstart: Date.UTC(2026, 10, 10, 20, 0, 0), until: '20261111T105959Z' }
+
+  function scheduleLineFor(fixture: { zone: string; dtstart: number; until: string }): string {
+    render(
+      <TaskToolCardBlock
+        toolName="create_task"
+        args={{
+          title: 'Daily report',
+          trigger: {
+            type: 'recurring',
+            config: { rrule: `FREQ=DAILY;UNTIL=${fixture.until}`, dtstart_ms: fixture.dtstart, tz: fixture.zone },
+          },
+        }}
+        result={JSON.stringify({ task_id: 'task_1', status: 'inbox' })}
+        status={{ type: 'complete' }}
+      />,
+    )
+    return (screen.getByTestId('task-tool-schedule').textContent ?? '').trim()
+  }
+
+  it('a Los Angeles daily schedule ending 10 November reads exactly "Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026."', () => {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
+    expect(scheduleLineFor(LA)).toBe('Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026.')
+  })
+
+  it('control, zone east of UTC: an Auckland daily schedule ending 11 November reads exactly "Repeats every day at 09:00 (Auckland time), ends November 11, 2026."', () => {
+    expect(scheduleLineFor(AUCKLAND)).toBe('Repeats every day at 09:00 (Auckland time), ends November 11, 2026.')
+  })
+
+  it('the end date carries no clock time: no "at HH:MM" follows "ends"', () => {
+    const line = scheduleLineFor(LA)
+    // The run time appears exactly once, before the zone; nothing after the
+    // end date but the closing full stop.
+    expect(line.match(/\d{1,2}:\d{2}/g) ?? []).toEqual(['09:00'])
+    expect(line).not.toMatch(/ends[^.]*\bat\b/)
+    expect(line).toMatch(/ends November 10, 2026\.$/)
+  })
+})

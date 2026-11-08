@@ -444,10 +444,16 @@ describe('case (h) — failed or refused call', () => {
     // RED today: the failure is a bare styled <p> with no role.
     expect(screen.getByRole('alert').textContent ?? '').toContain('Nothing was created')
     // …and nothing presents the call as a success: no schedule line, no
-    // links, no readable verb.
+    // readable verb.
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
-    expect(screen.queryByTestId('task-tool-link-open')).toBeNull()
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
+    // Round 5 / D8 REPLACES the round-4 assertion that stood here
+    // (`queryByTestId('task-tool-link-open')` is null): team-lead decision D8
+    // (2026-11-08) says a call that came back with a KNOWN reason — this
+    // refusal text is one — keeps the "Open tasks" link as the way forward.
+    // The link is expected because ARGS_CREATE carries workspace_id. The
+    // no-reason failure (the D5 rows below) is unchanged and still has no link.
+    expect(screen.getByTestId('task-tool-link-open')).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
   })
 
   // Round 4 / D5 + D7: a bare error (no result, no error text) says so IN THE
@@ -475,6 +481,111 @@ describe('case (h) — failed or refused call', () => {
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
     expect(screen.queryByTestId('task-tool-link-open')).toBeNull()
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
+  })
+})
+
+// ── Round 5 / D8 — a failed call with a KNOWN reason ────────────────────────
+//
+// Team-lead decisions D5 (reaffirmed) and D8 (2026-11-08), the oracle for
+// every row here:
+//  - D5: "I couldn't <verb> the task, and no reason was given. Try again."
+//    appears ONLY when no reason exists anywhere. A reason counts when it is a
+//    string result, a {text} result, the call's error field, or the `reason`
+//    of a generated structured tool failure (delegation_denied).
+//  - D8: with a known reason the card shows "I couldn't <verb> the task.
+//    <reason>" — verb create / update / start / delete, reason the received
+//    text UNCHANGED — keeps the "Open tasks" link, and the alert stays
+//    role="alert".
+// This file calls the CAPTURED render function with {args, result, status,
+// isError}; the end-to-end carriers (REST history, the live adapter) are
+// pinned in TaskToolUI.rest-history.test.tsx and TaskToolUI.live-failure.
+// test.tsx. Each reason below has a lower-case start, an id, quotes or a
+// trailing full stop, so a card that capitalises, trims, hides or rewrites it
+// fails. The link is expected where the call's args carry workspace_id (the
+// card builds the link from it); real run_task / delete_task args carry only
+// task_id, so their rows assert the sentence alone.
+describe('Round 5 / D8 — a failed call with a known reason', () => {
+  const NO_REASON_RE = /no reason was given/i
+  const SUCCESS_HEADING_RE = /^(I (scheduled|created|updated|started|deleted) the task|The task is already running)$/
+  const WORKSPACE_LINK = '/workspaces/ws_1/chat?panel=tasks'
+
+  function expectKnownReasonFailure(verb: string, reason: string, opts: { link: boolean }): void {
+    const sentence = screen.getByText(`I couldn't ${verb} the task. ${reason}`)
+    expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D7/D8)').not.toBeNull()
+    if (opts.link) {
+      const open = screen.getByTestId('task-tool-link-open')
+      expect((open.textContent ?? '').trim()).toBe('Open tasks')
+      expect(open).toHaveAttribute('href', WORKSPACE_LINK)
+    }
+    // D5: a call that has a reason never claims it has none.
+    expect(screen.queryByText(NO_REASON_RE)).toBeNull()
+    // Never a success card, never a success heading.
+    expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
+    expect(screen.queryByText(SUCCESS_HEADING_RE)).toBeNull()
+  }
+
+  const KNOWN_REASON_ROWS: Array<{ tool: string; verb: string; args: unknown; reason: string; link: boolean }> = [
+    { tool: 'create_task', verb: 'create', args: ARGS_CREATE, reason: 'agent "agent_zz" is not a member of this workspace.', link: true },
+    { tool: 'update_task', verb: 'update', args: ARGS_UPDATE, reason: 'task not found: task_99', link: true },
+    {
+      tool: 'run_task',
+      verb: 'start',
+      args: ARGS_RUN,
+      reason: 'task "task_99" is blocked on an unmet dependency; it becomes runnable automatically once its blockers complete',
+      link: false,
+    },
+    { tool: 'delete_task', verb: 'delete', args: ARGS_DELETE, reason: 'Task task_99 was already deleted', link: false },
+  ]
+
+  it.each(KNOWN_REASON_ROWS)(
+    '$tool: a string result that is a reason is shown after "I couldn\'t $verb the task."',
+    ({ tool, verb, args, reason, link }) => {
+      renderTaskTool(tool, args, reason, { isError: true })
+      expectKnownReasonFailure(verb, reason, { link })
+    },
+  )
+
+  it.each(KNOWN_REASON_ROWS)(
+    '5a, $tool: a reason carried only in a {text} result gets the same D8 framing',
+    ({ tool, verb, args, reason, link }) => {
+      renderTaskTool(tool, args, { text: reason }, { isError: true })
+      expectKnownReasonFailure(verb, reason, { link })
+    },
+  )
+
+  it('5a: a {text}-only reason also frames when the part is merely incomplete (status error, no isError)', () => {
+    renderTaskTool('run_task', ARGS_RUN, { text: 'task "task_99" not found' }, {
+      status: { type: 'incomplete', reason: 'error' },
+    })
+    expectKnownReasonFailure('start', 'task "task_99" not found', { link: false })
+  })
+
+  it('D5: the reason field of a structured delegation_denied failure counts as a reason', () => {
+    // Shaped by the generated DelegationFailure contract (asyncapi.yaml) and
+    // pkg/tools/result.go::DelegationDeniedResult — not by the card's code.
+    const denial = {
+      error: 'delegation_denied',
+      reason: 'Scout is not in your trust set, so you cannot start its task.',
+      policy: 'trust_set',
+      tool: 'run_task',
+      target_agent_id: 'scout',
+    }
+    renderTaskTool('run_task', { ...ARGS_RUN, workspace_id: 'ws_1' }, denial, { isError: true })
+    expectKnownReasonFailure('start', denial.reason, { link: true })
+  })
+
+  it('D5 control: with no reason anywhere the no-reason sentence is still shown (the checks above can tell the two apart)', () => {
+    renderTaskTool('update_task', ARGS_UPDATE, undefined, { isError: true })
+    const alert = screen.getByRole('alert')
+    expect((alert.textContent ?? '').trim()).toBe("I couldn't update the task, and no reason was given. Try again.")
+    expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
+  })
+
+  it('D5 control: a {text} result that is only whitespace is not a reason — the no-reason sentence is still shown', () => {
+    renderTaskTool('update_task', ARGS_UPDATE, { text: '   ' }, { isError: true })
+    const alert = screen.getByRole('alert')
+    expect((alert.textContent ?? '').trim()).toBe("I couldn't update the task, and no reason was given. Try again.")
+    expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
   })
 })
 

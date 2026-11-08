@@ -206,7 +206,14 @@ describe('case (f) — history replay renders the same readable card', () => {
     // semantics on replay too. RED today: no role="alert" exists.
     expect(screen.getByRole('alert').textContent ?? '').toContain('Nothing was created')
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
-    expect(screen.queryByTestId('task-tool-link-open')).toBeNull()
+    // Round 5 / D8 REPLACES the round-4 assertion that stood here
+    // (`queryByTestId('task-tool-link-open')` is null): team-lead decision D8
+    // (2026-11-08) says a call that came back with a KNOWN reason — this
+    // refusal text, carried in the call's error field, is one — keeps the
+    // "Open tasks" link as the way forward. The link is expected because
+    // ARGS_CREATE carries workspace_id. The no-reason failure is a different
+    // case and is not touched by this change.
+    expect(screen.getByTestId('task-tool-link-open')).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
   })
 
@@ -236,5 +243,111 @@ describe('case (f) — history replay renders the same readable card', () => {
     render(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
     const card = screen.getByTestId('task-tool-card')
     expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I scheduled the task')
+  })
+})
+
+// ── Round 5 / D8 — a replayed failed call with a KNOWN reason ───────────────
+//
+// Team-lead decisions D5 (reaffirmed) and D8 (2026-11-08) are the oracle:
+//  - D5: the no-reason sentence appears ONLY when no reason exists anywhere. A
+//    reason counts when it is the call's error field, a string result, a
+//    {text} result, or the `reason` of a generated structured tool failure
+//    (delegation_denied).
+//  - D8: with a known reason the card shows "I couldn't <verb> the task.
+//    <reason>" (verb create / update / start / delete; reason UNCHANGED), keeps
+//    the "Open tasks" link, and the alert stays role="alert".
+// This file stays on ToolCallBadge (the replay badge). The saved-history
+// dispatcher and the REST adapter are pinned in TaskToolUI.historical.test.tsx
+// and TaskToolUI.rest-history.test.tsx. The link is expected where the call's
+// params carry workspace_id (the card builds it from there); real run_task and
+// delete_task params carry only task_id, so those rows assert the sentence.
+describe('Round 5 / D8 — a replayed failed call with a known reason', () => {
+  const NO_REASON_RE = /no reason was given/i
+  const SUCCESS_HEADING_RE = /^(I (scheduled|created|updated|started|deleted) the task|The task is already running)$/
+
+  const ROWS: Array<{ tool: string; verb: string; params: Record<string, unknown>; reason: string; link: boolean }> = [
+    {
+      tool: 'create_task',
+      verb: 'create',
+      params: ARGS_CREATE,
+      reason: 'agent "agent_zz" is not a member of this workspace.',
+      link: true,
+    },
+    { tool: 'update_task', verb: 'update', params: ARGS_UPDATE, reason: 'task not found: task_99', link: true },
+    {
+      tool: 'run_task',
+      verb: 'start',
+      params: { task_id: 'task_1' },
+      reason: 'task "task_1" is blocked on an unmet dependency; it becomes runnable automatically once its blockers complete',
+      link: false,
+    },
+    {
+      tool: 'delete_task',
+      verb: 'delete',
+      params: { task_id: 'task_1' },
+      reason: 'Task task_1 was already deleted',
+      link: false,
+    },
+  ]
+
+  function expectKnownReasonFailure(verb: string, reason: string, opts: { link: boolean }): void {
+    const sentence = screen.getByText(`I couldn't ${verb} the task. ${reason}`)
+    expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D7/D8)').not.toBeNull()
+    if (opts.link) {
+      const open = screen.getByTestId('task-tool-link-open')
+      expect((open.textContent ?? '').trim()).toBe('Open tasks')
+      expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
+    }
+    // D5: a call that has a reason never claims it has none.
+    expect(screen.queryByText(NO_REASON_RE)).toBeNull()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
+    expect(screen.queryByText(SUCCESS_HEADING_RE)).toBeNull()
+  }
+
+  it.each(ROWS)('$tool: a stored error field is shown after "I couldn\'t $verb the task."', ({ tool, verb, params, reason, link }) => {
+    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', error: reason, result: undefined })} />)
+    expectKnownReasonFailure(verb, reason, { link })
+  })
+
+  it.each(ROWS)('5a, $tool: a reason carried only in a {text} result gets the same framing', ({ tool, verb, params, reason, link }) => {
+    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: { text: reason } })} />)
+    expectKnownReasonFailure(verb, reason, { link })
+  })
+
+  it.each(ROWS)('$tool: a reason carried as a string result gets the same framing', ({ tool, verb, params, reason, link }) => {
+    render(<ToolCallBadge toolCall={makeTaskCall({ tool, params, status: 'error', result: reason })} />)
+    expectKnownReasonFailure(verb, reason, { link })
+  })
+
+  it('D5: the reason field of a structured delegation_denied failure counts as a reason', () => {
+    // Shaped by the generated DelegationFailure contract (asyncapi.yaml) and
+    // pkg/tools/result.go::DelegationDeniedResult — not by the card's code.
+    const denial = {
+      error: 'delegation_denied',
+      reason: 'Scout is not in your trust set, so you cannot start its task.',
+      policy: 'trust_set',
+      tool: 'run_task',
+      target_agent_id: 'scout',
+    }
+    render(
+      <ToolCallBadge
+        toolCall={makeTaskCall({
+          tool: 'run_task',
+          params: { task_id: 'task_1', workspace_id: 'ws_1' },
+          status: 'error',
+          result: denial,
+        })}
+      />,
+    )
+    expectKnownReasonFailure('start', denial.reason, { link: true })
+  })
+
+  it('D5 control: with no error and no result the no-reason sentence is still shown (the checks above can tell the two apart)', () => {
+    render(<ToolCallBadge toolCall={makeTaskCall({ tool: 'update_task', params: ARGS_UPDATE, status: 'error', result: undefined })} />)
+    expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(
+      "I couldn't update the task, and no reason was given. Try again.",
+    )
+    expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
   })
 })
