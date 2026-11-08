@@ -66,12 +66,12 @@ func loadStoredDelegationEdges(t *testing.T, home, id string) []storedDelegation
 // with real entity records via agentstore.Create — the in-memory
 // cfg.Agents.List construction below (required for mustAgentLoop/registry
 // construction) is unchanged.
-// buildWorkspaceDelegationTestAPI builds the REST harness with an EXPLICIT
-// operator cap of 3 (performance.max_delegation_depth=3): every test using it
-// exercises the configured-cap path, never the shipped default. Tests for the
-// shipped default call buildWorkspaceDelegationTestAPIWithPerf(t, 0) — the
-// config deliberately left unset — so the handlers resolve the shipped
-// default themselves.
+//
+// The harness uses an EXPLICIT operator cap of 3 (performance.max_delegation_depth=3):
+// every test calling buildWorkspaceDelegationTestAPI exercises the configured-cap
+// path, never the shipped default. Tests for the shipped default call
+// buildWorkspaceDelegationTestAPIWithPerf(t, 0) — the config deliberately left
+// unset — so the handlers resolve the shipped default themselves.
 func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 	t.Helper()
 	return buildWorkspaceDelegationTestAPIWithPerf(t, 3)

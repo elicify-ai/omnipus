@@ -164,8 +164,8 @@ exists to fix.*
 ### B2 — Too deep is refused, clearly, before any work starts
 
 **Setup.** Read the depth cap from Lane P (default is **10**). Create one more level
-than the cap: with a cap of 3, create `uat-b-d1` … `uat-b-d4`, each permitted to
-delegate to the next.
+than the cap: for a configured cap of 3, create `uat-b-d1` … `uat-b-d4`, each permitted
+to delegate to the next; with the default (10) you need 11 levels (`uat-b-d1` … `uat-b-d11`).
 
 **Steps.**
 1. Open a chat with `uat-b-d1`.

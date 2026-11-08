@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // TestDelegationDepthCeilingFallbackPin_IsTen pins the gateway's mirror of
@@ -64,28 +66,58 @@ func TestWorkspaceDelegation_PutRoundTrip_UnsetConfigShipsTen(t *testing.T) {
 		"an inherit edge must still be inherit after the round-trip")
 }
 
-// TestWorkspaceDelegation_ExplicitDepthThreePersists: a workspace saved with
-// an explicit depth of 3 (operator data, here via the fixture's explicit
-// configured cap and an edge depth of 3) keeps 3 — reading it back and a PUT
-// round-trip must never rewrite operator data to the shipped default 10.
+// TestWorkspaceDelegation_ExplicitDepthThreePersists: operator data saved with
+// an explicit edge depth of 3 keeps 3 when the RESOLVED default is the shipped
+// 10. The fixture leaves performance.max_delegation_depth UNSET, so "kept 3"
+// can only come from preserving the stored value — a fixture cap of 3 would
+// make a regression that rewrites a saved 3 to the resolved default invisible
+// (the default would be 3 too; mutation-verified). The delegation store is
+// seeded directly BEFORE the first read, so both the plain read-back and a PUT
+// round-trip must preserve the operator's 3, while default_depth keeps
+// exposing the shipped 10 — never the stored edge depth, never an upgrade of
+// operator data to the shipped default.
 func TestWorkspaceDelegation_ExplicitDepthThreePersists(t *testing.T) {
-	api, id := buildWorkspaceDelegationTestAPI(t) // fixture cap: explicit 3
+	api, id := buildWorkspaceDelegationTestAPIWithPerf(t, 0) // cap UNSET → default_depth is the shipped 10
+	seed := []storedDelegationEdge{{
+		FromAgent: "jim",
+		ToAgent:   "ava",
+		Modes:     []workspace.DelegationMode{workspace.ModeDirect},
+		Depth:     intPtrGW(3),
+	}}
+	require.NoError(t, saveWorkspaceDelegation(api.homePath, id, seed),
+		"seed the delegation store BEFORE the first read, so the GET below serves persisted operator data")
+
+	// First read: the stored explicit 3 comes back unchanged, and default_depth
+	// exposes the shipped 10 — the stored 3 is neither promoted to the default
+	// nor rewritten to it.
+	w := getDelegation(t, api, id)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	got := decodeDelegation(t, w.Body.Bytes())
+	require.Len(t, got.Edges, 1)
+	require.NotNil(t, got.Edges[0].Depth)
+	assert.Equal(t, 3, *got.Edges[0].Depth,
+		"the stored explicit edge depth 3 must survive a read back unchanged")
+	assert.Equal(t, 10, got.DefaultDepth,
+		"default_depth must expose the shipped default 10, never the stored edge depth")
+
+	// PUT round-trip: resubmitting the explicit graph keeps 3, still against a
+	// default_depth of 10 — the explicit 3 is operator data, not the default.
 	body := `{"edges":[{"from_agent":"jim","to_agent":"ava","modes":["direct"],"depth":3}]}`
-	w := putDelegation(t, api, id, body)
+	w = putDelegation(t, api, id, body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	put := decodeDelegation(t, w.Body.Bytes())
 	require.Len(t, put.Edges, 1)
 	require.NotNil(t, put.Edges[0].Depth)
 	assert.Equal(t, 3, *put.Edges[0].Depth,
 		"explicit edge depth 3 must survive the PUT response unchanged")
-	assert.Equal(t, 3, put.DefaultDepth,
-		"the explicit configured cap 3 must be exposed, not upgraded to the shipped default")
+	assert.Equal(t, 10, put.DefaultDepth,
+		"the PUT response must expose the shipped default 10, not upgrade the edge depth into the default")
 
-	got := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
-	require.Len(t, got.Edges, 1)
-	require.NotNil(t, got.Edges[0].Depth)
-	assert.Equal(t, 3, *got.Edges[0].Depth,
-		"explicit edge depth 3 must survive a read back unchanged")
-	assert.Equal(t, 3, got.DefaultDepth,
-		"the explicit configured cap 3 must survive a read back")
+	got2 := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
+	require.Len(t, got2.Edges, 1)
+	require.NotNil(t, got2.Edges[0].Depth)
+	assert.Equal(t, 3, *got2.Edges[0].Depth,
+		"explicit edge depth 3 must survive the PUT round-trip unchanged")
+	assert.Equal(t, 10, got2.DefaultDepth,
+		"GET after the PUT must still expose the shipped default 10")
 }
