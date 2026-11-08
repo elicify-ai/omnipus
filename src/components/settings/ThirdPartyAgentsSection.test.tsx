@@ -201,6 +201,34 @@ describe('FR-6: rows, pre-fill and free parameters', () => {
 })
 
 describe('FR-7: whole-section save and failures', () => {
+  // §4 permits detection pre-fill only for an UNTOUCHED field. U-6's
+  // intentional clear must survive later whole-section saves too.
+  it.each(['detected only', 'saved and detected'])('keeps a cleared %s program empty when another CLI row is saved', async (initial) => {
+    if (initial === 'saved and detected') stored.clis.codex.path = '/opt/homebrew/bin/codex'
+    renderSection(); await loaded()
+    expect(codexPathInput()).toHaveValue('/opt/homebrew/bin/codex')
+    fireEvent.change(codexPathInput(), { target: { value: '' } })
+    fireEvent.click(saveButton())
+    await waitFor(expectSavedToast)
+    expect(putCalls()).toHaveLength(1)
+    expect(JSON.parse(putCalls()[0].body ?? '')).toEqual(expectedSave(''))
+    expect(stored.clis.codex.path).toBe('')
+    expect(stored.clis.codex.detected).toEqual(CODEX_DETECT)
+
+    useUiStore.setState({ toasts: [] })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Claude Code parameters' }), {
+      target: { value: '--max-turns 41' },
+    })
+    fireEvent.click(saveButton())
+    await waitFor(expectSavedToast)
+    expect(putCalls()).toHaveLength(2)
+    const secondSave: ThirdPartyAgentSettings = { clis: {
+      ...expectedSave('').clis,
+      'claude-code': { path: '/Users/me/bin/claude', preset_args: '--max-turns 41' },
+    } }
+    expect(JSON.parse(putCalls()[1].body ?? '')).toEqual(secondSave)
+    expect(checkCalls()).toEqual([])
+  })
   it('sends one PUT containing all three rows exactly as typed', async () => {
     renderSection(); await loaded()
     fireEvent.change(codexParams(), { target: { value: PRESET } })
