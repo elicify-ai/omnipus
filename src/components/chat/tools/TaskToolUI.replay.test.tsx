@@ -32,6 +32,14 @@
  *
  * TEST-ID contract: see TaskToolUI.live-wiring.test.tsx's header — both
  * paths render the SAME test ids, which is how "same card" is asserted here.
+ *
+ * ROUND-4 additions (team-lead decisions on the CHECK FAIL report; oracles
+ * are the decisions and the voice rules, never the card's output): D3's
+ * exact create heading is pinned on the replay path too; D4's warning text
+ * is pinned EXACTLY here as well as live; D6's link copy is pinned beside
+ * the unchanged href assertions; D7's role="alert" failure semantics hold
+ * on replay like live. The REAL saved-history dispatcher pin (D1) lives in
+ * TaskToolUI.historical.test.tsx — this file stays on ToolCallBadge.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -155,6 +163,10 @@ describe('case (f) — history replay renders the same readable card', () => {
       'href',
       '/workspaces/ws_1/calendar',
     )
+    // Round 4 / D6 parity: the copy names the destination, live and replay.
+    // RED today: "Open task" / "Show in Calendar".
+    expect((within(card).getByTestId('task-tool-link-open').textContent ?? '').trim()).toBe('Open tasks')
+    expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
   })
 
   it('a replayed once trigger shows the VIEWER-local time, not the trigger-zone time (C1 B)', () => {
@@ -190,6 +202,9 @@ describe('case (f) — history replay renders the same readable card', () => {
       />,
     )
     expect(screen.getByText(/Nothing was created/)).toBeTruthy()
+    // Round 4 / D7 parity: the failure carries the catalogued error
+    // semantics on replay too. RED today: no role="alert" exists.
+    expect(screen.getByRole('alert').textContent ?? '').toContain('Nothing was created')
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
     expect(screen.queryByTestId('task-tool-link-open')).toBeNull()
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
@@ -206,7 +221,20 @@ describe('case (f) — history replay renders the same readable card', () => {
       />,
     )
     const card = screen.getByTestId('task-tool-card')
-    expect(within(card).getByTestId('task-tool-schedule-warning')).toBeTruthy()
+    // Round 4 / D4 parity: the warning text is pinned EXACTLY on replay,
+    // matching the live case (d) — an opposite-meaning text fails here too.
+    // RED today: the current copy differs.
+    expect((within(card).getByTestId('task-tool-schedule-warning').textContent ?? '').trim()).toBe(
+      "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again.",
+    )
     expect(within(card).getByTestId('task-tool-verb')).toBeTruthy()
+  })
+
+  it("a replayed create's heading is exactly the scheduled-create heading (D3 parity)", () => {
+    // Round 4 / D3 on the replay path: same exact heading as live for a
+    // create with a schedule. RED today: "Task scheduled".
+    render(<ToolCallBadge toolCall={makeTaskCall({ result: { text: RESULT_CREATE } })} />)
+    const card = screen.getByTestId('task-tool-card')
+    expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I scheduled the task')
   })
 })

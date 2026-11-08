@@ -131,3 +131,103 @@ describe('zone anchor — a repeating schedule reads its calendar words in the t
     expect(card.textContent ?? '').not.toMatch(RAW_RULE_RE)
   })
 })
+
+// ── Round 4 / D2 — the END date is a rule-zone calendar word too ────────────
+//
+// FR-006a (docs/internal/specs/calendar-recurrence-redesign-spec.md):
+// "Ends on date D" means D 23:59:59 IN THE RULE'S ZONE, converted to UTC.
+// Team-lead decision D2 (round 4): the card must show the rule-zone calendar
+// date, never the viewer's — in EITHER direction, hence the west (Los
+// Angeles) RED case and the east (Auckland) control.
+//
+// RED today: recurrence.ts::endConditionClause prints the parsed UNTIL
+// instant through formatMonthDayYear, whose local getters read the VIEWER's
+// zone (parseUntilToken builds the instant in UTC), so a UTC viewer of a Los
+// Angeles schedule ending 10 November reads "ends November 11, 2026" (CHECK
+// F2, reproduced by its diagnostics).
+describe('end date — a repeating schedule names its end date in the trigger zone (FR-006a, D2)', () => {
+  // LA November 2026 is PST (UTC−8); Auckland November 2026 is NZDT (UTC+13).
+  const LA_ZONE = 'America/Los_Angeles'
+  const LA_DTSTART = Date.UTC(2026, 10, 9, 17, 0, 0) // 9 Nov 09:00 in Los Angeles
+  const AK_DTSTART = Date.UTC(2026, 10, 10, 20, 0, 0) // 11 Nov 09:00 in Auckland
+
+  function zonePartsOf(epochMs: number, timeZone: string): Map<string, string> {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(epochMs))
+    return new Map(parts.map((part) => [part.type, part.value]))
+  }
+
+  function renderWithZone(rrule: string, dtstartMs: number, timeZone: string) {
+    render(
+      <TaskToolCardBlock
+        toolName="create_task"
+        args={{
+          title: 'Daily report',
+          trigger: { type: 'recurring', config: { rrule, dtstart_ms: dtstartMs, tz: timeZone } },
+        }}
+        result={JSON.stringify({ task_id: 'task_1', status: 'inbox' })}
+        status={{ type: 'complete' }}
+      />,
+    )
+    const card = screen.getByTestId('task-tool-card')
+    return { card, schedule: screen.getByTestId('task-tool-schedule') }
+  }
+
+  it('fixture instrument: both UNTIL instants are their rule-zone end-of-day boundary', () => {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
+    // UNTIL=20261111T075959Z is 10 Nov 23:59:59 in Los Angeles — the
+    // inclusive end of 10 November there.
+    const la = zonePartsOf(Date.UTC(2026, 10, 11, 7, 59, 59), LA_ZONE)
+    expect(la.get('month')).toBe('11')
+    expect(la.get('day')).toBe('10')
+    expect(la.get('hour')).toBe('23')
+    expect(la.get('minute')).toBe('59')
+    expect(la.get('second')).toBe('59')
+    // UNTIL=20261111T105959Z is 11 Nov 23:59:59 in Auckland — the inclusive
+    // end of 11 November there.
+    const ak = zonePartsOf(Date.UTC(2026, 10, 11, 10, 59, 59), TRIGGER_ZONE)
+    expect(ak.get('month')).toBe('11')
+    expect(ak.get('day')).toBe('11')
+    expect(ak.get('hour')).toBe('23')
+    expect(ak.get('minute')).toBe('59')
+    expect(ak.get('second')).toBe('59')
+  })
+
+  it('a Los Angeles daily schedule ending 10 November reads "ends November 10, 2026" from the UTC viewer', () => {
+    const { card, schedule } = renderWithZone('FREQ=DAILY;UNTIL=20261111T075959Z', LA_DTSTART, LA_ZONE)
+    const text = schedule.textContent ?? ''
+    // The rule-zone end date (FR-006a / D2) — not the viewer-UTC instant's
+    // date (11 November), which is the defect this pins against.
+    expect(text).toMatch(/ends November 10, 2026/)
+    expect(text).not.toMatch(/ends November 11/)
+    // Start-word control (same rule as the round-3 pins): trigger-zone clock.
+    expect(text).toMatch(/(^|\D)0?9[:.]00/)
+    expect(text).not.toMatch(/(^|\D)17[:.]00/)
+    expect(card.textContent ?? '').toMatch(/los angeles/i)
+    // The wire rule never leaks onto the card (T1 A).
+    expect(card.textContent ?? '').not.toMatch(RAW_RULE_RE)
+  })
+
+  it('control, zone east of UTC: an Auckland daily schedule ending 11 November reads "ends November 11, 2026"', () => {
+    // The opposite direction: for a rule zone EAST of the viewer, the
+    // rule-zone end date and the viewer-UTC instant date coincide, so the
+    // correct answer is 11 November — an implementation that "fixed" the west
+    // case by always subtracting a day (or anchoring in some fixed zone) dies
+    // here.
+    const { card, schedule } = renderWithZone('FREQ=DAILY;UNTIL=20261111T105959Z', AK_DTSTART, TRIGGER_ZONE)
+    const text = schedule.textContent ?? ''
+    expect(text).toMatch(/ends November 11, 2026/)
+    expect(text).not.toMatch(/ends November 10/)
+    expect(text).toMatch(/(^|\D)0?9[:.]00/)
+    expect(card.textContent ?? '').toMatch(/auckland/i)
+    expect(card.textContent ?? '').not.toMatch(RAW_RULE_RE)
+  })
+})

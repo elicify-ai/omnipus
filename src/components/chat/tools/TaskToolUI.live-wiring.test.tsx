@@ -44,6 +44,34 @@
  *    task.go create/update/delete, pkg/tools/run_task.go) — the assertions
  *    never depend on those payloads beyond using them as inputs.
  *
+ * ROUND-4 oracles (team-lead decisions D3–D7 on the CHECK FAIL report;
+ * voice rules: /workspace/logs/omnipus-voice-SKILL.md, founder rule
+ * 2026-11-08 — in chat the agent speaks as "I", every failure ends with one
+ * concrete way forward, plain and specific):
+ *  - D3 exact headings per action: create WITH a schedule says
+ *    "I scheduled the task"; create manual/without a trigger says
+ *    "I created the task" and never claims scheduling; update/run/delete say
+ *    "I updated the task" / "I started the task" / "I deleted the task".
+ *    An already-running run_task is distinguishable on the wire TODAY:
+ *    pkg/tools/run_task.go::TaskRunTool.Execute returns
+ *    {"task_id","status","session_id","note":"already running"} for an
+ *    in-progress task — its heading is "The task is already running".
+ *  - D4 the saved-but-not-active warning text is pinned EXACTLY (live and
+ *    replay): "I saved the task, but its schedule isn't active. The saved
+ *    schedule is still the one to use. Open Calendar and save it again."
+ *  - D5 a bare error (no reason given) says so per action:
+ *    "I couldn't create/update/start/delete the task, and no reason was
+ *    given. Try again." When the tool returns a reason, the reason is still
+ *    shown (the existing refusal assertions pin its presence, not wording).
+ *  - D6 the links say "Open tasks" and "Open calendar" (route-truth href
+ *    assertions unchanged).
+ *  - D7 the failure is rendered with the catalogued error semantics:
+ *    role="alert" on the failure region (asserted via getByRole, not a CSS
+ *    class).
+ *  (D1 — the real history dispatcher — lives in
+ *  TaskToolUI.historical.test.tsx; D2 — the end-date zone rule — in
+ *  TaskToolUI.zone-anchor.test.tsx.)
+ *
  * TEST-ID CONTRACT this suite pins (the card's observable interface — the
  * developer implements it; see ta-report.md):
  *   task-tool-card              card root (same on live and replay)
@@ -53,7 +81,8 @@
  *   task-tool-link-open         "open the task" link
  *   task-tool-link-calendar     "show in calendar" link
  * Case (h) asserts visible refusal TEXT, not a test id — the failure
- * presentation is deliberately not over-constrained.
+ * presentation is deliberately not over-constrained. (Round 4 / D7 adds ONE
+ * semantic constraint on top: the failure region carries role="alert".)
  *
  * Vitest pins TZ=UTC and locale en-US for every test (vite.config.ts:264,
  * the repo's zone-sensitive-test pin), so the viewer zone is deterministically
@@ -177,6 +206,16 @@ const RESULT_UPDATE_WARN = JSON.stringify({
     'the trigger was saved on the task, but its schedule could not be re-armed (scheduler unreachable); the saved trigger stays authoritative — re-save the schedule or restart the gateway',
 })
 const RESULT_RUN = JSON.stringify({ task_id: 'task_1', status: 'running', session_id: 'sess_1' })
+// run_task's idempotent re-dispatch result: pkg/tools/run_task.go::
+// TaskRunTool.Execute returns note "already running" (status in_progress)
+// when the task is already in flight — the wire fact D3's second run heading
+// is built on.
+const RESULT_RUN_ALREADY = JSON.stringify({
+  task_id: 'task_1',
+  status: 'in_progress',
+  session_id: 'sess_1',
+  note: 'already running',
+})
 const RESULT_DELETE = JSON.stringify({ deleted: 'task_1' })
 
 // r17 §7.10 refusal text for a foreign-trigger create — case (h) asserts the
@@ -289,6 +328,13 @@ describe('case (c) — manual or missing trigger', () => {
     // schedule only when the task carries one).
     expect(cardText).not.toMatch(/(mon|tues|wednes|thurs|fri|satur|sun)day|repeats|runs once|every/i)
     expect(cardText).not.toMatch(RAW_RULE_RE)
+    // Round 4 / D3 (CHECK F3): an unscheduled create must not ANNOUNCE a
+    // schedule either — its heading is exactly "I created the task" and the
+    // word "schedul" never appears anywhere on the card. RED today: the
+    // heading is "Task scheduled" for every create, which both the exact
+    // equality and the negative reject.
+    expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I created the task')
+    expect(cardText).not.toMatch(/schedul/i)
   })
 })
 
@@ -297,10 +343,15 @@ describe('case (d) — result carrying schedule_sync_warning', () => {
   it('shows the saved-but-not-active warning and stays a success card', () => {
     renderTaskTool('update_task', ARGS_UPDATE, RESULT_UPDATE_WARN)
     const card = screen.getByTestId('task-tool-card')
-    // Presence by test id per the brief (d); the exact user-facing wording is
-    // an open question (r17 §7.11 fixes the MEANING: saved, NOT re-armed).
+    // Round 4 / D4: the warning text is pinned EXACTLY, live and replay, so
+    // an opposite-meaning text ("everything is active — no action needed",
+    // CHECK's surviving p1 mutant) fails. The wording is the team-lead's
+    // decision; the MEANING it protects is r17 §7.11: saved, schedule NOT
+    // active, the saved schedule stays the one to use, one concrete remedy.
     const warning = within(card).getByTestId('task-tool-schedule-warning')
-    expect((warning.textContent ?? '').trim()).not.toBe('')
+    expect((warning.textContent ?? '').trim()).toBe(
+      "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again.",
+    )
     // The update still SUCCEEDED — the card keeps its readable verb (the
     // warning must not turn the card into a failure presentation).
     expect(within(card).getByTestId('task-tool-verb')).toBeTruthy()
@@ -371,6 +422,12 @@ describe('case (g) — card links to the task and the workspace calendar', () =>
       // out is an explicit removal from the tab order.
       expect(link).not.toHaveAttribute('tabindex', '-1')
     }
+    // Round 4 / D6 (voice rules 8/12: the label names the destination): the
+    // first link opens the workspace TASKS PANEL (it does not select a task),
+    // the second the workspace calendar. RED today: "Open task" /
+    // "Show in Calendar". The route-truth href assertions above are unchanged.
+    expect((within(card).getByTestId('task-tool-link-open').textContent ?? '').trim()).toBe('Open tasks')
+    expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
   })
 })
 
@@ -382,6 +439,10 @@ describe('case (h) — failed or refused call', () => {
     renderTaskTool('create_task', ARGS_CREATE, FOREIGN_REFUSAL, { isError: true })
     // The refusal itself is visible (its distinctive spec tail).
     expect(screen.getByText(/Nothing was created/)).toBeTruthy()
+    // Round 4 / D7: the failure carries the catalogued error semantics —
+    // role="alert" on the failure region — and the refusal is what it says.
+    // RED today: the failure is a bare styled <p> with no role.
+    expect(screen.getByRole('alert').textContent ?? '').toContain('Nothing was created')
     // …and nothing presents the call as a success: no schedule line, no
     // links, no readable verb.
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
@@ -389,11 +450,28 @@ describe('case (h) — failed or refused call', () => {
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
   })
 
-  it('a bare error outcome never renders success-card content', () => {
-    renderTaskTool('create_task', ARGS_CREATE, undefined, {
+  // Round 4 / D5 + D7: a bare error (no result, no error text) says so IN THE
+  // AGENT'S VOICE, per action, and always leaves one way forward (voice
+  // rules 1, 7, 8). RED today: one generic "This task action did not
+  // succeed." renders for every action. The old create-only absence
+  // assertions are kept inside the it.each (nothing deleted — strengthened).
+  it.each([
+    ['create_task', ARGS_CREATE, "I couldn't create the task, and no reason was given. Try again."],
+    ['update_task', ARGS_UPDATE, "I couldn't update the task, and no reason was given. Try again."],
+    ['run_task', ARGS_RUN, "I couldn't start the task, and no reason was given. Try again."],
+    ['delete_task', ARGS_DELETE, "I couldn't delete the task, and no reason was given. Try again."],
+  ])('a bare %s error names the action and the missing reason, with one way forward', (tool, args, expected) => {
+    renderTaskTool(tool, args, undefined, {
       isError: true,
       status: { type: 'incomplete', reason: 'error' },
     })
+    // D7: the failure region is the catalogued error presentation (role).
+    const alert = screen.getByRole('alert')
+    // D5: the exact per-action fallback — an action-swapped or generic
+    // string fails.
+    expect((alert.textContent ?? '').trim()).toBe(expected)
+    // …and nothing presents the call as a success: no schedule line, no
+    // links, no readable verb.
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
     expect(screen.queryByTestId('task-tool-link-open')).toBeNull()
     expect(screen.queryByTestId('task-tool-verb')).toBeNull()
@@ -402,23 +480,41 @@ describe('case (h) — failed or refused call', () => {
 
 // ── verbs: each tool renders its own readable verb ──────────────────────────
 describe('readable verb per task tool', () => {
+  // Round 4 / D3: the heading is pinned EXACTLY per action, in the agent's
+  // voice (voice rule 1) — swapping any two actions' headings, or falling
+  // back to the round-1 neutral copy, fails. RED today: every heading is the
+  // old neutral map entry (e.g. "Task scheduled").
   it.each([
-    ['create_task', ARGS_CREATE, RESULT_CREATE],
-    ['update_task', ARGS_UPDATE, RESULT_UPDATE],
-    ['run_task', ARGS_RUN, RESULT_RUN],
-    ['delete_task', ARGS_DELETE, RESULT_DELETE],
-  ])('%s renders a readable verb line', (tool, args, result) => {
+    ['create_task', ARGS_CREATE, RESULT_CREATE, 'I scheduled the task'],
+    ['update_task', ARGS_UPDATE, RESULT_UPDATE, 'I updated the task'],
+    ['run_task', ARGS_RUN, RESULT_RUN, 'I started the task'],
+    ['delete_task', ARGS_DELETE, RESULT_DELETE, 'I deleted the task'],
+  ])('%s renders exactly its own heading', (tool, args, result, expected) => {
     renderTaskTool(tool, args, result)
     const card = screen.getByTestId('task-tool-card')
     const verb = within(card).getByTestId('task-tool-verb')
-    expect((verb.textContent ?? '').trim()).not.toBe('')
+    expect((verb.textContent ?? '').trim()).toBe(expected)
   })
 
-  it("create_task's verb announces scheduling (founder example: \"Task scheduled: …\")", () => {
+  it("create_task's verb announces scheduling for a SCHEDULED create (founder example; D3 exact form above)", () => {
     renderTaskTool('create_task', ARGS_CREATE, RESULT_CREATE)
     const card = screen.getByTestId('task-tool-card')
     const verb = within(card).getByTestId('task-tool-verb')
     expect((verb.textContent ?? '')).toMatch(/schedul/i)
+  })
+
+  it('run_task whose result says "already running" does not claim a new run was started (D3)', () => {
+    // The wire distinguishes the cases TODAY: pkg/tools/run_task.go::
+    // TaskRunTool.Execute returns {"task_id","status","session_id",
+    // "note":"already running"} for an in-progress task (its idempotent
+    // re-dispatch), and a plain payload for a new run. The card must not
+    // imply a new run in that case (CHECK voice inventory, run_task row).
+    // RED today: the heading is "Task run started" for both results.
+    renderTaskTool('run_task', ARGS_RUN, RESULT_RUN_ALREADY)
+    const card = screen.getByTestId('task-tool-card')
+    expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe(
+      'The task is already running',
+    )
   })
 
   it('each of the four tools renders its OWN verb — the four differ', () => {
