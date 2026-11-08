@@ -227,7 +227,7 @@ func TestPreviewScratch_FiftyRunsLeaveNoFoldersOrProcesses(t *testing.T) {
 		require.False(t, processAlive(receipt.PID))
 		c.finish()
 	}
-	entries, err := os.ReadDir(filepath.Join(home, "tmp", "preview"))
+	entries, err := os.ReadDir(filepath.Join(home, "tmp", "preview-calls"))
 	require.NoError(t, err)
 	require.Empty(t, entries)
 }

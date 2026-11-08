@@ -168,11 +168,11 @@ func deadGateway(t *testing.T) (int, string) {
 	cmd := exec.Command("/bin/sleep", "60")
 	require.NoError(t, cmd.Start())
 	pid := cmd.Process.Pid
-	real := mustProcessStart(t, pid)
+	realStart := mustProcessStart(t, pid)
 	require.NoError(t, cmd.Process.Kill())
 	_, _ = cmd.Process.Wait()
 	require.False(t, processAlive(pid), "instrument: the stand-in gateway is dead")
-	return pid, "gone-" + real
+	return pid, "gone-" + realStart
 }
 
 // retireTrustedGateway rewrites the gateway identity on the call folder's

@@ -40,13 +40,28 @@ func cwdReceiptOfficeProcess(withPDF bool) int {
 	return 0
 }
 
+// assertRootHoldsNoCalls is the T-101 oracle after finish: the call root
+// still exists (§3.4 D2's finish removes call folders, never the root) and
+// holds no <id> — no call folder, record or work folder survives. Reading the
+// root's entries is what lets a leaked folder or record fail the test; a
+// NoDirExists on the root itself would pass on any code that leaves it.
+func assertRootHoldsNoCalls(t *testing.T, callRoot string) {
+	t.Helper()
+	entries, err := os.ReadDir(callRoot)
+	require.NoError(t, err, "T-101 §3.4 D2: the call root stays; finish removes call folders, not the root")
+	require.Empty(t, entries,
+		"T-101 §3.4 D2: a finished call leaves no <id> behind — no folder, record or work folder")
+}
+
 // T-101 / §3.4 D2 (B-21, B-22): a normal call leaves NOTHING behind — after
-// success, failure and Stop, the call root holds no <id>. The oracle checks
-// the call folder itself, not only work/, so a leaked record or folder is
-// seen. The live tree's location is proven by the converter's own recorded
-// working folder (success/failure) and by the live folder during the Stop
-// window — on the pre-amendment layout the call tree lives at the old root,
-// which is this test's RED.
+// success, failure and Stop, the call root holds no <id>. Production defers
+// c.finish() in the service (pkg/preview/service.go), so the test calls it in
+// the body before the oracle — at cleanup time the assertions are long over.
+// The oracle checks the call root's entries, not only work/, so a leaked
+// record or folder is seen. The live tree's location is proven by the
+// converter's own recorded working folder (success/failure) and by the live
+// folder during the Stop window — on the pre-amendment layout the call tree
+// lives at the old root, which is this test's RED.
 func TestPreviewCall_LeavesNothingBehind(t *testing.T) {
 	home := t.TempDir()
 	callRoot := filepath.Join(home, "tmp", "preview-calls")
@@ -58,7 +73,8 @@ func TestPreviewCall_LeavesNothingBehind(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, pdf, "instrument: the success call converted")
 		assertCallRanInCallTree(t, c)
-		require.NoDirExists(t, callRoot, "T-101: success leaves no call folder")
+		c.finish()
+		assertRootHoldsNoCalls(t, callRoot)
 	})
 
 	t.Run("failure", func(t *testing.T) {
@@ -67,7 +83,8 @@ func TestPreviewCall_LeavesNothingBehind(t *testing.T) {
 		_, _, err := conv.run(context.Background(), []byte("authorized harmless input"), ".docx")
 		require.Error(t, err, "instrument: the failure call really failed")
 		assertCallRanInCallTree(t, c)
-		require.NoDirExists(t, callRoot, "T-101: failure leaves no call folder")
+		c.finish()
+		assertRootHoldsNoCalls(t, callRoot)
 	})
 
 	t.Run("stop", func(t *testing.T) {
@@ -98,9 +115,8 @@ func TestPreviewCall_LeavesNothingBehind(t *testing.T) {
 		case <-time.After(15 * time.Second):
 			t.Fatal("T-101: the stop did not end the conversion")
 		}
-		require.NoDirExists(t, callRoot, "T-101: a stopped call leaves no call folder behind")
-		leftovers, _ := filepath.Glob(filepath.Join(callRoot, "*", "*"))
-		require.Empty(t, leftovers, "T-101: no record and no work folder survive under a leftover id")
+		c.finish()
+		assertRootHoldsNoCalls(t, callRoot)
 	})
 }
 

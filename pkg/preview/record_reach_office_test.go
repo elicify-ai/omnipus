@@ -191,13 +191,21 @@ func TestPreviewPublish_ReplacedScratchNeverRedirectsGatewayWrites(t *testing.T)
 	require.NoError(t, os.Symlink(E, c.dir))
 	before := scratchOutsideSnapshot(t, outside)
 	require.NoError(t, c.idle(), "instrument: idle publishes after the barrier")
+	// idle's publication keeps the REAL record at the call folder (§3.4 D1):
+	// preparing, launcher cleared. A write through the replaced path would
+	// land in E instead, and E's snapshot below is byte-identical.
+	record, err := readPreviewOwnerAt(t, realRecordDir(t, c))
+	require.NoError(t, err, "T-98: the REAL record (not one written through the link) is the one the gateway updates")
+	require.Equal(t, statePreparing, record.State, "T-98 §3.4 D2: idle publishes preparing on the real record")
+	require.Nil(t, record.Launcher, "T-98 §3.4 D2: idle clears the launcher on the real record")
 	finished = true
 	c.finish()
 	require.Equal(t, before, scratchOutsideSnapshot(t, outside),
 		"T-98: the replaced scratch folder must not redirect a gateway write — E keeps its sentinel and gains no .tmp-* file")
-	record, err := readPreviewOwnerAt(t, realRecordDir(t, c))
-	require.NoError(t, err, "T-98: the REAL record (not one written through the link) is updated")
-	require.Equal(t, stateDone, record.State, "T-98: the real record reaches done")
+	// §3.4 D2's finish removes the record: the removal acted on the REAL
+	// record at the call folder, not on the sentinel through the link.
+	require.NoFileExists(t, filepath.Join(filepath.Dir(c.dir), ownerFile),
+		"T-98 §3.4 D2: finish removes the real record")
 	require.NoDirExists(t, c.dir, "end-of-call cleanup unlinks the replacement")
 }
 
