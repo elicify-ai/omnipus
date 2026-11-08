@@ -78,8 +78,8 @@ func (a *restAPI) handleKnowledgeViews(w http.ResponseWriter, r *http.Request, w
 	// them a view naming a type or property the vault no longer declares
 	// loads clean and queries nothing. With them it is reported unservable —
 	// which is the honest answer this surface exists to give.
-	// The Library listing's include_views rows load through the same
-	// loadKnowledgeViewSet, so the two surfaces list the same views (#1017 L4).
+	// The Library listing's include_views rows use the same parser and schema
+	// check (loadListingViewSet), reading only through a root at the collection.
 	views, report, loadErr := loadKnowledgeViewSet(col.Root)
 	if loadErr != nil {
 		logger.ErrorCF("rest", "knowledge: loading saved views for the views list",

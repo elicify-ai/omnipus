@@ -1253,7 +1253,7 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "list")
 	}
 
-	return formatDirEntries(handle, entries, int(offset), int(limit))
+	return formatDirEntries(ctx, handle, entries, int(offset), int(limit))
 }
 
 // maxListDirEntries bounds one list_directory page (ADR-066 §15 task 1,
@@ -1323,11 +1323,11 @@ func isKnowledgeBaseEntry(handle *PathHandle, entry os.DirEntry) bool {
 // checked, matching the cost discipline
 // pkg/gateway/rest_library.go's own detectKnowledgeBaseInRoot documents for
 // the identical question over the REST listing.
-func formatDirEntries(handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
+func formatDirEntries(ctx context.Context, handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
 	entries = fspolicy.VisibleDirectoryEntries(handle.abs, entries, handle.policy)
 	// #1017: saved views placed in this folder follow the folder's own
 	// entries as VIEW: lines, inside the same paging.
-	viewLines := placedViewLines(handle)
+	viewLines := placedViewLines(ctx, handle)
 	total := len(entries) + len(viewLines)
 	start := min(offset, total)
 	end := min(start+limit, total)

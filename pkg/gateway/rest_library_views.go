@@ -6,8 +6,10 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -30,9 +32,15 @@ import (
 // row's path is outside the listed folder by design (contract L7, risk R3).
 //
 // One load per request: K is found once, its schemas and views are loaded
-// once through loadKnowledgeViewSet — the same loader the views endpoint
-// uses, so the two can never disagree about which views exist (L4) — and
+// once through loadListingViewSet — the views endpoint's parser and schema
+// check, read through a root opened at K and within the listing limits — and
 // placement probes are memoized per folder.
+//
+// K must itself be a collection of the workspace's knowledge scope, matched
+// exactly (L18, architect decision A1, founder answer Q5 A): a knowledge base
+// nested inside another, beyond the scan depth or outside the scope adds no
+// rows, so every emitted (collection_id, name) opens through the views
+// endpoints (L4).
 //
 // Not a knowledge query: nothing here touches allowKnowledgeRetrieval (L15).
 // A load failure never fails the listing (L14): it is logged and the
@@ -41,8 +49,8 @@ import (
 
 // listingKnowledgeBase is K for a listed folder: the deepest knowledge base
 // enclosing (or equal to) rel, found through the confined root, and accepted
-// only when its real root lies within one of the workspace's in-scope
-// knowledge collections (knowledge.ResolveScope).
+// only when its real root IS one of the workspace's in-scope knowledge
+// collections (knowledge.ResolveScope).
 type listingKnowledgeBase struct {
 	rel      string // workspace-relative root of K ("" = the work tree root)
 	realRoot string // resolved real path of K's root
@@ -76,13 +84,16 @@ func (a *restAPI) findListingKnowledgeBase(root *library.Root, workspaceID, rel 
 	}
 }
 
-// knowledgeRootInScope reports whether realRoot is one of the workspace's
-// in-scope collections or lies inside one (a nested knowledge base, which
-// scope discovery does not descend into but whose files the enclosing
-// collection's grant already covers).
+// knowledgeRootInScope reports whether realRoot is exactly one of the
+// workspace's in-scope collections. It compares collection ids, the same
+// identity resolveScopedCollection matches a caller's collection_id against,
+// so a row's collection_id resolves there by construction. A knowledge base
+// inside a collection is not one (scope discovery does not descend into a
+// collection), and there is no fallback to the enclosing one (L18).
 func knowledgeRootInScope(home, workspaceID, realRoot string) bool {
+	id := knowledgeCollectionID(realRoot)
 	for _, c := range knowledge.ResolveScope(home, workspaceID).Collections() {
-		if realRoot == c.Root || strings.HasPrefix(realRoot, c.Root+string(filepath.Separator)) {
+		if knowledgeCollectionID(c.Root) == id {
 			return true
 		}
 	}
@@ -112,9 +123,9 @@ func joinRel(base, rel string) string {
 }
 
 // loadKnowledgeViewSet loads a knowledge base's saved views WITH its record
-// schemas — the one loader shared by the views endpoint and the listing, so
-// both see exactly the same set (a view naming a type the schemas no longer
-// declare is rejected in both).
+// schemas, for the views endpoint. The Library listing loads through
+// loadListingViewSet: the same parser and schema check (so a file accepted
+// there is accepted here too), plus the listing's confinement and limits.
 func loadKnowledgeViewSet(realRoot string) (*records.ViewSet, *records.ViewLoadReport, error) {
 	schemas, _, err := records.LoadSchemas(realRoot)
 	if err != nil {
@@ -125,6 +136,26 @@ func loadKnowledgeViewSet(realRoot string) (*records.ViewSet, *records.ViewLoadR
 		return nil, nil, fmt.Errorf("loading saved views: %w", err)
 	}
 	return views, report, nil
+}
+
+// loadListingViewSet loads K's schemas and saved views for a listing. Same
+// parser and schema check as loadKnowledgeViewSet, but every read goes
+// through an os.Root opened at K's real root: links, special files and
+// anything outside K are refused, each file is opened non-blocking and
+// checked on the opened descriptor, and the load stays within
+// records.ListingLoadLimits (S1-S3). A file it refuses is left out of the
+// rows, never an error.
+func loadListingViewSet(ctx context.Context, realRoot string) (*records.ViewSet, error) {
+	kbRoot, err := os.OpenRoot(realRoot)
+	if err != nil {
+		return nil, fmt.Errorf("opening knowledge base root: %w", err)
+	}
+	defer kbRoot.Close()
+	views, _, err := records.LoadViewSetChecked(ctx, records.RootControlFS{Root: kbRoot}, realRoot, records.ListingLoadLimits())
+	if err != nil {
+		return nil, err
+	}
+	return views, nil
 }
 
 // savedViewKindAndSource returns a view's declared kind and source, each nil
@@ -159,13 +190,13 @@ func setViewFacts(entry *gen.LibraryEntry, v *records.SavedView, collectionID st
 // view rows placed in rel (or, for the storage folder itself, the same rows
 // with their loaded views marked — L11), in the listing's one sort order.
 func (a *restAPI) addLibraryViewRows(
-	root *library.Root, workspaceID, rel string, includeHidden bool, entries []gen.LibraryEntry,
+	ctx context.Context, root *library.Root, workspaceID, rel string, includeHidden bool, entries []gen.LibraryEntry,
 ) []gen.LibraryEntry {
 	kb, ok := a.findListingKnowledgeBase(root, workspaceID, rel)
 	if !ok {
 		return entries
 	}
-	views, _, err := loadKnowledgeViewSet(kb.realRoot)
+	views, err := loadListingViewSet(ctx, kb.realRoot)
 	if err != nil {
 		logger.WarnCF("rest", "library listing: saved views could not be loaded; listing without view rows",
 			map[string]any{"workspace_id": workspaceID, "knowledge_base": kb.rel, "error": err.Error()})
@@ -178,6 +209,8 @@ func (a *restAPI) addLibraryViewRows(
 	storageRel := joinRel(kb.rel, records.VaultMarkerDirName+"/"+records.ViewsDirName)
 
 	if rel == storageRel {
+		// Only a file the checked load itself read is in views: a leaf link,
+		// a special file or a refused file never is, so its row stays plain.
 		byFile := make(map[string]*records.SavedView, views.Len())
 		for _, v := range views.Views() {
 			byFile[storageRel+"/"+filepath.Base(v.SourcePath)] = v

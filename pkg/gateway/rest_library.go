@@ -310,7 +310,7 @@ func (a *restAPI) handleLibraryEntriesList(w http.ResponseWriter, r *http.Reques
 		entries = []gen.LibraryEntry{}
 	}
 	if includeViews {
-		entries = a.addLibraryViewRows(root, workspaceID, rel, includeHidden, entries)
+		entries = a.addLibraryViewRows(r.Context(), root, workspaceID, rel, includeHidden, entries)
 	}
 	annotateKnowledgeBaseEntries(root, entries)
 	a.annotateMailDerivedEntries(workspaceID, entries)
