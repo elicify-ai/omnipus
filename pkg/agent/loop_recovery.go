@@ -9,10 +9,12 @@
 //
 // Per session, from durable state:
 //   - no loop metadata: every loop job of the session is an orphan and goes;
-//   - saved run count at the saved limit (a), or a selected step that is a
-//     stop-only step (the last run's stop, and maybe its count, was not
-//     saved): every job goes and the stopped state is persisted, nothing is
-//     armed;
+//   - saved run count at the saved limit (a): every job goes and the stopped
+//     state is persisted, nothing is armed;
+//   - a selected step that is a stop-only step (the last run's stop, and
+//     maybe its count, was not saved): the stopped state is persisted first
+//     and only then every job goes, so a failed persist keeps the step as
+//     the record of the reached limit; nothing is armed;
 //   - otherwise exactly ONE next step survives (c): the selected step when it
 //     is still due in the future; a fresh step of the session's own mode
 //     otherwise — self-paced: an `at` at boot time plus the persisted positive
@@ -22,7 +24,8 @@
 //
 // A required write that fails — the identity repair, or the stopped-state
 // persist — makes recovery incomplete (h): no stopped state is claimed, a
-// job created or kept for the session is removed, and the error names the
+// job created or kept for the session is removed (a stop-only step is
+// kept), and the error names the
 // session so the gateway aborts the boot before activation. The next boot
 // retries from durable state. Recovery is idempotent.
 package agent
@@ -99,7 +102,7 @@ func (s *LoopScheduler) recoverSession(sessionID string) error {
 	if selected, ok := selectStep(s.sessionJobs(sessionID)); ok && isStopOnlyStep(&selected) {
 		// The last permitted run finished but its stop (and maybe its
 		// count) was not saved: the loop is at its limit.
-		return s.recoverStopped(store, sessionID, "run limit reached; its stop was not saved")
+		return s.recoverPendingStop(store, sessionID)
 	}
 	keepID, created, err := s.recoverNextStep(sessionID, meta)
 	if err != nil {
@@ -170,6 +173,24 @@ func (s *LoopScheduler) recoverStopped(store *session.UnifiedStore, sessionID, w
 		return fmt.Errorf("loop recovery: session %q: persist the stopped loop state: %w", sessionID, err)
 	}
 	logger.InfoCF("agent", "loop recovery: loop stopped at boot", map[string]any{"session_id": sessionID, "reason": why})
+	return nil
+}
+
+// recoverPendingStop stops a loop whose selected step is a stop-only step.
+// That step may be the only saved record that the loop reached its run limit
+// (the count of its last run may not have been saved), so the stopped state
+// is persisted BEFORE any job is removed: a failed persist leaves the step in
+// place and the next boot retries the stop (FR-05(h)). Once the stop is
+// saved, a job that cannot be removed is an orphan the next boot removes.
+func (s *LoopScheduler) recoverPendingStop(store *session.UnifiedStore, sessionID string) error {
+	if err := store.SetMeta(sessionID, loopStoppedPatch()); err != nil {
+		return fmt.Errorf("loop recovery: session %q: persist the stopped loop state: %w", sessionID, err)
+	}
+	if err := s.removeSessionJobs(sessionID); err != nil {
+		return fmt.Errorf("loop recovery: session %q: remove loop jobs: %w", sessionID, err)
+	}
+	logger.InfoCF("agent", "loop recovery: loop stopped at boot",
+		map[string]any{"session_id": sessionID, "reason": "run limit reached; its stop was not saved"})
 	return nil
 }
 

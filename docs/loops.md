@@ -61,7 +61,7 @@ An active loop from an older install, whose job lived in a separate file, contin
 
 - If the stopped state cannot be saved, nothing changes: the reply says "Could not stop the loop … The loop is still running; try again", and the loop carries on as before.
 - A new loop starts only once every step of the old one is gone. If an old step cannot be removed, the reply starts with "Could not start the loop"; the old loop is stopped when its stopped state was saved, and you can try again.
-- When a loop reaches its run limit but its stopped state cannot be saved, no stopped status is shown and the agent does not run again for that loop, even when the count of that last run could not be saved either. The stop is tried again without running the agent: an interval loop at its next scheduled time, a self-paced loop after its last saved delay (about a second if none was saved). A gateway start while that retry is pending also stops the loop. If the retry itself cannot be scheduled, the next gateway start stops the loop only when its saved run count reached the limit.
+- When a loop reaches its run limit but its stopped state cannot be saved, no stopped status is shown. While the gateway keeps running, the agent does not run again for that loop: the stop is tried again without running the agent, an interval loop at its next scheduled time, a self-paced loop after its last saved delay (about a second if none was saved). After a restart, the loop is stopped at the next successful start, as long as the count of that last run or the pending retry was saved. If both were lost, the loop can run again after a restart.
 
 ## If recovery cannot be saved
 

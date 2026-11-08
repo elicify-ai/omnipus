@@ -94,6 +94,10 @@ type LoopScheduler struct {
 	// failed, after the session lock is released and before the fire returns
 	// (SetRunLimitStopFailedTestHook). nil in production.
 	runLimitStopFailedHook atomic.Pointer[func()]
+	// stopUnlockedHook is a test seam run when a guarded stop's save failed,
+	// right after the session lock is released, before stopSessionLoop
+	// returns (SetStopUnlockedTestHook). nil in production.
+	stopUnlockedHook atomic.Pointer[func()]
 }
 
 // NewLoopScheduler registers a scheduler as the `loop`-kind handler of the
@@ -151,6 +155,17 @@ func (s *LoopScheduler) SetRunLimitStopFailedTestHook(fn func()) {
 		return
 	}
 	s.runLimitStopFailedHook.Store(&fn)
+}
+
+// SetStopUnlockedTestHook installs fn to run when a guarded stop's save
+// failed, right after the session lock is released and before
+// stopSessionLoop returns (tests only; nil clears).
+func (s *LoopScheduler) SetStopUnlockedTestHook(fn func()) {
+	if fn == nil {
+		s.stopUnlockedHook.Store(nil)
+		return
+	}
+	s.stopUnlockedHook.Store(&fn)
 }
 
 // RunDueJobs drives dispatch deterministically for tests.

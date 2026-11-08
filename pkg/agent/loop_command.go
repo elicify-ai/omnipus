@@ -376,6 +376,11 @@ func (al *AgentLoop) stopSessionLoop(
 	})
 	var left *loopJobsLeftError
 	if err != nil && !errors.As(err, &left) {
+		if guard != nil && ls != nil && !errors.Is(err, errLoopStopRevoked) {
+			if hook := ls.stopUnlockedHook.Load(); hook != nil {
+				(*hook)()
+			}
+		}
 		return loopStopPrior{}, err
 	}
 	return prior, err
