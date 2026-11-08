@@ -703,6 +703,19 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		// ADR-094 FR-015 (review F5): the planted-cookie guard found a
+		// duplicated reserved cookie on this request, stamped the clear lines
+		// and marked the credential read failed. Serving the SPA's own API
+		// read (e.g. GET /api/v1/state) as anonymous would show a signed-out
+		// state and send the user to /login with no recovery; answer the
+		// typed planted_cookie_cleared 401 instead so the SPA offers its one
+		// Retry. A top-level browser navigation (a sign-in callback on a
+		// provider route) keeps the anonymous pass-through: a JSON error
+		// would replace the page and the SPA transport never sees it.
+		if middleware.CredentialReadFailed(r.Context()) && r.Header.Get("Sec-Fetch-Mode") != "navigate" {
+			middleware.WritePlantedCookieCleared(w, http.StatusUnauthorized)
+			return
+		}
 		// Cookie fallback (ADR-044, FR-009): the SPA no longer sends a bearer
 		// token — it authenticates via the omnipus-session HttpOnly cookie. Resolve
 		// it here (the same lookup checkBearerAuth/authenticateWS/browser_ws use) so

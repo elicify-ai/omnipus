@@ -188,6 +188,16 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
 			return AuthResult{Authenticated: true, User: user, ViaSessionCookie: true}
 		}
+		// ADR-094 FR-015 (review F5): the planted-cookie guard found a
+		// duplicated reserved cookie, already stamped the clear lines and
+		// marked the credential read failed. Answer with the typed
+		// planted_cookie_cleared envelope (401) instead of the generic
+		// missing-Bearer 401, so the SPA can offer its one Retry action. The
+		// request stays unauthenticated either way (fail closed).
+		if middleware.CredentialReadFailed(r.Context()) {
+			middleware.WritePlantedCookieCleared(w, http.StatusUnauthorized)
+			return AuthResult{Authenticated: false}
+		}
 		// SFH-1: surface "cookie present but invalid" (replay/probe/stale
 		// cookie) as a log line — silent for the routine "no cookie at all"
 		// case (see LogInvalidSessionCookiePresent's doc). Log-only: the

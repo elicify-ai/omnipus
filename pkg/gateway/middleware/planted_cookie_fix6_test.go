@@ -202,17 +202,30 @@ func TestPreviewFix6_PlantedCookieCode_TS_DriftTripwire(t *testing.T) {
 		t.Fatal("runtime.Caller failed — cannot locate the TS source")
 	}
 	// thisFile = .../pkg/gateway/middleware/planted_cookie_fix6_test.go
-	tsPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "src", "lib", "api", "http.ts")
+	// The SPA keeps its one copy of the literal in src/lib/api-error.ts
+	// (PLANTED_COOKIE_CLEARED_CODE, #950 F5 frontend); the contract carries
+	// the same value as PlantedCookieClearedError.code's only enum member.
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
+	tsPath := filepath.Join(root, "src", "lib", "api-error.ts")
 	b, err := os.ReadFile(tsPath)
 	if err != nil {
 		t.Fatalf("cannot read %s (fail-closed: the tripwire must not silently pass): %v", tsPath, err)
 	}
-	re := regexp.MustCompile(`PLANTED_COOKIE_CODE\s*=\s*['"]([^'"]+)['"]`)
+	re := regexp.MustCompile(`PLANTED_COOKIE_CLEARED_CODE\s*=\s*['"]([^'"]+)['"]`)
 	m := re.FindStringSubmatch(string(b))
 	if m == nil {
-		t.Fatalf("PLANTED_COOKIE_CODE literal not found in %s — the TS constant was renamed or moved; update this tripwire", tsPath)
+		t.Fatalf("PLANTED_COOKIE_CLEARED_CODE literal not found in %s — the TS constant was renamed or moved; update this tripwire", tsPath)
 	}
 	if m[1] != plantedCookieClearedCode {
-		t.Fatalf("drift: Go plantedCookieClearedCode = %q but src/lib/api/http.ts PLANTED_COOKIE_CODE = %q — the SPA toast keys on err.code and would silently never fire", plantedCookieClearedCode, m[1])
+		t.Fatalf("drift: Go plantedCookieClearedCode = %q but src/lib/api-error.ts PLANTED_COOKIE_CLEARED_CODE = %q — the SPA toast keys on err.code and would silently never fire", plantedCookieClearedCode, m[1])
+	}
+
+	contractPath := filepath.Join(root, "contracts", "components", "schemas", "PlantedCookieClearedError.yaml")
+	cb, err := os.ReadFile(contractPath)
+	if err != nil {
+		t.Fatalf("cannot read %s (fail-closed): %v", contractPath, err)
+	}
+	if !regexp.MustCompile(`(?m)^\s*-\s*` + regexp.QuoteMeta(plantedCookieClearedCode) + `\s*$`).Match(cb) {
+		t.Fatalf("drift: %s does not list %q as a code enum member", contractPath, plantedCookieClearedCode)
 	}
 }

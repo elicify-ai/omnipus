@@ -7840,6 +7840,9 @@ export const RoomMessageRequest = z.object({
   media: z.array(z.string()).max(16).optional(),
   mentions: z.array(z.string().min(1).max(128)).max(256),
 });
+export const PlantedCookieClearedError = z
+  .object({ error: z.string(), code: z.literal("planted_cookie_cleared") })
+  .passthrough();
 export const KnowledgeMountConflictError = z.object({
   error: z.string().min(1),
   code: z.literal("knowledge_mount_conflict"),

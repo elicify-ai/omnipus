@@ -24,7 +24,7 @@ func safeLogString(value string) string {
 
 // logsafeWarn is the Warn-level entry point; the middleware package's only
 // user-driven log sink today. Extend level by level as sites convert.
-func logsafeWarn(msg string, args ...any) { slog.Warn(msg, safeLogArgs(args)...) }
+func logsafeWarn(msg string, args ...any) { slog.Warn(msg, safeLogArgs(args...)...) }
 
 // safeLogArgs makes request-derived values safe for structured logs: strings,
 // errors, []string slices, and fmt.Stringer values all end in safeLogString —

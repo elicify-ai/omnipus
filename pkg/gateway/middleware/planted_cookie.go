@@ -246,8 +246,12 @@ func PlantedCookieGuard(opts ...PlantedCookieGuardOption) func(http.Handler) htt
 				}
 			}
 			// FR-015 step 2: every downstream credential read treats this
-			// request as unauthenticated — a GET then fails the session read
-			// with 401 (DS-5 row 1) instead of trusting a planted value.
+			// request as unauthenticated — a GET to an authenticated route
+			// then fails the session read with the typed 401 (DS-5 row 1,
+			// gateway/auth.go::checkBearerAuth) instead of trusting a planted
+			// value. A GET to an optional-auth route or the SPA shell is
+			// still served (anonymously), so a page reload is not replaced
+			// by a JSON error.
 			r = r.WithContext(WithCredentialReadFailed(r.Context()))
 			requestSecure := RequestIsSecure(r)
 			for _, name := range dup {
@@ -266,7 +270,7 @@ func PlantedCookieGuard(opts ...PlantedCookieGuardOption) func(http.Handler) htt
 // error's wire values (FR-015 step 1, Q4 round-2 CRIT fix). The message is
 // verbatim from the spec.
 const (
-	plantedCookieClearedCode    = "planted_cookie_cleared"
+	plantedCookieClearedCode    = string(gen.PlantedCookieClearedErrorCodePlantedCookieCleared)
 	plantedCookieClearedMessage = "Omnipus cleared cookies set by a preview — please retry"
 )
 
@@ -279,13 +283,23 @@ const (
 // body's `message` falling back to `error` for the toast text) — plus the
 // clear-set headers already stamped on w by the caller.
 func writePlantedCookieCleared(w http.ResponseWriter) {
+	WritePlantedCookieCleared(w, http.StatusForbidden)
+}
+
+// WritePlantedCookieCleared writes the typed planted_cookie_cleared body
+// (the generated PlantedCookieClearedError, a valid ErrorResponse: error =
+// the verbatim human message, code = planted_cookie_cleared) with the given
+// status. The guard uses 403 for a
+// state-changing request; the authenticated-route auth check uses 401 for a
+// GET whose credential read the guard marked failed (FR-015 GET row, review
+// F5), so the SPA transport recognises both and raises its one Retry toast.
+func WritePlantedCookieCleared(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusForbidden)
-	code := plantedCookieClearedCode
-	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(gen.PlantedCookieClearedError{
 		Error: plantedCookieClearedMessage,
-		Code:  &code,
+		Code:  gen.PlantedCookieClearedErrorCodePlantedCookieCleared,
 	}); err != nil {
 		slog.Debug("planted-cookie: write error response failed", "error", err)
 	}
