@@ -13006,7 +13006,7 @@ export interface components {
          */
         ChannelAvailability: {
             /**
-             * @description running = registered and running; not_running = registered but not running (start failed or not started); not_loaded = not registered (for example the adapter could not be constructed).
+             * @description running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
              * @example running
              * @enum {string}
              */
