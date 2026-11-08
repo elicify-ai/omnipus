@@ -56,8 +56,9 @@ func TestResearcherPrompt_NoLeafWording_DelegateListedAsTool(t *testing.T) {
 	sentence := prompt[start+len(marker):]
 	end := strings.Index(sentence, ".")
 	require.GreaterOrEqual(t, end, 0, "the Standard tools sentence must end with a period")
-	var items []string
-	for _, item := range strings.Split(sentence[:end], ",") {
+	parts := strings.Split(sentence[:end], ",")
+	items := make([]string, 0, len(parts))
+	for _, item := range parts {
 		items = append(items, strings.TrimPrefix(strings.TrimSpace(item), "and "))
 	}
 	assert.Contains(t, items, "tool:delegate",
