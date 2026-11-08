@@ -43,9 +43,13 @@ the limits only and the result says `converted without sandbox: <reason>`.
 When the kernel sandbox is active, LibreOffice can read only its own program
 files, the folder that holds the Omnipus program, the system libraries and
 fonts, and the temporary folder of the current preview. On macOS it can also
-read, but not change, the checked list of LibreOffice parts it may load. It
-cannot read your files, the agents' files, other previews or anything else
-Omnipus stores.
+read, but not change, the checked list of LibreOffice parts it may load, and
+it can check that the folders above these exist, without seeing what is in
+them. It cannot read your files, the agents' files, other previews or anything
+else Omnipus stores. Checking a folder shows when something in it was last
+added or removed, but not what. On Linux the kernel sandbox cannot stop any
+program from checking whether a file or folder exists; LibreOffice still
+cannot list folders or read files outside the folders named here.
 
 Agents can never get write access to these programs' folders: shell approvals
 (**Allow** and **Allow once**), mounts (including one that contains a program

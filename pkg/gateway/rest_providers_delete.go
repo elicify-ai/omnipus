@@ -233,10 +233,7 @@ func (a *restAPI) runProviderDelete(
 		}); err != nil {
 			slog.Error("rest: provider delete: new_default write failed",
 				"provider_id", rd.providerID, "error", err)
-			if msg, refused := rd.refusalBeforeCommit(err); refused {
-				return nil, http.StatusBadRequest, msg, ""
-			}
-			return failed()
+			return rd.writeFailed(err, failed)
 		}
 		rd.defaultChanged = true
 	}
@@ -339,10 +336,7 @@ func (a *restAPI) runProviderDelete(
 	}); err != nil {
 		slog.Error("rest: provider delete: config write failed",
 			"provider_id", rd.providerID, "error", err)
-		if msg, refused := rd.refusalBeforeCommit(err); refused {
-			return nil, http.StatusBadRequest, msg, ""
-		}
-		return failed()
+		return rd.writeFailed(err, failed)
 	}
 
 	// Step 3b — evict the provider's entitlement-cache entries (ADR-067
@@ -616,4 +610,16 @@ func (rd *restAPIRunProviderDelete) refusalBeforeCommit(err error) (string, bool
 		return "", false
 	}
 	return refusal.Error(), true
+}
+
+// writeFailed answers a failed config write of this delete: a refusal while
+// nothing is committed yet is 400 with the refusal text (refusalBeforeCommit);
+// anything else is failed's retryable 500 {deleted:false}.
+func (rd *restAPIRunProviderDelete) writeFailed(
+	err error, failed func() (*gen.ProviderDeleteResponse, int, string, string),
+) (*gen.ProviderDeleteResponse, int, string, string) {
+	if msg, refused := rd.refusalBeforeCommit(err); refused {
+		return nil, http.StatusBadRequest, msg, ""
+	}
+	return failed()
 }

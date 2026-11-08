@@ -5,7 +5,10 @@
 package preview
 
 import (
+	"errors"
+	"io/fs"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
@@ -24,6 +27,10 @@ type confinement struct {
 	readWrite []string
 	// socketDir is the macOS LibreOffice socket folder (bind + connect).
 	socketDir string
+	// lookup are folders the program may look up but not list or read: the
+	// folders above the converter's own listed folders (spec §3.4 D8d), set
+	// only for LibreOffice (foldersAbove).
+	lookup []string
 }
 
 // spawnHooks are the launcher Prepare/Start hooks for this platform and the
@@ -83,4 +90,55 @@ func (h spawnHooks) observedBy(observe func(converterStart)) spawnHooks {
 		}
 	}
 	return h
+}
+
+// foldersAbove returns every folder above each of dirs, up to but not
+// including "/", computed from the real path each folder's sandbox rule uses
+// (realRulePath), once each in first-seen order (spec §3.4 D8d). Any error
+// other than a missing folder ends the start: it must not happen with a
+// look-up list that misses a folder.
+func foldersAbove(dirs ...string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range dirs {
+		resolved, err := realRulePath(d)
+		if err != nil {
+			return nil, err
+		}
+		for up := filepath.Dir(resolved); up != filepath.Dir(up); up = filepath.Dir(up) {
+			if !seen[up] {
+				seen[up] = true
+				out = append(out, up)
+			}
+		}
+	}
+	return out, nil
+}
+
+// realRulePath is the symlink-resolved path the sandbox rule for p names. A
+// path that does not exist yet resolves as the sandbox's Seatbelt renderer
+// resolves it (pkg/sandbox/seatbelt_profile.go::resolveSeatbeltPath): the
+// deepest folder that exists, resolved, with the rest re-attached.
+func realRulePath(p string) (string, error) {
+	clean := filepath.Clean(p)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	rest := ""
+	for dir := clean; filepath.Dir(dir) != dir; {
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = filepath.Dir(dir)
+		base, baseErr := filepath.EvalSymlinks(dir)
+		if baseErr == nil {
+			return filepath.Join(base, rest), nil
+		}
+		if !errors.Is(baseErr, fs.ErrNotExist) {
+			return "", baseErr
+		}
+	}
+	return clean, nil
 }

@@ -27,6 +27,7 @@ func (c confinement) policy() sandbox.SandboxPolicy {
 		p.FilesystemRules = append(p.FilesystemRules, sandbox.PathRule{Path: c.socketDir, Access: sandbox.AccessRead | sandbox.AccessWrite})
 		p.UnixSocketRules = append(p.UnixSocketRules, sandbox.UnixSocketRule{Path: c.socketDir, Bind: true, Connect: true})
 	}
+	p.LookupOnlyPaths = append(p.LookupOnlyPaths, c.lookup...)
 	// Network: Seatbelt is default-deny (only the system preamble's resolver
 	// socket); Linux adds its TCP deny in hooksFor.
 	p.InheritToChildren = true

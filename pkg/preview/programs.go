@@ -210,6 +210,26 @@ func existingFolders(list []string) []string {
 	return out
 }
 
+// officeStartHooks returns the confinement hooks for one LibreOffice start:
+// conf plus, outside Windows, look-up-only access to every folder above its
+// listed folders, computed from their real paths now (spec §3.4 D8d; macOS
+// LibreOffice cannot start without it, Linux ignores the field). A folder
+// whose real path cannot be resolved ends the call before the start.
+func officeStartHooks(conf confinement) (spawnHooks, *failure) {
+	if runtime.GOOS != "windows" {
+		listed := append(append(append([]string(nil), conf.readExec...), conf.readOnly...), conf.readWrite...)
+		if conf.socketDir != "" {
+			listed = append(listed, conf.socketDir)
+		}
+		above, err := foldersAbove(listed...)
+		if err != nil {
+			return spawnHooks{}, programFailure("conversion failed: sandbox folders unavailable (" + err.Error() + ")")
+		}
+		conf.lookup = above
+	}
+	return hooksFor(conf).observedBy(testHookConverterStart), nil
+}
+
 // profileSettings pins the LibreOffice profile: macros never run, links are
 // never updated, external referer links are blocked, formulas recalculate on
 // load (AD-7). Values per the officecfg schema of the pinned release:
@@ -230,9 +250,17 @@ const profileSettings = `<?xml version="1.0" encoding="UTF-8"?>
 
 // run converts input (named name with extension ext) and returns the PDF.
 func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]byte, string, error) {
+	// LibreOffice is handed the real path of its call folder: its sandbox
+	// rules and look-up folders are computed from real paths (spec §3.4
+	// D8d), so a path through a symlink would need look-ups that list
+	// never names.
+	callDir, err := filepath.EvalSymlinks(o.call.dir)
+	if err != nil {
+		return nil, "", programFailure("conversion failed: scratch unavailable")
+	}
 	dirs := map[string]string{}
 	for _, d := range []string{"in", "out", "home", "tmp", "profile/user"} {
-		p := filepath.Join(o.call.dir, filepath.FromSlash(d))
+		p := filepath.Join(callDir, filepath.FromSlash(d))
 		if err := os.MkdirAll(p, 0o700); err != nil {
 			return nil, "", programFailure("conversion failed: scratch unavailable")
 		}
@@ -277,16 +305,19 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	}
 	args := []string{
 		"--headless", "--invisible", "--nologo", "--nodefault", "--norestore", "--nolockcheck",
-		"-env:UserInstallation=" + fileURL(filepath.Join(o.call.dir, "profile")),
+		"-env:UserInstallation=" + fileURL(filepath.Join(callDir, "profile")),
 		"--convert-to", "pdf", "--outdir", dirs["out"], inPath,
 	}
-	hooks := hooksFor(conf).observedBy(testHookConverterStart)
+	hooks, hookFail := officeStartHooks(conf)
+	if hookFail != nil {
+		return nil, "", hookFail
+	}
 	spec := launcher.Spec{
 		Self:    o.self,
 		Target:  o.executable,
 		Args:    args,
 		Env:     env,
-		Dir:     o.call.dir,
+		Dir:     callDir,
 		Limits:  launcher.Limits{MemoryBytes: officeMemory, CPUSeconds: programCPUSeconds, FileSizeBytes: officeOutputLimit, OpenFiles: officeOpenFile, Processes: officeProcesses},
 		Prepare: hooks.prepare,
 		Start:   hooks.start,
@@ -300,6 +331,14 @@ func (o officeConversion) run(ctx context.Context, input []byte, ext string) ([]
 	// cycle: the first launcher has exited and its group was killed (Wait),
 	// and the new launcher's identity is recorded before its go-byte.
 	for attempt := 1; ; attempt++ {
+		if attempt > 1 {
+			// Every start gets its look-up list from the real paths at
+			// that start (spec §3.4 D8d).
+			if hooks, hookFail = officeStartHooks(conf); hookFail != nil {
+				return nil, hooks.unconfined, hookFail
+			}
+			spec.Prepare, spec.Start = hooks.prepare, hooks.start
+		}
 		proc, fail := o.startOnce(ctx, spec)
 		if fail != nil {
 			return nil, hooks.unconfined, fail
