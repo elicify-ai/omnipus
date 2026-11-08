@@ -84,3 +84,114 @@ func TestPinRef_MissingSuccessorRepairRegistersPinned(t *testing.T) {
 		t.Errorf("control unsent upload error = %v, want ErrNotFound — the same cleanup must expire uploads", controlErr)
 	}
 }
+
+func TestPinRef_LateUploadForwardCannotLeaveLiveRefUnpinned(t *testing.T) {
+	// SFH-4 finding, steps 1–6: an upload registers locally,
+	// then its original-scope forward lands after the successor's pin miss
+	// but before repair. A nil PinRef result must still mean present AND
+	// pinned in the live store, with exactly one count for this unique ref.
+	// The hook fixes that operation order; no scheduler lottery is involved.
+	mediaDir := isolatedRegistryHome(t)
+	sentPath := writePayload(t, mediaDir, "late-forward-plan.md")
+	controlPath := writePayload(t, mediaDir, "late-forward-control.md")
+	const maxAge = time.Second
+	registeredAt := time.Now()
+	cfg := MediaCleanerConfig{MaxAge: maxAge, Interval: time.Hour}
+	oldStore := NewFileMediaStoreWithCleanup(cfg)
+	liveStore := NewFileMediaStoreWithCleanup(cfg)
+	parkDebounceSave(oldStore)
+	parkDebounceSave(liveStore)
+	t.Cleanup(oldStore.Stop)
+	t.Cleanup(liveStore.Stop)
+	oldStore.nowFunc = func() time.Time { return registeredAt }
+	liveStore.nowFunc = func() time.Time { return registeredAt }
+	oldStore.HandoverTo(liveStore)
+
+	const ref = "media://late-forward-sent"
+	const controlRef = "media://late-forward-control"
+	const uploadScope = "upload:late-forward-chat"
+	sentScope := SentFileScopePrefix + "chat:late-forward"
+	meta := MediaMeta{
+		Filename: "late-forward-plan.md", ContentType: "text/markdown",
+		CleanupPolicy: CleanupPolicyForgetOnly,
+	}
+	// Store's local registration is complete, but its forward is pending.
+	// Retain the original uploadScope just as that in-flight Store call does.
+	oldStore.storeRef(ref, sentPath, meta, uploadScope)
+	liveStore.storeRef(controlRef, controlPath, MediaMeta{
+		Filename: "late-forward-control.md", ContentType: "text/plain",
+		CleanupPolicy: CleanupPolicyForgetOnly,
+	}, "upload:late-forward-control")
+	if got, err := liveStore.Resolve(controlRef); err != nil || got != controlPath {
+		t.Fatalf("instrument: live control before cleanup = %q %v, want its registered path", got, err)
+	}
+	if _, err := liveStore.Resolve(ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("instrument: live sent ref before pin = %v, want ErrNotFound while the upload forward is pending", err)
+	}
+
+	hookCalls := 0
+	oldStore.beforeSuccessorPinRegistration = func(successor *FileMediaStore, forwardedRef string) {
+		hookCalls++
+		if successor != liveStore || forwardedRef != ref {
+			t.Fatalf("instrument: successor/ref = %p %q, want %p %q", successor, forwardedRef, liveStore, ref)
+		}
+		successor.mu.RLock()
+		_, alreadyPresent := successor.refs[ref]
+		successor.mu.RUnlock()
+		if alreadyPresent {
+			t.Fatal("instrument: live ref already present at the hook, want the missing-successor registration window")
+		}
+		oldStore.mu.RLock()
+		outgoingScope := oldStore.refToScope[ref]
+		oldStore.mu.RUnlock()
+		if outgoingScope != sentScope {
+			t.Fatalf("instrument: outgoing scope at hook = %q, want local pin to %q completed before the pending forward", outgoingScope, sentScope)
+		}
+
+		// Complete the REAL delayed Store forward, using its captured upload
+		// scope rather than the outgoing entry's newly pinned scope.
+		oldStore.forwardToSuccessors(forwardedRef, sentPath, meta, uploadScope)
+		successor.mu.RLock()
+		forwardedEntry, present := successor.refs[ref]
+		forwardedScope := successor.refToScope[ref]
+		forwardedCount := successor.pathStates[sentPath].refCount
+		successor.mu.RUnlock()
+		if !present || forwardedEntry.path != sentPath || forwardedScope != uploadScope || forwardedCount != 1 {
+			t.Fatalf("instrument: delayed forward produced present=%t path=%q scope=%q count=%d, want the same ref/path under its unpinned upload scope with count 1", present, forwardedEntry.path, forwardedScope, forwardedCount)
+		}
+	}
+	if err := oldStore.PinRef(ref, sentScope); err != nil {
+		t.Fatalf("PinRef after the delayed upload forward = %v, want nil and a live pinned ref", err)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("instrument: pending-forward hook calls = %d, want exactly 1", hookCalls)
+	}
+	t.Log("instrument: delayed upload forward completed exactly once at the successor registration hook; PinRef returned nil")
+
+	liveStore.mu.RLock()
+	liveScope := liveStore.refToScope[ref]
+	pathCount := liveStore.pathStates[sentPath].refCount
+	liveStore.mu.RUnlock()
+	if liveScope != sentScope {
+		t.Errorf("SFH-4: PinRef returned nil but live ref scope = %q, want pinned sent-file scope %q after the late unpinned forward", liveScope, sentScope)
+	}
+	if pathCount != 1 {
+		t.Errorf("SFH-4: live path reference count = %d, want exactly 1 for the same unique ref after forward and pin registration", pathCount)
+	}
+	if got, err := liveStore.Resolve(ref); err != nil || got != sentPath {
+		t.Errorf("live sent ref immediately after successful pin = %q %v, want its original path", got, err)
+	}
+
+	// Cross the original upload's MaxAge using only the controlled clock.
+	// The same cleaner must expire the unsent control, but not the sent ref.
+	liveStore.nowFunc = func() time.Time { return registeredAt.Add(2 * maxAge) }
+	if removed := liveStore.CleanExpired(); removed != 1 {
+		t.Errorf("SFH-4: cleanup beyond MaxAge removed %d refs, want only the 1 unsent control", removed)
+	}
+	if got, err := liveStore.Resolve(ref); err != nil || got != sentPath {
+		t.Errorf("SFH-4: live sent ref beyond MaxAge = %q %v, want the successfully pinned file still resolvable after the late upload forward", got, err)
+	}
+	if _, err := liveStore.Resolve(controlRef); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unsent expiry control beyond MaxAge = %v, want ErrNotFound from the same cleanup", err)
+	}
+}
