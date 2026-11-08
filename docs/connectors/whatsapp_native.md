@@ -95,6 +95,20 @@ The QR code data is also emitted as a structured log entry with `"event": "whats
 - When the phone is already linked, turning the connection on (or a Retry) connects it without a QR code and shows "This WhatsApp device is already linked."
 - If the session is logged out by the server (e.g. from the phone), the channel automatically clears the stored session, reconnects, and emits a fresh QR — both in the Configure panel and to the logs — for re-pairing.
 
+### While WhatsApp reconnects
+
+If the connection to WhatsApp drops and the first attempt to reconnect fails, Omnipus keeps trying in the background. The waits between attempts start at 5 s and double each time, up to 5 minutes. In that time:
+
+- **The connection reports not running, with this reason:** "the connection to WhatsApp was lost and is being re-established automatically". You see it, for example, in the message after you save in **Configure**: "Saved, but the connection is not running: the connection to WhatsApp was lost and is being re-established automatically." Agents see the same reason in their list of connections.
+- **Messages an agent sends are retried for a few seconds.** Each one gets three more tries over about 3.5 s. If the connection is still down after that, the message is not delivered, and the server log records the failed send. A later message gets its own tries.
+- **It clears by itself.** When an attempt succeeds, the connection reports running again and the reason goes away. You don't need to do anything.
+
+If it does not come back:
+
+1. Check that the server running Omnipus can reach the internet. The reconnect attempts come from that server, not from your phone.
+2. On your phone, open WhatsApp and connect it to the internet, then go to **Settings → Linked Devices** and check that this device is still listed. If the phone logged it out, Omnipus shows a new QR code in **Configure**; scan it as in [Pair in the app](#pair-in-the-app-recommended).
+3. To start over, select **Disable** on the WhatsApp card in **Connectors**, then **Enable**. If the phone is still linked, it connects again without a QR code; otherwise open **Configure** and pair again.
+
 ## Notes
 
 - **Capabilities.** The native channel implements `TypingCapable` using `whatsmeow`'s `SendChatPresence`. It sends `composing` immediately on `StartTyping`, refreshes the indicator every 10 seconds, and sends `paused` when the stop function is called. The maximum typing duration is 5 minutes.

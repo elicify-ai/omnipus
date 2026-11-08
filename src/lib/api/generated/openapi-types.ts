@@ -13012,7 +13012,7 @@ export interface components {
              */
             state: "running" | "not_running" | "not_loaded";
             /**
-             * @description Why the connection is not running. Present only when state is not running: the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+             * @description Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
              * @example not started
              */
             reason?: string;
