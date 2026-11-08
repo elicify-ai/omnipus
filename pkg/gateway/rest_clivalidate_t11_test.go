@@ -335,10 +335,25 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 		t11AssertPathRefused(t, w, marker, *spawns, needles...)
 	}
 
+	// B1 A / combine plan R10: the exact check and failing file/link replace
+	// obsolete prose. Keep the real handshake counter and executable marker.
+	refuseShared := func(t *testing.T, path, at string) {
+		t.Helper()
+		t11ClearMarker(t, marker)
+		*spawns = 0
+		w := t11PostValidate(t, mux, cfg, token, path, ip, nil)
+		t11AssertPathRefused(t, w, marker, *spawns, "agent_writable_location")
+		resp := t11DecodeValidate(t, w)
+		require.NotNil(t, resp.Detail)
+		require.Equal(t, "not allowed: claude-code: check agent_writable_location failed at "+at, *resp.Detail,
+			"B1/R10: exact check and failed path element, not any path-not-allowed message")
+		require.Nil(t, resp.ResolvedPath, "a refused candidate returns no file to launch")
+	}
+
 	t.Run("program inside omnipus home", func(t *testing.T) {
 		dst := filepath.Join(home, "t11-fakecli")
 		t11CopyExe(t, prog, dst, 0o755)
-		refuse(t, dst, "home")
+		refuseShared(t, dst, dst)
 	})
 
 	t.Run("program inside a workspace folder", func(t *testing.T) {
@@ -359,7 +374,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 		require.NoError(t, err)
 		dst := filepath.Join(mount.HostPath, "fakecli")
 		t11CopyExe(t, prog, dst, 0o755)
-		refuse(t, dst, "mount")
+		refuseShared(t, dst, dst)
 	})
 
 	if runtime.GOOS != "windows" {
@@ -394,7 +409,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			require.NoError(t, os.Chmod(outDir, 0o700))
 			outer := filepath.Join(outDir, "outer")
 			require.NoError(t, os.Symlink(mid, outer))
-			refuse(t, outer, "link")
+			refuseShared(t, outer, mid)
 		})
 
 		// Founder Q2b, spec §3.2 / §5 / FR-5: mode is not a reason to refuse.
