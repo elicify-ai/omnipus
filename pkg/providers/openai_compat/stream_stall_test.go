@@ -26,8 +26,9 @@ import (
 // after that many drips (a stream that terminates on its own); drips < 0
 // holds the connection open after the opening delta — TOTAL silence, never
 // sending [DONE] — until the returned release channel is closed, modelling a
-// provider that went mute mid-call.
-func dripServer(t *testing.T, interval time.Duration, drips int, drip func(i int) string) (*httptest.Server, chan struct{}) {
+// provider that went mute mid-call. Any answer chunks are appended after the
+// drips, before [DONE].
+func dripServer(t *testing.T, interval time.Duration, drips int, drip func(i int) string, answer ...string) (*httptest.Server, chan struct{}) {
 	t.Helper()
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -59,11 +60,24 @@ func dripServer(t *testing.T, interval time.Duration, drips int, drip func(i int
 				}
 			}
 		}
+		for _, chunk := range answer {
+			if !send(chunk) {
+				return
+			}
+		}
 		send("data: [DONE]\n\n")
 	}))
 	t.Cleanup(func() { close(release); srv.Close() })
 	return srv, release
 }
+
+// answerChunk is a real answer: a content delta plus finish_reason "stop".
+// Round 2 (issue #1664 B8, founder Q3 A): a stream ending with no
+// finish_reason, no content and no tool call is an EMPTY stream — a typed
+// failure — so the stall-detection fixtures below must deliver an answer
+// after their slow or keep-alive part to stay success-shaped. SSE shape as
+// in reasoning_progress_test.go.
+const answerChunk = `data: {"choices":[{"delta":{"content":"All done."},"finish_reason":"stop"}]}` + "\n\n"
 
 func stallTestProvider(t *testing.T, url string, stall time.Duration) *Provider {
 	t.Helper()
@@ -77,13 +91,16 @@ func stallTestProvider(t *testing.T, url string, stall time.Duration) *Provider 
 // A stream that keeps sending reasoning deltas slower than the overall call
 // length but faster than the silence limit must complete. This is the scaled
 // stand-in for "reasoning every 30 s for 20 minutes with a 5-minute limit".
+// Round 2 (issue #1664 B8, founder Q3 A): the fixture ends with a real
+// answer — under B8 a reasoning-only stream is an empty stream, not a
+// success; this test's subject is stall detection, not empty streams.
 func TestChatStream_SlowButStreamingReasoningIsNotAborted(t *testing.T) {
 	// 6 drips × 250 ms ≈ 1.5 s of streaming against a 600 ms silence limit:
 	// each drip re-arms the clock, so the call outlives the limit 2.5× over
 	// and still completes on its own terms.
 	srv, _ := dripServer(t, 250*time.Millisecond, 6, func(i int) string {
 		return fmt.Sprintf("data: {\"choices\":[{\"delta\":{\"reasoning\":\"chunk %02d\"}}]}\n\n", i)
-	})
+	}, answerChunk)
 	p := stallTestProvider(t, srv.URL, 600*time.Millisecond)
 
 	start := time.Now()
@@ -95,15 +112,17 @@ func TestChatStream_SlowButStreamingReasoningIsNotAborted(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 1200*time.Millisecond {
 		t.Fatalf("call finished suspiciously fast (%s) — it did not actually drip slowly", elapsed)
 	}
-	if resp.Content != "" {
-		t.Errorf("reasoning leaked into content: %q", resp.Content)
+	if resp.Content != "All done." {
+		t.Errorf("want the answer text in content, with no reasoning leak: %q", resp.Content)
 	}
 }
 
 // A provider keep-alive (an SSE comment line, no JSON payload) is bytes too:
-// it must re-arm the silence clock exactly like a reasoning delta.
+// it must re-arm the silence clock exactly like a reasoning delta. Round 2
+// (issue #1664 B8): the fixture ends with a real answer for the same reason
+// as the slow-reasoning test above.
 func TestChatStream_KeepAliveCommentsCountAsActivity(t *testing.T) {
-	srv, _ := dripServer(t, 200*time.Millisecond, 6, func(int) string { return ": keep-alive\n\n" })
+	srv, _ := dripServer(t, 200*time.Millisecond, 6, func(int) string { return ": keep-alive\n\n" }, answerChunk)
 	p := stallTestProvider(t, srv.URL, 500*time.Millisecond)
 
 	resp, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
@@ -113,6 +132,32 @@ func TestChatStream_KeepAliveCommentsCountAsActivity(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("nil response with nil error")
+	}
+	if resp.Content != "All done." {
+		t.Errorf("want the answer text after the keep-alives: %q", resp.Content)
+	}
+}
+
+// Issue #1664 B8 (founder Q3 A): reasoning is not an answer. A stream that
+// keeps sending bytes — never silent, so no stall — but ends with [DONE]
+// carrying only reasoning deltas is an empty stream: the typed
+// ErrEmptyStream, never a success.
+func TestChatStream_ReasoningOnlyStreamIsAnEmptyStreamNotAStall(t *testing.T) {
+	srv, _ := dripServer(t, 250*time.Millisecond, 6, func(i int) string {
+		return fmt.Sprintf("data: {\"choices\":[{\"delta\":{\"reasoning\":\"chunk %02d\"}}]}\n\n", i)
+	})
+	p := stallTestProvider(t, srv.URL, 600*time.Millisecond)
+
+	_, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
+		nil, "test-model", nil, nil, nil)
+	if err == nil {
+		t.Fatal("a reasoning-only stream must not succeed (issue #1664 B8: reasoning is not an answer)")
+	}
+	if !errors.Is(err, common.ErrEmptyStream) {
+		t.Fatalf("want errors.Is(err, common.ErrEmptyStream); got %v", err)
+	}
+	if errors.Is(err, common.ErrStreamStalled) {
+		t.Fatalf("a stream that kept sending bytes must not classify as a stall; got %v", err)
 	}
 }
 
