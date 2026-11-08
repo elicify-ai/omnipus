@@ -19,7 +19,7 @@
  * provided by global-setup.ts unless stated otherwise.
  */
 
-import { errors, expect, type BrowserContext, type Page } from '@playwright/test'
+import { errors, expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { test as canonicalTest } from './fixtures/canonical-history'
 import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
@@ -416,15 +416,24 @@ async function startBug3aGateway(mock: HeldStreamProvider): Promise<GatewayProce
   })
 }
 
-/** Tab 1 logs in through the UI; tab 2 shares the context's cookies, so no
- * second login (and the session-token slot stays single). Returns tab B's page. */
-async function openBug3aTabs(context: BrowserContext, page: Page, gw: GatewayProcess): Promise<Page> {
+/** Tab A logs in through the UI and waits for the workspace chrome. */
+async function openBug3aTabA(page: Page, gw: GatewayProcess): Promise<void> {
   await loginToGateway(page, gw)
   await awaitWorkspaceChrome(page)
-  const page2 = await context.newPage()
+}
+
+/** Tab B shares the context's cookies, so it needs no second login (and the
+ * session-token slot stays single): it only navigates and waits for the
+ * chrome. The CALLER creates B (`context.newPage()`) and publishes it to the
+ * clean-up owner in that same statement, BEFORE calling this — both awaits
+ * below can fail, and a failure must still find B in the clean-up list so it
+ * closes before the gateway stops (CHECK round 4, R4-F1: the round-6
+ * extraction had moved the page creation into a helper that returned B only
+ * after these awaits succeeded, so a failure here left B open across
+ * gw.stop()). */
+async function loadBug3aTabB(page2: Page, gw: GatewayProcess): Promise<void> {
   await page2.goto(gw.baseURL)
   await awaitWorkspaceChrome(page2)
-  return page2
 }
 
 /** Fresh chats on both tabs — two genuinely distinct, empty sessions of the
@@ -625,7 +634,10 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       // stopping the gateway (round-3 cleanup-order fix, diag D1): a page left
       // open across gw.stop() retries against a stopped endpoint, and the
       // failure trace then shows a misleading connection-refused burst that is
-      // the test's own teardown noise, not gateway deafness.
+      // the test's own teardown noise, not gateway deafness. Tab B is assigned
+      // here in the body, in the statement that creates it and before any
+      // failable await on it (CHECK round 4, R4-F1) — never inside a helper
+      // that returns it only after its own awaits succeed.
       let page2: Page | null = null
       // bodyFailed is tracked SEPARATELY from the thrown value (CHECK R2-F1):
       // a body rejection whose value is undefined must still count as a
@@ -634,7 +646,11 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       let bodyError: unknown
       try {
         gw = await startBug3aGateway(mock)
-        page2 = await openBug3aTabs(context, page, gw)
+        await openBug3aTabA(page, gw)
+        // Create AND publish tab B to the clean-up owner in one statement;
+        // the failable goto/chrome wait run only afterwards (R4-F1).
+        page2 = await context.newPage()
+        await loadBug3aTabB(page2, gw)
         await freshBug3aChats(page, page2)
 
         // B is sent FIRST and A only once the mock has RECEIVED and held B's
