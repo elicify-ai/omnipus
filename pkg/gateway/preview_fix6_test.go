@@ -43,7 +43,10 @@ func TestPreviewFix6_SetPreviewStaticHeaders_ExplicitMode(t *testing.T) {
 	}
 	for _, want := range []string{
 		"default-src 'none';",
-		"script-src http://localhost:5000/preview/agent/tok123 'unsafe-inline' 'unsafe-eval';",
+		// ${PREFIX} = /preview/{agent}/{token}/ (spec; review F2): the source
+		// is the slash-terminated directory even though the caller passes
+		// the slashless request-path prefix.
+		"script-src http://localhost:5000/preview/agent/tok123/ 'unsafe-inline' 'unsafe-eval';",
 	} {
 		if !strings.Contains(got2, want) {
 			t.Fatalf("mode1=false: CSP %q missing pinned source %q", got2, want)

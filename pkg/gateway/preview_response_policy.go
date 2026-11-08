@@ -42,7 +42,8 @@ const previewMode1CSP = "frame-ancestors 'none'"
 // replaces it with the byte-stable template (buildPreviewCSP) — the same
 // header the dev proxy sets — so a static page cannot fetch or form-POST the
 // gateway origin. prefix is the percent-encoded /preview/{agent}/{token}
-// prefix (no trailing slash); Mode 1 ignores it.
+// prefix (no trailing slash; buildPreviewCSP adds the directory slash);
+// Mode 1 ignores it.
 func setPreviewStaticHeaders(w http.ResponseWriter, mode1 bool, mainOrigin, prefix string) {
 	setWorkspaceSecurityHeaders(w, mainOrigin)
 	applyPreviewResponseCORS(w.Header())
@@ -56,9 +57,18 @@ func setPreviewStaticHeaders(w http.ResponseWriter, mode1 bool, mainOrigin, pref
 
 // buildPreviewCSP renders the Mode 2 CSP template byte-stably: origin is the
 // canonical gateway origin, prefix the percent-encoded /preview/{agent}/{token}
-// prefix (no trailing slash), wsOrigin the ws:// form of the same authority.
+// request-path prefix (as the callers and the redirect rule hold it, no
+// trailing slash), wsOrigin the ws:// form of the same authority.
 // This function IS the static tripwire — do not reformat, reorder, or
 // "normalize" it; the trailing "\n" per directive is part of the template.
+//
+// The source path is the spec's ${PREFIX} = /preview/{agent}/{token}/ — it
+// ENDS WITH "/". Under CSP Level 3 path-part matching a source path without
+// a trailing slash is an exact match (it would admit only the bare prefix and
+// block every child stylesheet, module and fetch); with the slash it is a
+// directory match, segment by segment, so a sibling token that merely extends
+// the token string stays outside (review F2). Only the CSP gets the slash:
+// the redirect rule keeps its slashless prefix and its own in-prefix check.
 //
 // style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
 // "omnipus must not have inline styles, however content that can be previewed
@@ -67,6 +77,7 @@ func setPreviewStaticHeaders(w http.ResponseWriter, mode1 bool, mainOrigin, pref
 // other directive is unchanged. Omnipus's own app CSP (the SPA embed) keeps
 // its own, separate style policy.
 func buildPreviewCSP(origin, wsOrigin, prefix string) string {
+	prefix = strings.TrimSuffix(prefix, "/") + "/"
 	return "default-src 'none';\n" +
 		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
 		"style-src " + origin + prefix + " 'unsafe-inline';\n" +

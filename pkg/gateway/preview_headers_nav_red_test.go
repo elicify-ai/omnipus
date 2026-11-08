@@ -199,6 +199,10 @@ func (h *piRedGuardHarness) piRedGuardGet(
 // style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
 // previewed content on the preview address may carry inline styles;
 // Omnipus's own app CSP does not.
+//
+// prefix IS the spec's ${PREFIX}: it ends with "/" (review F2 — the CSP3
+// directory form; a slashless source is an exact-path match that blocks
+// every child asset). Callers pass the token path + "/".
 func piRedMode2CSPTemplate(origin, wsOrigin, prefix string) string {
 	return "default-src 'none';\n" +
 		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
@@ -263,7 +267,7 @@ func TestPreviewCSPHeaderSet(t *testing.T) {
 		})
 		resp := h.piRedGuardGet(t, "", prefix+"/app.js", http.MethodGet, nil)
 		t.Cleanup(func() { _ = resp.Body.Close() })
-		want := piRedMode2CSPTemplate(origin, "ws://localhost:"+h.port, prefix)
+		want := piRedMode2CSPTemplate(origin, "ws://localhost:"+h.port, prefix+"/")
 		// The template is byte-stable AT THE SOURCE; on the wire net/http
 		// sanitizes header values (LF -> space, trailing trim), so the wire-
 		// observable form is the template with newlines normalized. Compare

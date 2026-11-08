@@ -106,7 +106,7 @@ func TestFix3Mode2StaticCSP_MatchesTemplate(t *testing.T) {
 
 	// Oracle: the spec template, transcribed by piRedMode2CSPTemplate —
 	// the expected value is derived from the spec, not from the response.
-	want := piRedMode2CSPTemplate(origin, "ws://localhost:"+h.port, prefix)
+	want := piRedMode2CSPTemplate(origin, "ws://localhost:"+h.port, prefix+"/") // ${PREFIX} ends with "/" (F2)
 	wantWire := strings.TrimSpace(strings.ReplaceAll(want, "\n", " "))
 	assert.Equal(t, wantWire, resp.Header.Get("Content-Security-Policy"),
 		"RED (FR-014, architect A1): the Mode 2 STATIC CSP must be byte-identical to the spec template — "+

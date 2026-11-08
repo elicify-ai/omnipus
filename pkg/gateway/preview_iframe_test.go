@@ -119,7 +119,9 @@ func TestServePreview_FrameAncestorsHeader(t *testing.T) {
 	// public_url); ${PREFIX} = the token prefix — this fixture's characters
 	// are all in the RFC 3986 unreserved set, so percent-encoding is identity.
 	const origin = "http://127.0.0.1:5000"
-	prefix := "/preview/agent-1/" + token
+	// ${PREFIX} = /preview/{agent}/{token}/ — the spec's value ends with "/"
+	// (review F2: the CSP3 directory source, not an exact-path source).
+	prefix := "/preview/agent-1/" + token + "/"
 	// style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
 	// previewed content may carry inline styles; Omnipus's own app CSP does not.
 	want := "default-src 'none';\n" +

@@ -191,7 +191,11 @@ func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 	// public_url); ${PREFIX} = the token prefix — this fixture's characters
 	// are all in the RFC 3986 unreserved set, so percent-encoding is identity.
 	const origin = "http://127.0.0.1:8080"
-	prefix := "/preview/site-agent-csp/" + token
+	// ${PREFIX} = /preview/{agent}/{token}/ — the spec's value ENDS WITH "/"
+	// (review F2): under CSP3 path-part matching a slashless source is an
+	// exact-path match and would block style.css; the trailing slash makes
+	// it the preview directory.
+	prefix := "/preview/site-agent-csp/" + token + "/"
 	// style-src carries 'unsafe-inline' per the founder ruling of 2026-09-28:
 	// previewed content may carry inline styles; Omnipus's own app CSP does not.
 	want := "default-src 'none';\n" +
@@ -219,6 +223,12 @@ func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 		"the app's own stylesheet must be allowed via the template's prefix source and inline "+
 			"styles per the founder ruling of 2026-09-28 — "+
 			"linked stylesheets from under the token prefix load, nothing wider")
+	// Positive control (CSP3 path-part matching, review F2): the document's
+	// own style.css URL is admitted by that source; the gateway API is not.
+	assert.True(t, cspSourceMatchesURL(t, origin+prefix, origin+prefix+"style.css"),
+		"the style-src directory source must admit the linked style.css")
+	assert.False(t, cspSourceMatchesURL(t, origin+prefix, origin+"/api/v1/config"),
+		"the style-src directory source must not admit a gateway path")
 }
 
 // TestServeWeb_RealStaticSite_AppJS verifies that app.js is served with the

@@ -237,7 +237,8 @@ func TestPreviewFix3_StaticMode2CSP(t *testing.T) {
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	csp := resp.Header.Get("Content-Security-Policy")
 
-	want := fix3Mode2CSPTemplate("http://localhost:"+h.port, "ws://localhost:"+h.port, prefix)
+	// ${PREFIX} = /preview/{agent}/{token}/ — ends with "/" (spec; review F2).
+	want := fix3Mode2CSPTemplate("http://localhost:"+h.port, "ws://localhost:"+h.port, prefix+"/")
 	wantWire := strings.TrimSpace(strings.ReplaceAll(want, "\n", " "))
 	assert.Equal(t, wantWire, csp,
 		"RED (A1, FR-014/S-2.13): the Mode 2 STATIC preview CSP must be the byte-stable "+
