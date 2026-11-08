@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,11 +45,12 @@ import (
 // that discriminates, which is why its failure is this row's RED); the run
 // is unconfined.
 //
-// (e) is held on the pre-D8c code: the captured policy does not exist to
-// read — the same seam T-102 names (a hook in pkg/preview capturing the
-// converter's SandboxPolicy per launcher start). Its check, once the seam
-// exists: the registry folder appears with read access only, and no rule
-// covers any other part of <home>/system.
+// (e) is checked on the accepted seam (§3.4 D8d ruling): the policy of a
+// real start of the operator-registered component, captured by
+// pkg/preview/confine.go::testHookConverterStart — never a policy built by
+// hand — grants the registry folder read only, and no rule covers any other
+// part of <home>/system. The case runs where the component that touches
+// <home>/system is in scope (operator_registered).
 func TestPreviewRegistryReadInPlace(t *testing.T) {
 	primeKernelSandbox(t)
 
@@ -143,6 +145,43 @@ func TestPreviewRegistryReadInPlace(t *testing.T) {
 			require.NoError(t, hashErr, "instrument: the fixture registry is readable after the call")
 			require.Equal(t, before, after, "T-105 (d): the registry folder is byte-identical after the second start")
 		})
+
+		// (e) on the accepted seam (§3.4 D8d ruling): the policy of a real
+		// start of THIS component, captured by testHookConverterStart — never
+		// a policy the test builds — grants the registry folder read and only
+		// read, and no rule covers any other part of <home>/system.
+		t.Run("e_policy_grants_registry_read_only", func(t *testing.T) {
+			var starts []converterStart
+			testHookConverterStart = func(cs converterStart) { starts = append(starts, cs) }
+			t.Cleanup(func() { testHookConverterStart = nil })
+			conv, _ := regReadCaseCall(t, comp, "regread_read")
+			regReadRun(t, conv)
+			require.NotEmpty(t, starts, "T-105 (e): the hook captured zero converter starts — a test expecting a confined start fails, never skips (seam ruling, §3.4 D8d)")
+			cs := starts[len(starts)-1]
+			require.False(t, cs.policy.ReadsOpen, "T-105 (e): ReadsOpen is false")
+			require.False(t, cs.policy.ExecOpen, "T-105 (e): ExecOpen is false")
+			require.Empty(t, cs.policy.DeniedPaths, "T-105 (e) §3.4 D8c: the converter policy carries no deny list")
+			require.Empty(t, cs.policy.DeniedNodes, "T-105 (e) §3.4 D8c: the converter policy carries no deny list")
+			require.Empty(t, cs.policy.DeniedPathPrefixes, "T-105 (e) §3.4 D8c: the converter policy carries no deny list")
+			require.Empty(t, cs.policy.WriteDeniedPaths, "T-105 (e) §3.4 D8c: the converter policy carries no deny list")
+			systemReal, linkErr := filepath.EvalSymlinks(filepath.Join(home, "system"))
+			require.NoError(t, linkErr, "instrument: <home>/system resolves")
+			foundRegistry := false
+			for _, rule := range cs.policy.FilesystemRules {
+				resolved, ruleLinkErr := filepath.EvalSymlinks(rule.Path)
+				require.NoError(t, ruleLinkErr, "instrument: a captured rule path resolves: %s", rule.Path)
+				if resolved == comp.Registry {
+					foundRegistry = true
+					require.Equal(t, sandbox.AccessRead, rule.Access,
+						"T-105 (e) §3.4 D8c R1: the captured policy grants the registry folder READ ONLY — no write, no execute")
+					continue
+				}
+				require.False(t, previewWithinDir(systemReal, resolved),
+					"T-105 (e) §3.4 D8c R1: no rule covers any part of <home>/system other than the registry folder — found rule on %s", resolved)
+			}
+			require.True(t, foundRegistry,
+				"T-105 (e) §3.4 D8c R1: the captured policy grants the registry folder read")
+		})
 	})
 
 	// The packaged fixture: a packaged manifest at a packaged candidate
@@ -236,9 +275,10 @@ func TestPreviewRegistryReadInPlace(t *testing.T) {
 		})
 	})
 
-	t.Run("e_policy_grants_registry_read_only", func(t *testing.T) {
-		t.Fatal("BLOCKED: the captured policy does not exist to read on this code — the T-102/T-105 test seam (a hook in pkg/preview capturing the converter's SandboxPolicy per launcher start) does not exist, and the row forbids a policy built by hand. Required by T-105 (e) (§13): the captured policy grants the registry folder read only, and no rule covers any other part of <home>/system")
-	})
+	// (e) runs inside the operator_registered variant above: the captured
+	// policy (accepted seam, §3.4 D8d ruling) of a real start of the
+	// operator-registered component grants the registry read only and covers
+	// no other part of <home>/system.
 }
 
 // regReadRegistryFixture writes the fixture registry (two regular files) at
