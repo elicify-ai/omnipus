@@ -123,7 +123,7 @@ describe('effortSwitchNote — S-09 exact picker note strings', () => {
 
   it.each([
     { kind: 'mapped', source: 'medium', value: 'low', expected: `Effort set to Low. ${model} doesn't offer Medium.` },
-    { kind: 'mapped', source: 'xhigh', value: 'high', expected: `Effort set to High. ${model} doesn't offer XHigh.` },
+    { kind: 'mapped', source: 'xhigh', value: 'high', expected: `Effort set to High. ${model} doesn't offer Extra high.` },
     { kind: 'mapped_on', source: 'on', value: 'medium', expected: 'Effort set to Medium.' },
     { kind: 'switch_only', source: 'high', value: 'on', expected: `Effort set to On. ${model} only turns reasoning on or off.` },
     {

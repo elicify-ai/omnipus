@@ -34,7 +34,7 @@ GREEN, scratch-clone mutation checks, proof-of-failability checklist completion 
 
 ## Round 6 — chip strings, founder decision 2026-11-07
 
-The visible chip is the level actually used, or "Nothing sent". The control itself is named "Effort" (its `aria-label`); the longer sentence is its tooltip and accessible description (`aria-describedby`), not its name. Dashed outline means inherited (`data-effort-inherited`); the amber dot (`data-effort-mark=attention`) means a different level was sent, or nothing was sent; the gold dot (`data-effort-mark=command`) means `/effort`. C5 (XHigh versus "Extra high") is unchanged: it is still an open question.
+The visible chip is the level actually used, or "Nothing sent". The control itself is named "Effort" (its `aria-label`); the longer sentence is its tooltip and accessible description (`aria-describedby`), not its name. Dashed outline means inherited (`data-effort-inherited`); the amber dot (`data-effort-mark=attention`) means a different level was sent, or nothing was sent; the gold dot (`data-effort-mark=command`) means `/effort`. C5 is decided (founder, Q2 A, 2026-11-08): the level stored and sent as `xhigh` is shown as "Extra high"; the wire value and code identifiers stay `xhigh`.
 
 | Place | What the test or spec now requires |
 |---|---|

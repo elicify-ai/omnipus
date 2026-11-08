@@ -149,7 +149,7 @@ func TestT_S1_Mapping_S09_NoteTexts(t *testing.T) {
 		Expected string
 	}{
 		{"mapped level", "mapped", "medium", "low", "Effort set to Low. " + model + " doesn't offer Medium."},
-		{"xhigh source", "mapped", "xhigh", "high", "Effort set to High. " + model + " doesn't offer XHigh."},
+		{"xhigh source", "mapped", "xhigh", "high", "Effort set to High. " + model + " doesn't offer Extra high."},
 		{"on source to level", "mapped_on", "on", "medium", "Effort set to Medium."},
 		{"ranked to switch", "switch_only", "high", "on", "Effort set to On. " + model + " only turns reasoning on or off."},
 		{"nothing sendable", "nothing_sendable", "high", "provider_default", "Effort set to Provider default. Omnipus can't change effort for " + model + "."},

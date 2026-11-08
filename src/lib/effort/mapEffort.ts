@@ -135,7 +135,7 @@ export function mapEffort(source: string, target: EffortTarget): EffortMapping {
   return result(PROVIDER_DEFAULT, 'empty_candidate')
 }
 
-/** Display label for a stored effort value ("none" reads Off, "xhigh" XHigh). */
+/** Display label for a stored effort value ("none" reads Off, "xhigh" Extra high). */
 export function effortLabel(value: string): string {
   switch (value) {
     case 'none':
@@ -146,7 +146,7 @@ export function effortLabel(value: string): string {
     case PROVIDER_DEFAULT:
       return 'Provider default'
     case 'xhigh':
-      return 'XHigh'
+      return 'Extra high'
     case '':
       return 'Not set'
     default:

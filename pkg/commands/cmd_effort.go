@@ -185,7 +185,7 @@ func effortSettingLabel(v string) string {
 	case "on":
 		return "On"
 	case "xhigh":
-		return "XHigh"
+		return "Extra high"
 	}
 	r := []rune(v)
 	return strings.ToUpper(string(r[:1])) + string(r[1:])

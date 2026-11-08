@@ -58,7 +58,7 @@ func isEffortOff(v string) bool { return effortdialect.IsOff(v) }
 func effortRank(level string) (int, bool) { return effortdialect.Rank(level) }
 
 // EffortLabel is the display label of a stored effort value ("none" reads
-// Off, "xhigh" XHigh), the same labels the web UI uses.
+// Off, "xhigh" Extra high), the same labels the web UI uses.
 func EffortLabel(v string) string {
 	switch v {
 	case effortNone, EffortOff:
@@ -68,7 +68,7 @@ func EffortLabel(v string) string {
 	case EffortProviderDefault:
 		return "Provider default"
 	case "xhigh":
-		return "XHigh"
+		return "Extra high"
 	case "":
 		return "Not set"
 	}
