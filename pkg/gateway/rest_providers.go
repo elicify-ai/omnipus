@@ -610,6 +610,14 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 		jsonErrField(w, http.StatusBadRequest, admitErr.Error(), field)
 		return nil, false
 	}
+	// A catalog row speaks only the protocols the catalog lists for it. A
+	// protocol it does not offer is refused before anything is saved, so a
+	// caller cannot relabel a cloud row as a local one (the address check
+	// treats a local row as loopback by definition).
+	if !p.isCustomRow && !catalogOffersProtocol(a.providerCatalog, p.providerID, p.reqProtocol) {
+		jsonErrField(w, http.StatusBadRequest, providerProtocolNotOfferedMsg, "protocol")
+		return nil, false
+	}
 	// Hosted edition: a catalog id keeps the catalog's endpoint. An api_base
 	// on one is refused, not ignored, so the caller learns the save did not
 	// do what was asked; only a host the operator's SSRF allow list names is
@@ -631,6 +639,46 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 // id where the hosted endpoint guard refuses it.
 const providerCatalogEndpointRefusedMsg = "This provider's address can't be changed. " +
 	"To use a different address, add it as a custom provider."
+
+// providerProtocolNotOfferedMsg is the 400 for a protocol the catalog does not
+// list for a built-in provider.
+const providerProtocolNotOfferedMsg = "This provider does not support the connection type that was sent. " +
+	"To use a different type, add it as a custom provider."
+
+// catalogProtocol is the catalog's primary protocol for a built-in provider,
+// or "" when the catalog does not know the id.
+func catalogProtocol(cat *catalog.Catalog, id string) catalog.Protocol {
+	if cat == nil {
+		return ""
+	}
+	if row, ok := cat.Provider(id); ok {
+		return row.Protocol
+	}
+	return ""
+}
+
+// catalogOffersProtocol reports whether a built-in provider may be saved with
+// protocol. An empty protocol, an unknown id and a missing catalog are not
+// refused here: the admission step owns those answers.
+func catalogOffersProtocol(cat *catalog.Catalog, id, protocol string) bool {
+	protocol = strings.TrimSpace(protocol)
+	if protocol == "" || cat == nil {
+		return true
+	}
+	row, ok := cat.Provider(id)
+	if !ok {
+		return true
+	}
+	if row.Protocol == catalog.Protocol(protocol) {
+		return true
+	}
+	for _, e := range row.Protocols {
+		if e.Protocol == catalog.Protocol(protocol) {
+			return true
+		}
+	}
+	return false
+}
 
 func usableStoredAPIBase(providerID, apiBase string, custom bool) string {
 	if !custom && providers_pkg.IsCatalogProvider(providerID) && providercommon.CatalogBaseOverrideRefused(apiBase) {
@@ -671,8 +719,13 @@ func (a *restAPI) providerPutCheckEndpoint(p *providerPut) bool {
 	// loopback by definition. In core, sandbox.ssrf on must not refuse it
 	// here: that is today's behaviour for a keyless save. Only the hosted
 	// guard has no local exception.
+	// A catalog row's protocol is the catalog's, never the caller's.
+	localityProtocol := catalog.Protocol(p.reqProtocol)
+	if !p.isCustomRow {
+		localityProtocol = catalogProtocol(a.providerCatalog, p.providerID)
+	}
 	if !providercommon.EndpointGuardActive() &&
-		catalog.DeriveLocality(p.providerID, catalog.Protocol(p.reqProtocol), p.isCustomRow, base) == catalog.LocalityLocal {
+		catalog.DeriveLocality(p.providerID, localityProtocol, p.isCustomRow, base) == catalog.LocalityLocal {
 		return true
 	}
 	if err := checker.CheckURL(p.r.Context(), base); err != nil {

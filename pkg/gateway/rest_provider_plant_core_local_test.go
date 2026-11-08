@@ -81,3 +81,28 @@ func TestProviderPlantCore_SSRFOn_KeylessSaveOfCloudRowToPrivateAddressRefused(t
 	require.Len(t, rows, 1)
 	assert.Equal(t, "https://mybox.example.com/v1", rows[0]["api_base"], "the stored base must be unchanged")
 }
+
+// TestProviderPlantCore_SSRFOn_CatalogRowCannotClaimLocalByProtocol: locality
+// of a catalog row comes from the catalog, never from the caller's protocol.
+// A cloud row that claims protocol=ollama must not skip the address check,
+// and a protocol the catalog row does not offer is refused before any write.
+func TestProviderPlantCore_SSRFOn_CatalogRowCannotClaimLocalByProtocol(t *testing.T) {
+	env := newPlantEnv(t, config.EditionCore, false)
+	checker := security.NewSSRFChecker(nil)
+	checker.SetResolver(&recordingResolver{ip: net.ParseIP("10.0.0.7")})
+	env.api.ssrfChecker = checker
+	seedProviderRow(t, env, map[string]any{
+		"provider": "plantco", "model": "plant-model",
+		"api_base": "https://api.plantco.example/v1",
+	})
+	body := `{"api_base":"https://planter.example.net/v1","protocol":"ollama"}`
+
+	w := serveViaRealMux(t, env.api, env.cfg,
+		plantRequest(http.MethodPut, "/api/v1/providers/plantco", body, false), "198.51.100.183")
+
+	require.GreaterOrEqual(t, w.Code, 400, "body=%s", w.Body.String())
+	require.Less(t, w.Code, 500, "body=%s", w.Body.String())
+	rows := diskProviderRows(t, env)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "https://api.plantco.example/v1", rows[0]["api_base"], "nothing may be persisted")
+}
