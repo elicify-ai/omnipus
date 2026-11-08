@@ -7,10 +7,12 @@
 //
 // ORACLE: issue #1471 "Expected" plus contracts/openapi.yaml — /sessions/{id}
 // carries GET (getSession), PUT (renameSession) and DELETE (deleteSession);
-// /sessions/{id}/messages is a defined GET-only sub-resource (getSessionMessages)
-// and /sessions/{id}/tool-results/{ref} a defined GET-only sub-resource
-// (getToolResult). No expected status or header below was read off the
-// implementation:
+// /sessions/{id}/messages is a defined GET-only sub-resource (getSessionMessages),
+// /sessions/{id}/messages/{history_position} a defined GET-only sub-resource
+// (getSessionHistoryEntry — the #1452 D2 per-message route, landed 2026-10-27
+// amendment) and /sessions/{id}/tool-results/{ref} a defined GET-only
+// sub-resource (getToolResult). No expected status or header below was read
+// off the implementation:
 //
 //	PUT/DELETE bare /sessions/{id}      → allowed (contract: renameSession / deleteSession)
 //	PUT/DELETE .../messages|messages/0  → 405  (issue primary rule "any sub-path
@@ -26,11 +28,18 @@
 //	                                      makes both sub-resources GET-only, so GET
 //	                                      is the one permitted method to advertise)
 //	GET .../messages                    → 200  (control: contract-defined getSessionMessages)
-//	GET .../messages/0                  → 404  (issue: "GET on an unknown sub-path
-//	                                      returns 404"; no messages/{position} route
-//	                                      exists on this base — when #1452 D2 lands
-//	                                      this case becomes a defined GET and the
-//	                                      expected value must be revisited then)
+//	GET .../messages/{history_position} → contract getSessionHistoryEntry (the
+//	                                      #1452 D2 route, now landed): a malformed,
+//	                                      blank, badly encoded, wrong-version or
+//	                                      non-47-character position is 400 with
+//	                                      error exactly "invalid history position";
+//	                                      a well-formed but unknown or foreign
+//	                                      position is 404 with error exactly
+//	                                      "history position not found" — this
+//	                                      replaces the pre-D2 404-for-any-GET
+//	                                      case, whose oracle the D2 landing
+//	                                      retired (team-lead-authorised
+//	                                      correction)
 //	GET .../unknown                     → 404  (issue: "GET on an unknown sub-path returns 404")
 //
 // Router-level tool-results coverage (CHECK F1): GET
@@ -136,6 +145,7 @@ func TestSessionsSubPath(t *testing.T) {
 		expected int
 		allow    string // exact Allow header required on a 405 (CHECK F2); "" = no assertion
 		refused  bool   // session must still exist, unrenamed, afterwards
+		errBody  string // exact ErrorResponse.error the contract requires; "" = no assertion
 	}{
 		// --- Controls: the documented behaviour that must keep working. ---
 		{
@@ -186,9 +196,24 @@ func TestSessionsSubPath(t *testing.T) {
 			expected: http.StatusNotFound, refused: true,
 		},
 		{
-			name: "GET per-message address without the D2 route returns not found", method: http.MethodGet,
+			// Contract getSessionHistoryEntry '400': ErrorResponse.error is
+			// exactly "invalid history position" for a malformed, blank, badly
+			// encoded, wrong-version or non-47-character position. "0" fails
+			// both the contract pattern ^hp1_[A-Za-z0-9_-]{43}$ and its
+			// 47-character length.
+			name: "GET per-message address with a malformed position returns invalid history position", method: http.MethodGet,
 			subPath:  "messages/0",
-			expected: http.StatusNotFound, refused: true,
+			expected: http.StatusBadRequest, refused: true, errBody: "invalid history position",
+		},
+		{
+			// Contract getSessionHistoryEntry '404': ErrorResponse.error is
+			// exactly "history position not found" for an unknown or foreign
+			// well-formed position. The position below matches the contract
+			// pattern ^hp1_[A-Za-z0-9_-]{43}$ (hp1_ + 43 chars = 47) but was
+			// never issued for this case's fresh session.
+			name: "GET per-message address with an unknown well-formed position returns not found", method: http.MethodGet,
+			subPath:  "messages/" + "hp1_" + strings.Repeat("A", 43),
+			expected: http.StatusNotFound, refused: true, errBody: "history position not found",
 		},
 		{
 			name: "GET unknown sub-path returns not found", method: http.MethodGet,
@@ -233,6 +258,14 @@ func TestSessionsSubPath(t *testing.T) {
 			if tc.allow != "" {
 				assert.Equal(t, tc.allow, rec.Header().Get("Allow"),
 					"405 must advertise the sub-resource's permitted method (%s %s): body=%s",
+					tc.method, path, rec.Body.String())
+			}
+			if tc.errBody != "" {
+				var errResp generated.ErrorResponse
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &errResp),
+					"%s %s: body=%s", tc.method, path, rec.Body.String())
+				assert.Equal(t, tc.errBody, errResp.Error,
+					"error body must name the contract's exact reason (%s %s): body=%s",
 					tc.method, path, rec.Body.String())
 			}
 
