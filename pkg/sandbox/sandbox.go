@@ -195,6 +195,26 @@ type SandboxPolicy struct {
 	// network allows instead of (deny network*) plus a port list. Set only by
 	// the God Mode floor derivation.
 	NetworkUnhandled bool
+
+	// LookupOnlyPaths are absolute, cleaned DIRECTORY paths a sandboxed child
+	// may look up but not open: it may learn that the folder exists and read
+	// its attributes (kind, permissions, owner, size, times), and nothing
+	// else — no listing, no reading, nothing below it. Set only by the
+	// document-preview converter for the folders above its own listed folders
+	// (office-preview spec §3.4 D8d): LibreOffice resolves the real path of
+	// its program, registry and profile folders and fails to start when it
+	// cannot look up each folder on the way.
+	//
+	// macOS renders each entry as exactly one
+	// (allow file-read-metadata (literal "<folder>")) line among the allows;
+	// literal matches that one path only. An entry that is not absolute and
+	// cleaned aborts the render, so the spawn does not happen. Entries are not
+	// an allow for the "zero allows" refusal.
+	//
+	// Linux and Windows ignore the field and never turn it into a grant:
+	// Landlock cannot restrict stat(2) or chdir(2), so a confined program can
+	// already look up any path it can name, and Windows has no file isolation.
+	LookupOnlyPaths []string
 }
 
 // FilesystemModel selects how the sandbox treats reads and program execution.
