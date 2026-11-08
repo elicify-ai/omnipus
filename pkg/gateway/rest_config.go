@@ -114,6 +114,19 @@ func sanitizeConfigForWire(m map[string]any) {
 			delete(defaults, "default_agent_id")
 		}
 	}
+	// ARCH-906 (option B): tools.mcp.servers.<name>.header_refs is
+	// credential-store indirection — key names the POST/PATCH
+	// /api/v1/mcp-servers routes write and pkg/mcp resolves at connect time.
+	// Internal-only: no reader needs it (the SPA gets header names from the
+	// contracted /mcp-servers list), and serving it let a GET→PUT round trip
+	// write the keyword-redacted "[redacted]" back as a ref name. PUT
+	// /api/v1/config refuses it and preserves the stored refs instead
+	// (findMCPServerHeaderRefsPath, preserveMCPServerHeaderRefs).
+	for _, srv := range mcpServersSection(m) {
+		if srvMap, ok := srv.(map[string]any); ok {
+			delete(srvMap, mcpHeaderRefsKey)
+		}
+	}
 }
 
 // redactSensitiveFields recursively redacts map values whose keys contain
@@ -488,6 +501,107 @@ func isLiteralMCPServerHeaderDotPath(p string, val any) bool {
 		}
 	}
 	return false
+}
+
+// mcpHeaderRefsKey is the config.json key of config.MCPServerConfig.HeaderRefs.
+const mcpHeaderRefsKey = "header_refs"
+
+// findMCPServerHeaderRefsPath returns the dotted path of the first
+// header_refs key under tools.mcp.servers.<name> in a decoded PUT
+// /api/v1/config body, or "" when there is none (ARCH-906; the PUT vector of
+// #902). Only POST/PATCH /api/v1/mcp-servers write header refs: a ref
+// repointed through the generic config write would make the server send
+// whatever other stored credential it names. Any value is refused — the key's
+// presence is the violation — so an empty map or null cannot wipe refs
+// either.
+//
+// It walks paths exactly like findLiteralMCPServerHeaderDotPath (nested
+// objects and dot-path keys accumulate onto one dotted path), so the nested
+// shape, a top-level dot-path key and a partially flattened key are all
+// seen. Segments are compared with jsonFoldKey, because config.json is
+// decoded by encoding/json, which binds "Header_Refs" to the same field;
+// over-matching here can only refuse a write, never admit one. After the
+// tools.mcp.servers prefix, header_refs is matched anywhere from the fifth
+// segment on, since a server name may itself contain dots.
+func findMCPServerHeaderRefsPath(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var walk func(prefix string, val any) string
+	walk = func(prefix string, val any) string {
+		if isMCPServerHeaderRefsPath(prefix) {
+			return prefix
+		}
+		child, ok := val.(map[string]any)
+		if !ok {
+			return ""
+		}
+		for k, sub := range child {
+			next := k
+			if prefix != "" {
+				next = prefix + "." + k
+			}
+			if hit := walk(next, sub); hit != "" {
+				return hit
+			}
+		}
+		return ""
+	}
+	return walk("", m)
+}
+
+// isMCPServerHeaderRefsPath reports whether the accumulated dotted path p
+// reaches a header_refs key of an MCP server entry (see
+// findMCPServerHeaderRefsPath).
+func isMCPServerHeaderRefsPath(p string) bool {
+	segs := strings.Split(p, ".")
+	if len(segs) < 5 ||
+		jsonFoldKey(segs[0]) != jsonFoldKey("tools") ||
+		jsonFoldKey(segs[1]) != jsonFoldKey("mcp") ||
+		jsonFoldKey(segs[2]) != jsonFoldKey("servers") {
+		return false
+	}
+	for _, seg := range segs[4:] {
+		if jsonFoldKey(seg) == jsonFoldKey(mcpHeaderRefsKey) {
+			return true
+		}
+	}
+	return false
+}
+
+// snapshotMCPServerHeaderRefs returns every stored
+// tools.mcp.servers.<name>.header_refs value of the on-disk config map, keyed
+// by server name (ARCH-906). GET /api/v1/config no longer serves header
+// refs and PUT refuses them, yet PUT merges only one level deep — a body
+// carrying tools.mcp replaces the whole stored map — so the refs must be
+// carried across the merge by preserveMCPServerHeaderRefs.
+func snapshotMCPServerHeaderRefs(m map[string]any) map[string]any {
+	refs := map[string]any{}
+	for name, srv := range mcpServersSection(m) {
+		srvMap, ok := srv.(map[string]any)
+		if !ok {
+			continue
+		}
+		if r, ok := srvMap[mcpHeaderRefsKey]; ok {
+			refs[name] = r
+		}
+	}
+	return refs
+}
+
+// preserveMCPServerHeaderRefs re-applies the snapshot taken before the PUT
+// merge to every server that still exists after it. A server the body
+// removed stays removed, refs included.
+func preserveMCPServerHeaderRefs(m map[string]any, refs map[string]any) {
+	servers := mcpServersSection(m)
+	for name, r := range refs {
+		srvMap, ok := servers[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		srvMap[mcpHeaderRefsKey] = r
+	}
 }
 
 // dropRedactedMCPServerHeaderValues removes placeholder header entries
@@ -995,6 +1109,18 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// ARCH-906 / #902 PUT vector: header refs are written only by POST/PATCH
+	// /api/v1/mcp-servers. Any header_refs key in this body — nested, dot-path
+	// or case-variant, whatever its value — is refused and NOTHING persists;
+	// the stored refs are carried across the merge below instead.
+	if badPath := findMCPServerHeaderRefsPath(typedBody); badPath != "" {
+		jsonErr(
+			w,
+			http.StatusForbidden,
+			fmt.Sprintf("%s: MCP header references cannot be set via the config endpoint — they are managed by POST/PATCH /api/v1/mcp-servers", badPath),
+		)
+		return
+	}
 
 	// Use safeUpdateConfigJSON to hold configMu during the read-modify-write cycle.
 	// Deep merge nested objects so partial updates don't wipe sibling keys
@@ -1012,6 +1138,11 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			// no baseline to compare against — refuse rather than guess.
 			return fmt.Errorf("stored agents section does not decode: %w", fpErr)
 		}
+		// ARCH-906: the same one-level merge would drop every stored
+		// header_refs of a server the body re-sends (GET no longer serves
+		// them, and the guard above refuses them in a body) — carry them
+		// across the merge for servers that still exist.
+		headerRefs := snapshotMCPServerHeaderRefs(m)
 		for k, v := range updates {
 			var parsed any
 			if err := json.Unmarshal(v, &parsed); err != nil {
@@ -1035,6 +1166,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			m[k] = parsed
 		}
+		preserveMCPServerHeaderRefs(m, headerRefs)
 		if err := preserveProtectedAgentDefaults(m, protected); err != nil {
 			return err
 		}

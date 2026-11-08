@@ -237,3 +237,92 @@ func TestAddMCPServer_NameCollisionRace_RollsBackHeaderSecrets(t *testing.T) {
 	// The winning entry on disk is untouched by the failed create.
 	assert.NotNil(t, readPersistedMCPServer(t, api.homePath, "race-srv"))
 }
+
+// seedMCPServerWithHeaderRefs creates an sse MCP server through the real
+// POST /api/v1/mcp-servers route — the only sanctioned writer of header_refs
+// (ARCH-906) — so config.json carries the refs and the credential store
+// carries their secrets, exactly as on a real install. It returns the
+// header_refs map persisted on disk for the server.
+func seedMCPServerWithHeaderRefs(
+	t *testing.T, api *restAPI, name string, headers map[string]string,
+) map[string]any {
+	t.Helper()
+	body := gen.McpServerCreate{
+		Name:      name,
+		Transport: gen.McpServerCreateTransportSse,
+		Url:       gwsecStrPtr("https://127.0.0.1:1/sse"),
+		Headers:   &headers,
+	}
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/mcp-servers", bytes.NewReader(raw))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleMCPServers(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "seed POST must create %q; body=%s", name, w.Body.String())
+	entry := readPersistedMCPServer(t, api.homePath, name)
+	require.NotNil(t, entry, "seed: %q must be on disk", name)
+	refs, ok := entry["header_refs"].(map[string]any)
+	require.True(t, ok, "seed: %q must carry header_refs on disk; entry=%v", name, entry)
+	require.Len(t, refs, len(headers), "seed: one ref per header")
+	return refs
+}
+
+// TestConfigGETPUTRoundTrip_HeaderRefsSurviveAndConnectResolves is the
+// end-to-end pin of ARCH-906 option B: a client that reads GET
+// /api/v1/config and writes its tools section back with PUT (a
+// read-modify-write) must leave every stored header ref unchanged, and the
+// server must still resolve its header credentials at connect time.
+//
+// The X-Api-Key header is the F4 case: its NAME contains "key", so the old
+// recursive keyword redaction served its ref as "[redacted]" and the PUT
+// wrote that placeholder back as the ref name, silently breaking the
+// server's auth. Authorization is the verbatim-served case.
+//
+// BDD:
+//
+//	Given server s1 created via POST /mcp-servers with Authorization and
+//	  X-Api-Key headers (refs on disk, secrets in the store)
+//	When the client GETs /api/v1/config and PUTs {"tools": <served tools>}
+//	Then the PUT succeeds, config.json's s1.header_refs is unchanged,
+//	  and POST /mcp-servers/s1/test resolves the credentials and reaches
+//	  the connect attempt
+func TestConfigGETPUTRoundTrip_HeaderRefsSurviveAndConnectResolves(t *testing.T) {
+	api, _ := newTestRestAPIWithHomeAndCredStore(t)
+	before := seedMCPServerWithHeaderRefs(t, api, "s1", map[string]string{
+		"Authorization": "Bearer gwsec-906-roundtrip-auth",
+		"X-Api-Key":     "gwsec-906-roundtrip-apikey",
+	})
+
+	wg := httptest.NewRecorder()
+	api.HandleConfig(wg, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
+	require.Equal(t, http.StatusOK, wg.Code, "body=%s", wg.Body.String())
+	var served map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &served))
+	toolsServed, ok := served["tools"]
+	require.True(t, ok, "GET /config must serve the tools section")
+
+	putBody, err := json.Marshal(map[string]any{"tools": toolsServed})
+	require.NoError(t, err)
+	wp := httptest.NewRecorder()
+	rp := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(putBody))
+	rp.Header.Set("Content-Type", "application/json")
+	api.HandleConfig(wp, rp)
+	require.Equal(t, http.StatusOK, wp.Code,
+		"a GET->PUT round trip of the tools section must be accepted; body=%s", wp.Body.String())
+
+	after := readPersistedMCPServer(t, api.homePath, "s1")
+	require.NotNil(t, after, "s1 must still exist after the round trip")
+	assert.Equal(t, before, after["header_refs"],
+		"ARCH-906: a GET->PUT round trip must leave the stored header_refs unchanged")
+
+	wt := httptest.NewRecorder()
+	api.HandleMCPServers(wt, httptest.NewRequest(http.MethodPost, "/api/v1/mcp-servers/s1/test", nil))
+	require.Equal(t, http.StatusOK, wt.Code, "body=%s", wt.Body.String())
+	var resp gen.McpServerTestResponse
+	require.NoError(t, json.Unmarshal(wt.Body.Bytes(), &resp))
+	assert.NotContains(t, resp.Message, "header credential reference",
+		"after the round trip every header ref must still resolve from the store")
+	assert.Contains(t, resp.Message, "connection failed",
+		"resolved refs must reach the connect attempt (unreachable URL)")
+}

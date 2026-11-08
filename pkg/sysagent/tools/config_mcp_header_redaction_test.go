@@ -101,3 +101,57 @@ func TestConfigGet_MCPLiteralHeader_AbsentFromDeeperReads_Control(t *testing.T) 
 		})
 	}
 }
+
+// headerRefSentinel is a credential-store key name unique to this test: if it
+// appears in a get_config result, an MCP header ref rode out of the tool.
+const headerRefSentinel = "mcp_remote_header_gwsec906RefSentinel"
+
+// TestConfigGet_MCPHeaderRefs_NotReturned pins ARCH-906 change 4: header_refs
+// (credential-store indirection, internal-only) must not leave get_config on
+// any read shape, so the agent read path agrees with GET /api/v1/config,
+// which strips them. Section reads keep the server readable without the
+// refs; a read that addresses the refs directly is refused.
+func TestConfigGet_MCPHeaderRefs_NotReturned(t *testing.T) {
+	seed := func(cfg *config.Config) {
+		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+			"remote": {
+				Enabled:    true,
+				Type:       "http",
+				URL:        "https://127.0.0.1:1/mcp",
+				HeaderRefs: map[string]string{"Authorization": headerRefSentinel},
+			},
+		}
+	}
+	for _, key := range []string{"tools", "tools.mcp", "tools.mcp.servers", "tools.mcp.servers.remote"} {
+		t.Run(key, func(t *testing.T) {
+			deps, cfg := newTestDeps(t)
+			seed(cfg)
+			result := systools.NewConfigGetTool(deps).Execute(context.Background(), map[string]any{"key": key})
+			if result.IsError {
+				t.Fatalf("get_config %q must succeed, got error: %s", key, result.ForLLM)
+			}
+			if strings.Contains(result.ForLLM, "header_refs") || strings.Contains(result.ForLLM, headerRefSentinel) {
+				t.Fatalf("ARCH-906: get_config %q returned header_refs.\nresult: %s", key, result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "remote") && key != "tools.mcp.servers.remote" {
+				t.Errorf("get_config %q must keep the server list readable: %s", key, result.ForLLM)
+			}
+			if key == "tools.mcp.servers.remote" && !strings.Contains(result.ForLLM, "127.0.0.1") {
+				t.Errorf("get_config %q must keep the server entry readable: %s", key, result.ForLLM)
+			}
+		})
+	}
+	for _, key := range []string{"tools.mcp.servers.remote.header_refs", "tools.mcp.servers.remote.header_refs.Authorization"} {
+		t.Run(key, func(t *testing.T) {
+			deps, cfg := newTestDeps(t)
+			seed(cfg)
+			result := systools.NewConfigGetTool(deps).Execute(context.Background(), map[string]any{"key": key})
+			if !result.IsError {
+				t.Errorf("ARCH-906: a direct read of header_refs (%q) must be refused, got: %s", key, result.ForLLM)
+			}
+			if strings.Contains(result.ForLLM, headerRefSentinel) {
+				t.Fatalf("ARCH-906: get_config %q returned the ref name.\nresult: %s", key, result.ForLLM)
+			}
+		})
+	}
+}

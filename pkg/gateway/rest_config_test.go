@@ -433,3 +433,142 @@ func TestDescribeCredentialResolutionError_EntryAuthNamesTheEntry(t *testing.T) 
 	assert.Contains(t, otherMsg, "unlock and retry",
 		"an unclassified failure keeps the unlock-and-retry advice")
 }
+
+// containsMapKey reports whether key appears as a map key anywhere in the
+// decoded JSON value v (maps and arrays are walked).
+func containsMapKey(v any, key string) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, sub := range x {
+			if k == key || containsMapKey(sub, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, sub := range x {
+			if containsMapKey(sub, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestHandleConfigGET_MCPHeaderRefs_NotServed pins ARCH-906 change 1:
+// header_refs are credential-store indirection, internal-only, and must not
+// appear anywhere in the GET /api/v1/config response — neither verbatim
+// (a ref under Authorization) nor as "[redacted]" (a ref under X-Api-Key,
+// whose name contains "key"; F4). Literal header values keep their existing
+// #638 redaction.
+func TestHandleConfigGET_MCPHeaderRefs_NotServed(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	const authRef = "mcp_s1_header_Authorization"
+	const apiKeyRef = "mcp_s1_header_X-Api-Key"
+	api.agentLoop.GetConfig().Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"s1": {
+			Enabled: true,
+			Type:    "sse",
+			URL:     "https://127.0.0.1:1/sse",
+			Headers: map[string]string{"User-Agent": "gwsec-906-literal-ua"},
+			HeaderRefs: map[string]string{
+				"Authorization": authRef,
+				"X-Api-Key":     apiKeyRef,
+			},
+		},
+	}
+
+	w := httptest.NewRecorder()
+	api.HandleConfig(w, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, containsMapKey(resp, "header_refs"),
+		"ARCH-906: header_refs must not be served anywhere in GET /config; body=%s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), authRef, "no ref name may cross the wire")
+	assert.NotContains(t, w.Body.String(), apiKeyRef, "no ref name may cross the wire")
+
+	servers := mcpServersSection(resp)
+	require.NotNil(t, servers, "the server list must stay readable")
+	s1, ok := servers["s1"].(map[string]any)
+	require.True(t, ok, "server s1 must still be served")
+	headers, ok := s1["headers"].(map[string]any)
+	require.True(t, ok, "s1's literal headers map must still be served (redacted)")
+	assert.Equal(t, redactedHeaderValue, headers["User-Agent"],
+		"issue #638: literal header values stay redacted")
+}
+
+// TestConfigPUT_ToolsMCP_PreservesStoredHeaderRefs pins ARCH-906 change 2:
+// PUT /api/v1/config merges one level deep, so a body carrying tools.mcp
+// replaces the stored map. Because GET no longer serves header_refs, a body
+// that re-sends a server without them must not wipe the stored refs of a
+// server that still exists; a server the body drops loses its entry (and its
+// refs) as before.
+func TestConfigPUT_ToolsMCP_PreservesStoredHeaderRefs(t *testing.T) {
+	api, _ := newTestRestAPIWithHomeAndCredStore(t)
+	before := seedMCPServerWithHeaderRefs(t, api, "s1", map[string]string{
+		"Authorization": "Bearer gwsec-906-preserve-auth",
+	})
+	seedMCPServerWithHeaderRefs(t, api, "s2", map[string]string{
+		"Authorization": "Bearer gwsec-906-preserve-s2",
+	})
+
+	body := `{"tools":{"mcp":{"servers":{"s1":{"enabled":true,"type":"sse","url":"https://127.0.0.1:1/sse"}}}}}`
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.updateConfig(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	s1 := readPersistedMCPServer(t, api.homePath, "s1")
+	require.NotNil(t, s1, "s1 is in the body and must stay on disk")
+	assert.Equal(t, before, s1["header_refs"],
+		"ARCH-906: a PUT that re-sends s1 without header_refs must keep its stored refs")
+	assert.Nil(t, readPersistedMCPServer(t, api.homePath, "s2"),
+		"a server the body drops is removed, refs included")
+}
+
+// TestConfigPUT_MCPHeaderRefs_Refused pins ARCH-906 change 3 (the PUT vector
+// of #902): only POST/PATCH /api/v1/mcp-servers write header_refs, so any
+// header_refs key under tools.mcp.servers.<name> in a PUT /api/v1/config
+// body — nested or dot-path, with any value — is refused with 403 and
+// nothing is persisted (the same atomic-reject semantics as the #638 literal
+// header guard). Repointing a ref at another stored credential would
+// otherwise make the server send that credential.
+func TestConfigPUT_MCPHeaderRefs_Refused(t *testing.T) {
+	const otherRef = "mcp_victim_header_Authorization"
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"nested", `{"tools":{"mcp":{"servers":{"s1":{"enabled":true,"type":"sse","url":"https://127.0.0.1:1/sse","header_refs":{"Authorization":"` + otherRef + `"}}}}}}`},
+		{"top_level_dot_path_key", `{"tools.mcp.servers.s1.header_refs.Authorization":"` + otherRef + `"}`},
+		{"dot_path_to_refs_map", `{"tools.mcp.servers.s1.header_refs":{"Authorization":"` + otherRef + `"}}`},
+		{"partial_dot_path_under_tools", `{"tools":{"mcp.servers.s1.header_refs.Authorization":"` + otherRef + `"}}`},
+		{"case_variant_key", `{"tools":{"mcp":{"servers":{"s1":{"Header_Refs":{"Authorization":"` + otherRef + `"}}}}}}`},
+		{"empty_refs_map", `{"tools":{"mcp":{"servers":{"s1":{"header_refs":{}}}}}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api, _ := newTestRestAPIWithHomeAndCredStore(t)
+			seedMCPServerWithHeaderRefs(t, api, "s1", map[string]string{
+				"Authorization": "Bearer gwsec-906-refuse-auth",
+			})
+			cfgPath := filepath.Join(api.homePath, "config.json")
+			beforeRaw, err := os.ReadFile(cfgPath)
+			require.NoError(t, err)
+
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			api.updateConfig(w, r)
+
+			require.Equal(t, http.StatusForbidden, w.Code,
+				"ARCH-906: header_refs in a PUT /config body (%s) must be refused; body=%s", tc.name, w.Body.String())
+			afterRaw, err := os.ReadFile(cfgPath)
+			require.NoError(t, err)
+			assert.Equal(t, string(beforeRaw), string(afterRaw),
+				"a refused PUT must leave config.json byte-identical (%s)", tc.name)
+		})
+	}
+}

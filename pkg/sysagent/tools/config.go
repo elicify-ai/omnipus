@@ -66,6 +66,14 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult(errorJSON("FORBIDDEN", err.Error(),
 			"Operators inspect these in Settings → Security or config.json"))
 	}
+	// ARCH-906: MCP header refs are internal credential-store indirection;
+	// section reads drop them (redactMCPServerHeaderEntryMap) and a direct
+	// read is refused, matching GET /api/v1/config.
+	if isMCPHeaderRefsReadKey(configKeySegments(cfg, key)) {
+		return tools.ErrorResult(errorJSON("FORBIDDEN",
+			"MCP header references are internal and cannot be read via get_config",
+			"Read tools.mcp.servers.<name> for the server entry"))
+	}
 	value, err := dotGet(cfg, key)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("KEY_NOT_FOUND",
@@ -475,7 +483,8 @@ var blockedConfigKeys = []blockedConfigKey{
 		ReadOKReason: "the configured servers. Header values under tools.mcp.servers.<name>.headers are redacted " +
 			"structurally by redactMCPHeaderValuesAt — header names like Authorization match no sensitive-name " +
 			"fragment — while credential-shaped field names are still caught by redactConfigValue, so the list " +
-			"is readable while its secrets are not",
+			"is readable while its secrets are not. header_refs (internal credential-store indirection) is " +
+			"dropped from every read and a direct read of it is refused",
 	},
 	{
 		Key: "tools.browser",
@@ -1110,6 +1119,29 @@ func redactMCPHeaderValuesAt(segs []string, v any) any {
 	return v
 }
 
+// isMCPHeaderRefsReadKey reports whether the read key segments address a
+// server's header_refs or something under it
+// (tools.mcp.servers.<name>.header_refs[.<H>]) — ARCH-906: internal-only,
+// never returned. Matching folds case and accepts header_refs anywhere from
+// the fifth segment on (a server name may contain dots); over-matching can
+// only refuse a read.
+func isMCPHeaderRefsReadKey(segs []string) bool {
+	if len(segs) < 5 {
+		return false
+	}
+	for i, want := range mcpHeaderPathPrefix {
+		if !strings.EqualFold(segs[i], want) {
+			return false
+		}
+	}
+	for _, seg := range segs[4:] {
+		if strings.EqualFold(seg, mcpHeaderRefsField) {
+			return true
+		}
+	}
+	return false
+}
+
 // redactMCPHeaderAncestorSubtree descends a decoded ancestor-read subtree
 // along the anchor segments the read key did not consume and redacts the
 // headers map of every MCP server entry it reaches. A missing level (an
@@ -1137,9 +1169,17 @@ func redactMCPHeaderAncestorSubtree(v any, remaining []string) any {
 	return v
 }
 
+// mcpHeaderRefsField is the config key of config.MCPServerConfig.HeaderRefs.
+const mcpHeaderRefsField = "header_refs"
+
 // redactMCPServerHeaderEntryMap redacts the headers map of one decoded
-// tools.mcp.servers.<name> entry, when it has one.
+// tools.mcp.servers.<name> entry, when it has one, and drops its header_refs
+// (ARCH-906): refs are credential-store indirection, internal-only, and GET
+// /api/v1/config strips them too (pkg/gateway/rest_config.go::
+// sanitizeConfigForWire), so the two read paths agree. A read that addresses
+// header_refs directly is refused by isMCPHeaderRefsReadKey.
 func redactMCPServerHeaderEntryMap(srvMap map[string]any) {
+	delete(srvMap, mcpHeaderRefsField)
 	headers, ok := srvMap["headers"].(map[string]any)
 	if !ok {
 		return

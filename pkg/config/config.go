@@ -2427,6 +2427,10 @@ type MCPServerConfig struct {
 	// config.json); a HeaderRefs entry overrides a same-named literal
 	// Headers entry. Greenfield ruling: old installs with literal headers
 	// are NOT migrated — they keep loading and connecting as before.
+	// Internal-only, never served on the wire (ARCH-906): GET /api/v1/config
+	// and the agent get_config tool strip it, and PUT /api/v1/config refuses
+	// it and carries the stored refs across its merge; only POST/PATCH
+	// /api/v1/mcp-servers write it.
 	HeaderRefs map[string]string `json:"header_refs,omitempty"`
 }
 
