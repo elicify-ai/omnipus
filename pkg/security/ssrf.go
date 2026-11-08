@@ -6,6 +6,7 @@ package security
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -375,13 +376,35 @@ func extractPath(rawURL string) string {
 	return path
 }
 
+// BlockedAddressError is the guard's address-policy refusal: CheckIP found
+// the address in a private, reserved or metadata range (or there was no
+// address). CheckHost, CheckURL, SafeDialContext and CheckRedirect return it
+// wrapped, so a caller can tell "the guard refused this address" from an
+// ordinary resolution or connection failure with IsBlockedAddress. The text
+// is exactly what these refusals said before the type existed.
+type BlockedAddressError struct {
+	msg string
+}
+
+func (e *BlockedAddressError) Error() string { return e.msg }
+
+func blockedAddress(format string, args ...any) error {
+	return &BlockedAddressError{msg: fmt.Sprintf(format, args...)}
+}
+
+// IsBlockedAddress reports whether err is, or wraps, a BlockedAddressError.
+func IsBlockedAddress(err error) bool {
+	var blocked *BlockedAddressError
+	return errors.As(err, &blocked)
+}
+
 // CheckIP verifies that an IP address is not in a private/reserved range.
 // Returns an error if the IP is blocked, nil if it is safe.
 func (sc *SSRFChecker) CheckIP(ip net.IP) error {
 	sc.ensureInit()
 
 	if ip == nil {
-		return fmt.Errorf("SSRF: nil IP address rejected")
+		return blockedAddress("SSRF: nil IP address rejected")
 	}
 	ipStr := ip.String()
 
@@ -403,14 +426,14 @@ func (sc *SSRFChecker) CheckIP(ip net.IP) error {
 
 	// Cloud metadata endpoint (exact match — always blocked unless allowlisted above).
 	if ipStr == "169.254.169.254" {
-		return fmt.Errorf("SSRF: blocked cloud metadata endpoint %s", ipStr)
+		return blockedAddress("SSRF: blocked cloud metadata endpoint %s", ipStr)
 	}
 
 	// Unwrap IPv4-mapped IPv6 addresses and check IPv4 ranges
 	if ip4 := ip.To4(); ip4 != nil {
 		for _, ipNet := range sc.ipv4Nets {
 			if ipNet.Contains(ip4) {
-				return fmt.Errorf("SSRF: blocked private IP range %s (%s)", ipStr, ipNet.String())
+				return blockedAddress("SSRF: blocked private IP range %s (%s)", ipStr, ipNet.String())
 			}
 		}
 		return nil
@@ -440,7 +463,7 @@ func (sc *SSRFChecker) CheckIP(ip net.IP) error {
 	// Pure IPv6
 	for _, ipNet := range sc.ipv6Nets {
 		if ipNet.Contains(ip) {
-			return fmt.Errorf("SSRF: blocked private IPv6 range %s (%s)", ipStr, ipNet.String())
+			return blockedAddress("SSRF: blocked private IPv6 range %s (%s)", ipStr, ipNet.String())
 		}
 	}
 
@@ -517,9 +540,31 @@ func (sc *SSRFChecker) CheckURL(ctx context.Context, rawURL string) error {
 	return err
 }
 
-// extractHost extracts the hostname (without port) from a URL.
+// extractHost extracts the hostname (without port) from a URL, with an IP
+// literal normalised so CheckHost recognises it (see normalizeHostLiteral).
 func extractHost(rawURL string) string {
 	host, _, _ := stripURLToAuthority(rawURL)
+	return normalizeHostLiteral(host)
+}
+
+// normalizeHostLiteral turns the IP-literal spellings a URL can carry into
+// the bare address CheckHost's literal check expects: an IPv6 literal written
+// without a port keeps its brackets after stripURLToAuthority ("[::1]"), an
+// IPv6 zone ("fe80::1%25eth0") makes net.ParseIP fail, and so does an IP
+// literal's trailing dot ("127.0.0.1."). Left as they were, each fell through
+// to a DNS lookup and an untyped resolution error instead of the address-
+// policy refusal its explicit-port form gets (#1700 re-check F1). Host names
+// are returned unchanged.
+func normalizeHostLiteral(host string) string {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if i := strings.IndexByte(host, '%'); i > 0 && net.ParseIP(host[:i]) != nil {
+		host = host[:i]
+	}
+	if trimmed := strings.TrimSuffix(host, "."); trimmed != host && net.ParseIP(trimmed) != nil {
+		host = trimmed
+	}
 	return host
 }
 

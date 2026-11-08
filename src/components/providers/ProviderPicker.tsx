@@ -201,6 +201,14 @@ export function ProviderPicker({
 
   const sequence = React.useMemo(() => pickerRowSequence(model), [model])
 
+  // #1700: a custom endpoint may not be named after a listed provider. Only a
+  // loaded catalog can say which ids those are; while it is loading or failed
+  // nothing is passed and the server's refusal is the backstop.
+  const takenIds = React.useMemo<ReadonlySet<string> | undefined>(
+    () => (catalog && status === 'ready' ? new Set(catalog.providers.map((p) => p.id)) : undefined),
+    [catalog, status],
+  )
+
   // The virtualised entries: one header per letter group, then its company rows.
   const entries = React.useMemo<VirtualEntry[]>(() => {
     if (!model.expanded) return []
@@ -629,6 +637,7 @@ export function ProviderPicker({
 
       {customOpen && (
         <CustomEndpointPanel
+          takenIds={takenIds}
           onSubmit={(draft) => {
             setCustomOpen(false)
             onSelect({ kind: 'custom', draft })

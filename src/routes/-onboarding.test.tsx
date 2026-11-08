@@ -97,6 +97,7 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.
 import { probeProvider, completeOnboardingTransaction, fetchProvidersCatalog } from '@/lib/api'
 import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, ONBOARDING_MODEL_LABEL } from './onboarding'
 import { LOCAL_PROVIDER_CREDENTIAL } from '@/components/providers/ProviderDetailPanel'
+import { useUiStore } from '@/store/ui'
 import type { ProbeProviderRequest } from '@/lib/api/generated/openapi-types'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
@@ -810,6 +811,10 @@ describe('OnboardingWizard — sign-in path', () => {
       api_key: 'sk-ant-api03-test',
       model: ANTHROPIC_MODEL,
     })
+    // WP-1 #1700 (design R22): a confirmed CATALOG row never sends protocol —
+    // only the Custom endpoint path sets it. Explicit because the server now
+    // refuses protocol on a catalog id (design K1).
+    expect(body.provider).not.toHaveProperty('protocol')
   })
 
   // Issue #800 (Bedrock region contract): the picker's second-level panel
@@ -950,13 +955,65 @@ describe('OnboardingWizard — catalog unavailable', () => {
     await waitFor(() => expect(finishButton()).not.toBeDisabled())
     fireEvent.click(finishButton())
     await waitFor(() => expect(completeOnboardingTransaction).toHaveBeenCalledOnce())
+    // WP-1 #1700 (design R21): the custom endpoint's protocol MUST reach the
+    // completion request — the server needs it to save the row's wire
+    // protocol. The old expectation without `protocol` was the bug.
     expect(vi.mocked(completeOnboardingTransaction).mock.calls[0]![0].provider).toEqual({
       auth_method: 'api_key',
       id: 'my-proxy',
       api_key: 'sk-proxy',
       model: 'my-model',
       endpoint: 'https://proxy.example.com/v1',
+      protocol: 'openai-compatible',
     })
+  })
+
+  // WP-1 #1700 (design R24): when the server refuses the completion with M1
+  // (the custom endpoint's id is a listed provider's name), the wizard shows
+  // "Could not complete setup: " + M1 inline AND as an error toast, and stays
+  // on the provider step. The catalog is down in this lane — the form cannot
+  // pre-check the id, so the server's refusal is the backstop the design
+  // relies on (§3: takenIds is passed only when the catalog is loaded).
+  it('shows the server M1 refusal inline and as a toast, staying on the provider step', async () => {
+    const M1_AZURE =
+      '"azure" is the name of a listed provider. Choose a different name for your custom endpoint, for example "my-azure".'
+    useUiStore.setState({ toasts: [] })
+    vi.mocked(fetchProvidersCatalog).mockRejectedValue(new Error('503'))
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: 'my-model' })
+    vi.mocked(completeOnboardingTransaction).mockRejectedValue(new Error(M1_AZURE))
+
+    await goToStep4()
+    await waitFor(() => screen.getByTestId('picker-catalog-error'))
+
+    fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
+    await waitFor(() => screen.getByTestId('custom-endpoint-id'))
+    fireEvent.change(screen.getByTestId('custom-endpoint-id'), { target: { value: 'azure' } })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-base'), {
+      target: { value: 'https://azure.example.com/v1' },
+    })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-key'), { target: { value: 'sk-azure' } })
+    fireEvent.click(screen.getByTestId('custom-endpoint-submit'))
+
+    await waitFor(() => screen.getByTestId('onboarding-provider-summary'))
+    fireEvent.change(screen.getByTestId('onboarding-model-select'), { target: { value: 'my-model' } })
+    fireEvent.click(screen.getByTestId('onboarding-probe-button'))
+    await waitFor(() => expect(finishButton()).not.toBeDisabled())
+
+    fireEvent.click(finishButton())
+    await waitFor(() =>
+      expect(screen.getByTestId('onboarding-error')).toHaveTextContent(
+        `Could not complete setup: ${M1_AZURE}`,
+      ),
+    )
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.length).toBeGreaterThan(0)
+    expect(toasts[toasts.length - 1]).toEqual(
+      expect.objectContaining({ message: `Could not complete setup: ${M1_AZURE}`, variant: 'error' }),
+    )
+
+    expect(screen.getByText(/select your model provider and default model/i)).toBeInTheDocument()
+    expect(screen.queryByText(/meet your assistant/i)).not.toBeInTheDocument()
   })
 })
 
