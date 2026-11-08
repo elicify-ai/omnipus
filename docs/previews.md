@@ -9,30 +9,35 @@ An agent can build a site inside its workspace — a landing page, a report, a s
 The link looks like one of these:
 
 ```
-http://k4qz…localhost:5000/                             (isolated address)
+http://<random-name>.localhost:5000/                    (isolated address, example)
 https://your-omnipus-address/preview/<agent>/<token>/   (shared address)
 ```
 
-The full link — including its long random part — is the only credential. Anyone holding the complete link can view the preview until it expires. Anyone without it gets an error page. Omnipus never asks you to sign in to open a preview.
+The full link — including its long random part — is the only credential. Anyone who can reach this Omnipus installation and holds its complete, unexpired preview link can open it without signing in to Omnipus. A localhost link points to the computer running the browser; sending it to another person does not make your local installation remotely reachable. The previewed app may have its own sign-in.
 
 ## Which address a preview gets
 
-Omnipus picks the preview's address automatically when the agent publishes, based on how Omnipus itself is reached:
+Omnipus chooses the available preview addresses from its configured browser-facing address: `gateway.public_url` when set, otherwise its configured host and port. Opening Omnipus through a different name does not change that choice.
 
-| How Omnipus is reached | Address the preview gets |
+| Configured address | Available preview addresses |
 |---|---|
-| `http://localhost` (the default desktop install) | Its own isolated address: `http://<random-name>.localhost:5000/` — a fresh, random name that exists only for this one preview. Chrome, Edge and Firefox open such names directly, with no setup. Safari does not, so in Safari the card shows the shared address instead. |
-| Any other way — HTTPS, an IP address, a real domain, Tailscale | The shared address: Omnipus's own address under a private path, `/preview/<agent>/<token>/`. |
+| `http://localhost`, with an optional port | An isolated `http://<random-name>.localhost[:port]/` link plus the shared fallback. The isolated link keeps the configured port. Chrome, Edge and Firefox open such names directly; Safari does not. |
+| HTTPS, an IP address or another concrete hostname | The shared `/preview/<agent>/<token>/` link. |
 
-Both addresses of one preview show exactly the same published site. The chat card always shows the one that works in your browser.
+Chat prefers the isolated link when its browser signal and address checks pass; otherwise it selects the shared link. These checks do not test whether the isolated address actually opens. If it does not, ask the agent for the shared fallback link.
+
+Both addresses of one preview serve the same published site.
 
 An agent can have a finished-files preview and a live development server open at the same time. Each one gets its own link, and each link shows only its own site: the link to the finished files never shows the development server, and the reverse.
 
-The two addresses differ in separation, and in what the site may do. The isolated address gives the site a whole address of its own, so it runs as a full web app. The shared address fences the site into its private path, so a few things are limited there:
+The two addresses differ in separation, and in what the site may do. Both open the site as a full browser page, but their limits differ.
 
-- Every file the page loads must be addressed relative to the page (`./app.js`). A file addressed from the root (`/assets/app.js`) loads outside the preview and the page can render blank. For a bundler such as Vite, set a relative base (`base: './'`).
-- Service workers are refused on the shared address (the isolated address allows them).
+- On the shared address, resource URLs must resolve inside that preview's `/preview/<agent>/<token>/` directory. A URL relative to the page, such as `./app.js`, is suitable if it stays inside that directory; `../` can leave it. A URL beginning with the complete preview directory is also permitted. A website-root URL such as `/assets/app.js` is outside it and is blocked. If an essential file is blocked, the page may look blank. Configure the build so its resource URLs stay inside the preview directory.
+- On the shared address, the browser security policy also limits data connections, live connections and form destinations to the preview directory. Development-server redirects outside the allowed destination can be refused.
+- Service workers are refused on the shared address. The isolated address does not impose that refusal or the resource-path limits above.
 - Saved data and cookies are kept by your browser per address, so on the shared address they sit on Omnipus's own address, not on a private one (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
+- Both addresses prohibit embedding the preview inside another page.
+- Finished-files previews only serve files. Server-side form handling needs a development server, on either address.
 
 - **Isolated address.** The preview has its own separate name, so it is a separate place from Omnipus: your Omnipus sign-in does not apply there, and none of Omnipus's cookies or API keys travel to it.
 - **Shared address.** The preview lives on Omnipus's own address. Omnipus fences it in: the page may make its network calls only within its own private path, and Omnipus removes its own sign-in and security cookies from everything the page sends through the gateway (see [Logins and cookies](#logins-and-cookies-inside-a-preview)).
@@ -46,7 +51,7 @@ The two addresses differ in separation, and in what the site may do. The isolate
 ## How to open a preview
 
 1. Ask the agent in chat to build and serve the site.
-2. When the tool finishes, chat shows a preview card with the link — the one that works in your browser (see [Which address a preview gets](#which-address-a-preview-gets)). For a live development server, the card says "Starting dev server" while it wakes up, then shows the link.
+2. When the tool finishes, chat shows a preview card with the selected link (see [Which address a preview gets](#which-address-a-preview-gets)). For a live development server, the card says "Starting dev server" while it wakes up, then shows the link.
 3. Click the link, or use the open-in-new-tab button on the card. The site opens in its own browser tab, where it runs as a full page and can hold its own login.
 4. Use the copy button on the card if you need the link somewhere else. Remember that the link itself is the credential.
 
@@ -58,13 +63,13 @@ The serving tool has two ways to publish. The agent picks one depending on wheth
 
 | Way of publishing | What gets published | Where it works | How long the link lives |
 |---|---|---|---|
-| Finished files | A folder of built files from the workspace | Every platform | Up to 24 hours; the shortest window is 1 minute |
+| Finished files | A folder of built files from the workspace | Linux, macOS and Windows | With default settings between 1 minute and 24 hours; the operator can change those bounds |
 | Development server | A live development command the agent starts, such as `vite dev` | Linux only | 30 minutes without a visitor, or 4 hours in total |
 
 A few details behind the table:
 
 - The published folder must contain an `index.html` at its root. The link opens that file first.
-- Publishing the same folder again renews the same link. Publishing a **different** folder replaces the registration: the old link stops working, and the new link is a new address — so on the isolated address the site starts from scratch (its saved data and any login are empty there). On the shared address your browser keeps saved data per address, which is Omnipus's own, so do not rely on it being empty. That is expected, not a bug.
+- Publishing the same folder again renews the same link only while that registration is still live and less than 24 hours old; otherwise a new link is issued. Always give the user the link the tool returns rather than assuming an older one still works. Publishing a **different** folder replaces the registration: the old link stops working, so use the new returned link. A new isolated address has a different browser origin and does not share the old address's saved browser data. A new shared-address link changes only the path on Omnipus's address, so publishing it does not clear saved browser data or sign you out. Publishing is not a reset of the app's server-side data.
 - The development command must come from a fixed list: `next dev`, `vite dev`, `astro dev`, `sveltekit dev`, `npm run dev`, `pnpm dev`, or `yarn dev`. An operator can extend the list in the config file.
 - At most two development servers run at once on a default install, and each agent can run only one at a time.
 
@@ -81,20 +86,21 @@ The preview flows from the agent's workspace to a link in your chat, and the age
 
 ## Logins and cookies inside a preview
 
-A site inside a preview is a real web app, and its logins hold.
+A site inside a preview is a real web app. Omnipus does not stand in the way of its own cookies, but it cannot promise that every login flow works.
 
-- **The site's own login sticks.** The site keeps its own cookies and saved data between page loads and between visits, on both addresses. A login you make inside a preview stays working.
-- **What Omnipus removes, and only that.** Where a preview's requests pass through Omnipus's gateway, Omnipus removes from them only its own sign-in and security cookies (named `omnipus-session`, `csrf` and `__Host-csrf`) and its own API keys. Everything else — the site's own cookies above all — passes through untouched, which is exactly why the site's login holds.
+- **The site's own cookies are preserved.** Omnipus preserves the app's valid cookies unless they use its reserved names. This permits app sessions; it does not guarantee that every login flow works unchanged or lasts between visits. That depends on the app, its cookie settings, the browser and the address limits above.
+- **What Omnipus removes, and only that.** Where a preview's requests pass through Omnipus's gateway, Omnipus removes from them only its own sign-in and security cookies (named `omnipus-session`, `csrf` and `__Host-csrf`) and its own API keys. Everything else — the site's own cookies above all — passes through untouched. Omnipus also removes a bearer credential that Omnipus itself accepts, while preserving a foreign app's bearer credential.
 - **The reverse direction, for server replies.** When a preview's server (a development server) answers with a cookie named like one of Omnipus's own, Omnipus removes that cookie from the answer before it reaches your browser.
-- **What that does not cover.** On the shared address, a script running inside the preview page can still set a cookie itself, in your browser, without going through Omnipus. Such a cookie can carry the same name as an Omnipus cookie. Omnipus cannot stop that; it detects it on the next request instead, as described below.
+- **What that does not cover.** On the shared address, preview scripts can set browser cookies themselves, without going through Omnipus, including additional cookies with Omnipus's reserved names. Omnipus detects a conflict when more than one cookie with the same reserved name arrives on a request; it does not identify every browser-side cookie write.
 
 ### If Omnipus clears cookies
 
-If something inside a preview has set an extra copy of an Omnipus cookie, Omnipus does not trust any cookie on the next request it receives from Omnipus's own screens. It refuses that request, tells your browser to delete the extra copies (never your real sign-in cookie), and Omnipus shows the message "Omnipus cleared cookies set by a preview — please retry" with a **Retry** button that repeats the failed request once.
+When an affected cookie-authenticated data request from Omnipus's screens reaches this check, Omnipus refuses to use its cookies for sign-in and sends instructions to clear matching extra copies. These instructions leave the genuine host-only sign-in cookie at the root path alone. The refused request can show "Omnipus cleared cookies set by a preview — please retry" with a **Retry** button. Click Retry to send that request again; Omnipus does not repeat it for you.
 
-- This covers requests Omnipus's screens make to its own server, including loading data after a page reload. Your real sign-in is kept, so a Retry normally works.
-- If the message keeps coming back, the preview that sets the cookies is still open and sets them again as fast as Omnipus deletes them. **Close that preview tab first, then click Retry.**
-- If Retry still does not help, close all preview tabs and sign in again.
+- This covers requests Omnipus's screens make to its own server, including loading data after a page reload.
+- If the message returns, close preview tabs before trying again. A preview may be adding cookies again, or extra cookies may remain; the message alone does not tell which. Closing a tab does not itself remove cookies it already set.
+- Cleanup is not guaranteed for every browser or hosted-domain cookie scope. If you remain blocked, ask the operator for help clearing the affected browser cookies before signing in again.
+- **For operators:** an affected cookie-authenticated API read (`GET`/`HEAD`) receives HTTP `401` with code `planted_cookie_cleared`; a state-changing request receives HTTP `403` with the same code. This error does not mean the session expired. Top-level navigation through an optional-sign-in route may still load anonymously.
 
 ## What previews cannot protect against
 
@@ -108,12 +114,12 @@ Two risks are accepted and documented rather than engineered away. Both stem fro
 
 - **The link is the credential.** Share it with the care you would give a password. Anyone who has it can view the preview until it expires.
 - **Previews are temporary, not hosting.** An expired link returns "preview registration not found or expired". The files stay in the workspace; only the published link dies. Ask the agent to publish again for a fresh link.
-- **A blank preview means a blocked part of the page.** If a preview on the shared address opens blank, some part of the page tried to reach outside its private path and Omnipus blocked it. Browsers report that only in the console — the page itself shows no error. Open the browser console (F12) and tell the agent what it says; the agent can also check its own built-in browser first.
+- **A blank or broken preview needs checking.** On the shared address, blocked resources or connections outside the preview directory can prevent an app from rendering, and other app errors can also cause a blank page. A blank page alone does not identify the cause. Check the browser's diagnostic console (F12) and failed network requests, and share the messages with the agent before choosing a fix.
 - **An operator can switch previews off.** The switch lives in Settings, on the Gateway tab, labeled "Preview server". It takes effect at once, without a restart. While it is off, every preview link returns an error and the serving tool refuses to publish.
 
 ## Running Omnipus behind a reverse proxy
 
-If Omnipus sits behind nginx, Caddy, or a similar proxy, previews share Omnipus's own address (there is no isolated address in this setup), and everything still arrives on the single port (default 5000). One setting is needed:
+If Omnipus sits behind nginx, Caddy, or a similar proxy, previews use the shared address on the same listener when Omnipus is configured with a public HTTPS address, and everything still arrives on the single port (default 5000). One setting is needed:
 
 1. Set `public_url` under `gateway` in Omnipus's config file to the full HTTPS address a browser uses to reach Omnipus, for example `https://omnipus.example.com`.
 2. Restart the gateway. The setting is read at startup, so a change needs a restart to take effect.

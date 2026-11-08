@@ -306,22 +306,30 @@ func (t *WebServeTool) Description() string {
 		"The result always includes path and url: the Mode 2 fallback, on the gateway's own origin, " +
 		"shaped {origin}/preview/<agent>/<token>/. On an http://localhost origin (with or without a " +
 		"port) the result also includes isolated_url — Mode 1, preferred when it is present. That " +
-		"URL is the app's own origin, http://<label>.localhost[:port]/, so storage, cookies, forms, " +
-		"in-app login and root-absolute assets work there. When isolated_url is absent (https, an " +
-		"IP address, or any other hostname), open url. If the built-in browser panel refuses the " +
-		"label URL, open url instead: that happens on a port-mapped install, where the label carries " +
-		"the canonical port rather than the panel's listener port.\n" +
-		"In Mode 2 (the url fallback) every asset must be relative (./ or ../) or live under the " +
-		"token prefix. A root-absolute asset such as /assets/app.js loads outside the preview and " +
-		"the page renders blank. For a bundler, set a relative base (Vite base: './') and reference " +
-		"assets relatively. Mode 1 does not need that — the app owns the origin.\n" +
-		"A blank preview is usually a content-security-policy block, and those show up only in the " +
-		"browser console. Open the preview in the built-in browser panel and read the console " +
-		"before changing the app.\n" +
-		"Static mode (no command): registers the directory as a static website. Re-serving the SAME " +
-		"directory renews the same URL; re-serving a DIFFERENT directory REPLACES the previous " +
-		"registration and invalidates any URL you already gave the user — tell the user the new URL " +
-		"if you change directories.\n" +
+		"URL gives the app its own browser origin, http://<label>.localhost[:port]/. Omnipus does " +
+		"not apply the Mode 2 resource-path restrictions there, so website-root asset URLs do not " +
+		"need that adjustment. Login and cookie behaviour still depend on the app and the browser. " +
+		"When isolated_url is absent (https, an IP address, or any other hostname), open url. " +
+		"These checks do not test whether the isolated address opens; if it does not, use url. If " +
+		"the built-in browser panel refuses the label URL, open url instead: that happens on a " +
+		"port-mapped install, where the label carries the canonical port rather than the panel's " +
+		"listener port.\n" +
+		"In Mode 2 (the url fallback) resource URLs must resolve inside the preview's " +
+		"/preview/<agent>/<token>/ directory. A URL relative to the page (./app.js) is suitable if " +
+		"it stays inside that directory; ../ can leave it. A website-root URL such as " +
+		"/assets/app.js is outside it and is blocked, and an essential blocked file can leave the " +
+		"page blank. Configure the build so its resource URLs stay inside the preview directory. " +
+		"Mode 2 also refuses service-worker requests, and the preview does not get a separate " +
+		"browser-storage origin.\n" +
+		"A blank or broken preview needs checking: blocked resources or connections are one " +
+		"possible cause, and other app errors can also cause it. Check the browser's diagnostic " +
+		"console and failed network requests, and share the messages before choosing a fix.\n" +
+		"Static mode (no command): registers the directory as a static website and serves files " +
+		"only; it does not handle server-side form submissions. Re-serving the SAME directory " +
+		"renews the same URL only while that registration is still live and less than 24 hours " +
+		"old; otherwise a new URL is issued, so always give the user the URL the tool returns. " +
+		"Re-serving a DIFFERENT directory REPLACES the previous registration and invalidates any " +
+		"URL you already gave the user — tell the user the new URL if you change directories.\n" +
 		"Dev mode (with command): starts a dev server and proxies it. Dev mode is Linux only. The " +
 		"command is checked against an EXHAUSTIVE allow-list, not just examples — anything else is " +
 		"refused: 'next dev', 'vite dev', 'astro dev', 'sveltekit dev', 'npm run dev', 'pnpm dev', " +
