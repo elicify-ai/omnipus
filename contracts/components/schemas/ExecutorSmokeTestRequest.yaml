@@ -11,13 +11,16 @@ description: >
   shape, so it needs no existing agent id; in the web app, Send a test
   message is on an existing external worker's Runtime tab. When agent_id
   identifies a saved agent, the test starts from that agent's resolved home
-  folder; if the agent belongs to a workspace team, that workspace's
-  project-work folder is used instead. These are persistent folders and are
-  not removed after the test. If agent_id is omitted, blank or does not
-  identify a saved agent, the test uses a fresh scratch folder that is
-  removed when the run ends. The response's used_agent_workspace field
-  distinguishes the persistent agent-associated branch from the disposable
-  scratch branch. There is no
+  folder. If workspace lookup finds the agent's workspace and its
+  project-work folder can be prepared, that workspace folder is used
+  instead. Otherwise the test keeps the agent home; if that chosen folder
+  cannot be prepared either, the test returns a failure before starting the
+  program. These are persistent folders and this handler does not remove
+  them. If agent_id is omitted, blank or does not identify a saved agent,
+  the test prepares a disposable scratch folder instead and cleans it up
+  after the run. The used_agent_workspace flag distinguishes the prepared
+  persistent branch from the scratch branch; a preparation failure can
+  return before any program starts. There is no
   cli_path member (T11 C-B1): the program for the CLI is the path a person
   saved in Settings -> Third-party agents, and a request that carries
   cli_path is refused with 400 in every inbound-validation mode.
@@ -32,12 +35,12 @@ properties:
     type: string
     maxLength: 128
     description: >
-      Optional id of an existing, saved agent. When it resolves, the run
-      uses that agent's resolved home folder, or its workspace's
-      project-work folder when the agent belongs to a workspace team; that
-      persistent folder is never removed afterward. When omitted, empty, or
-      naming an agent that no longer exists, the run uses a disposable
-      scratch folder that is removed when the run ends.
+      Optional ID of an existing saved agent. When found, the run uses its
+      resolved home, overridden by the workspace project-work folder only
+      when workspace lookup and preparation succeed. Otherwise it keeps the
+      agent home. That persistent folder is not removed by this handler. An
+      omitted, blank or unrecognized ID selects disposable scratch
+      preparation instead.
   model:
     type: string
     maxLength: 256

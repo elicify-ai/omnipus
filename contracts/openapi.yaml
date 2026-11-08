@@ -4056,9 +4056,10 @@ paths:
       description: >
         Runs a real, bounded test turn (a trivial arithmetic prompt) through
         the SAME driver.Run() dispatch path a genuine subagent_3p delegation
-        uses, in the selected agent's home folder (or its workspace's
-        project-work folder when the agent belongs to a workspace team), or in
-        a disposable scratch folder when no saved agent is identified — not
+        uses, in the selected agent's resolved home folder, using its
+        workspace's project-work folder instead when workspace lookup and
+        folder preparation succeed, or in a disposable scratch folder when no
+        saved agent is identified — not
         the zero-token
         POST /agents/{id}/runner/test (binary-present → version handshake →
         credential-file-presence only). This spawns a real, authenticated

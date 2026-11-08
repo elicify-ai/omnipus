@@ -31,11 +31,10 @@ properties:
   used_agent_workspace:
     type: boolean
     description: >
-      True when a saved agent was identified and the persistent
-      agent-associated folder was selected: the agent's resolved home, or
-      its workspace's project-work folder when the agent belongs to a
-      workspace team. That persistent folder is not removed by this
-      handler. False denotes the disposable scratch-folder branch (agent_id
-      omitted, blank, or not naming an existing agent). A failure can be
-      returned before a folder or subprocess is prepared, so this flag alone
-      is not proof that a program ran.
+      True when a saved agent's persistent directory was prepared for the
+      test: its resolved home, or its workspace project-work folder when
+      workspace lookup and preparation succeeded. Workspace preparation
+      failure falls back to the agent home. That persistent directory is not
+      removed by this handler. False denotes the scratch branch, but can also
+      be returned by a failure before any directory or subprocess is
+      prepared. The flag alone does not prove that a program ran.
