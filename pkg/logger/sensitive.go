@@ -89,13 +89,16 @@ const scrubFailClosedText = "[FILTERED]"
 //     credential still remained, the whole field is replaced (fail closed).
 //   - A field still decodable beyond maxScrubDecodeDepth layers cannot be
 //     shown credential-free, so it is replaced whole as well (fail closed).
+//   - A field whose code-point reading (codePointReading) holds a credential
+//     is replaced whole as well.
 //
 // Worst-case work per field: each decodeScan visits at most 2^9-1 = 511
-// distinct strings (two decodings per layer, 8 layers), none longer than the
-// field, since decoding never lengthens text. scrubString runs at most two
-// scans plus 8 single decoding steps, so it is linear in the field length
-// with a fixed factor of about 1,030 string passes, and holds at most 511
-// field-sized strings at once.
+// distinct strings (two decodings per layer, 8 layers) and builds one
+// code-point reading of each, so at most 1,022 strings per scan, none longer
+// than the field, since neither decoding nor the reading lengthens text.
+// scrubString runs at most two scans plus 8 single decoding steps: at most
+// about 2,050 linear passes over the field, holding at most 511 field-sized
+// strings at once.
 func scrubString(r *strings.Replacer, s string) string {
 	masked := r.Replace(s)
 	// Without a backslash or a quote nothing in the field can be decoded.
@@ -105,7 +108,7 @@ func scrubString(r *strings.Replacer, s string) string {
 	switch decodeScan(r, masked) {
 	case scanClean:
 		return masked
-	case scanTooDeep:
+	case scanTooDeep, scanCodePoint:
 		return scrubFailClosedText
 	}
 	current := masked
@@ -135,11 +138,15 @@ const (
 	// scanTooDeep: no credential within the bound, but a string at the
 	// bound can still be decoded further, so the field is not known clean.
 	scanTooDeep
+	// scanCodePoint: the code-point reading of a reachable string holds a
+	// registered credential.
+	scanCodePoint
 )
 
 // decodeScan reads s and every string reachable from it by unquoting a whole
 // quoted string or decoding Go escape sequences, both decodings tried at
-// every layer, up to maxScrubDecodeDepth layers.
+// every layer, up to maxScrubDecodeDepth layers. Each of those strings is
+// also checked in its code-point reading; that reading is not decoded further.
 func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 	seen := map[string]bool{s: true}
 	frontier := []string{s}
@@ -149,6 +156,9 @@ func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 		for _, v := range frontier {
 			if r.Replace(v) != v {
 				return scanCredential
+			}
+			if cp, ok := codePointReading(v); ok && r.Replace(cp) != cp {
+				return scanCodePoint
 			}
 			for _, decode := range [...]func(string) (string, bool){unquoteWhole, unescapeGo} {
 				u, ok := decode(v)
@@ -171,6 +181,46 @@ func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 		return scanTooDeep
 	}
 	return scanClean
+}
+
+// codePointReading returns s with every \xHH escape (either hex case) read
+// as the character U+00HH written in UTF-8, the way some other systems spell
+// those characters; all other text is kept as written. ok is false when s
+// has no such escape.
+func codePointReading(s string) (string, bool) {
+	if !strings.Contains(s, `\x`) {
+		return s, false
+	}
+	var b strings.Builder
+	changed := false
+	for i := 0; i < len(s); {
+		if i+3 < len(s) && s[i] == '\\' && s[i+1] == 'x' {
+			if hi, ok := hexDigit(s[i+2]); ok {
+				if lo, ok := hexDigit(s[i+3]); ok {
+					b.WriteRune(rune(hi<<4 | lo))
+					i += 4
+					changed = true
+					continue
+				}
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String(), changed
+}
+
+// hexDigit returns the value of one hex digit of either case.
+func hexDigit(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 // decodeLogLayer removes one layer: the quotes of a whole quoted string, or

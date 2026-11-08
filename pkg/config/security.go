@@ -206,13 +206,8 @@ func (sec *Config) buildAndPopulateSensitiveCache() {
 		return
 	}
 
-	// Build old/new pairs for strings.Replacer.
-	var pairs []string
-	for _, v := range values {
-		if len(v) > 3 {
-			pairs = append(pairs, v, "[FILTERED]")
-		}
-	}
+	// The same pairs the published process-wide replacer uses.
+	pairs := sensitiveReplacementPairs(values)
 	if len(pairs) == 0 {
 		cache.replacer = strings.NewReplacer()
 	} else {
