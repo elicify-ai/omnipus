@@ -11,9 +11,11 @@ const (
 	// The same-valued mirrors of this number live outside pkg/agent and MUST
 	// move together with it — pkg/gateway::delegationDepthCeilingFallback,
 	// pkg/sysagent/tools::workspaceDelegationDepthCeilingFallback,
-	// pkg/coreagent::FreshSelfDelegationMaxDepth and
-	// pkg/tools::defaultOwnershipWalkMaxDepth each re-declare this value
-	// because their packages cannot import pkg/agent's internals.
+	// pkg/coreagent::FreshSelfDelegationMaxDepth,
+	// pkg/tools::defaultOwnershipWalkMaxDepth and the SPA's
+	// src/components/workspaces/team/teamGraphModel.ts::DEFAULT_DEPTH_FALLBACK
+	// each re-declare this value because their packages cannot import
+	// pkg/agent's internals.
 	defaultMaxSubTurnDepth = 10
 )
 

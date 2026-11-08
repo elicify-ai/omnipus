@@ -66,7 +66,21 @@ func loadStoredDelegationEdges(t *testing.T, home, id string) []storedDelegation
 // with real entity records via agentstore.Create — the in-memory
 // cfg.Agents.List construction below (required for mustAgentLoop/registry
 // construction) is unchanged.
+// buildWorkspaceDelegationTestAPI builds the REST harness with an EXPLICIT
+// operator cap of 3 (performance.max_delegation_depth=3): every test using it
+// exercises the configured-cap path, never the shipped default. Tests for the
+// shipped default call buildWorkspaceDelegationTestAPIWithPerf(t, 0) — the
+// config deliberately left unset — so the handlers resolve the shipped
+// default themselves.
 func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
+	t.Helper()
+	return buildWorkspaceDelegationTestAPIWithPerf(t, 3)
+}
+
+// buildWorkspaceDelegationTestAPIWithPerf is the shared builder; a positive
+// maxDelegationDepth simulates an explicit operator cap, 0 leaves
+// performance.max_delegation_depth UNSET.
+func buildWorkspaceDelegationTestAPIWithPerf(t *testing.T, maxDelegationDepth int) (*restAPI, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
@@ -85,7 +99,9 @@ func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 			},
 		},
 	}
-	cfg.Performance.MaxDelegationDepth = 3
+	if maxDelegationDepth > 0 {
+		cfg.Performance.MaxDelegationDepth = maxDelegationDepth
+	}
 
 	// Real entity records (ADR-054) — see the doc comment above for why this
 	// replaces the old dead on-disk config.json splice. Nothing in this
@@ -162,7 +178,9 @@ func TestWorkspaceDelegation_GetEmpty(t *testing.T) {
 	require.NotNil(t, d.Team, "team must reflect core_team")
 	assert.ElementsMatch(t, []string{"jim", "ava", "ray", "planner"}, *d.Team)
 	// default_depth is the already-computed delegationDepthCeiling(cfg) — the
-	// test fixture sets subturn.max_depth=3, so that's the exposed value.
+	// fixture's EXPLICIT performance.max_delegation_depth=3, so that's the
+	// exposed value (the unset-config shipped default 10 is covered by
+	// TestWorkspaceDelegation_GetDefaultDepth_UnsetConfigShipsTen).
 	assert.Equal(t, 3, d.DefaultDepth, "default_depth must expose the resolved depth ceiling")
 }
 
@@ -190,6 +208,8 @@ func TestWorkspaceDelegation_PutAndRoundTrip(t *testing.T) {
 	assert.Equal(t, 2, *got.Edges[0].Depth)
 	require.NotNil(t, got.Edges[0].Modes)
 	assert.Len(t, *got.Edges[0].Modes, 2)
+	// Fixture cap is the explicit 3 (configured-cap path; the unset-config
+	// default is covered by TestWorkspaceDelegation_PutRoundTrip_UnsetConfigShipsTen).
 	assert.Equal(t, 3, got.DefaultDepth, "default_depth must be present on the PUT response too")
 
 	// Persisted to the delegation store (never the workspace record).
@@ -1025,6 +1045,7 @@ func TestWorkspaceDelegation_Depth0AndEmptyModes_RoundTrip(t *testing.T) {
 
 	got := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
 	require.Len(t, got.Edges, 2)
+	// Fixture cap is the explicit 3 (configured-cap path).
 	assert.Equal(t, 3, got.DefaultDepth,
 		"default_depth is exposed regardless of whether any edge sets its own depth")
 

@@ -26,7 +26,7 @@ plan, **that is a finding** — report it rather than adjusting the plan.
 
 | Expectation | Source |
 |---|---|
-| Delegation depth caps at **3** levels with nothing configured | `docs/settings.md` — "How deep delegation may go" |
+| Delegation depth caps at **10** levels with nothing configured | `docs/settings.md` — "How deep delegation may go" |
 | Over-cap chain is **refused**; the extra work never starts | same |
 | At the concurrency cap a delegation is **queued with its place in line**, never refused | `docs/settings.md` — "How many agents run at once" |
 | Concurrency floor is **2** when memory cannot be measured | same |
@@ -163,7 +163,7 @@ exists to fix.*
 
 ### B2 — Too deep is refused, clearly, before any work starts
 
-**Setup.** Read the depth cap from Lane P (default is **3**). Create one more level
+**Setup.** Read the depth cap from Lane P (default is **10**). Create one more level
 than the cap: with a cap of 3, create `uat-b-d1` … `uat-b-d4`, each permitted to
 delegate to the next.
 
