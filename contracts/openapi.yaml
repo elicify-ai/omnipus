@@ -9684,11 +9684,27 @@ paths:
 
           WHICH VIEWS. Only views of the knowledge base that most closely
           encloses the listed directory (the deepest one, when knowledge bases
-          are nested), and only one inside this workspace's knowledge scope.
-          The set is exactly the `views` GET .../knowledge/views returns for
-          that knowledge base: same loader, same record schemas. A view file
-          that failed to load is not listed here; that endpoint's `unloadable`
-          list remains where it is reported.
+          are nested), and only when that knowledge base is itself one of the
+          collections of this workspace's knowledge scope. The set is the
+          `views` GET .../knowledge/views returns for that knowledge base:
+          same parser, same record schemas, and every emitted
+          (view.collection_id, view.name) is listed by GET
+          .../knowledge/views?collection_id=<that id> and opens through GET
+          .../knowledge/view. A view file that failed to load is not listed
+          here; that endpoint's `unloadable` list remains where it is
+          reported. The listing reads only regular files inside the knowledge
+          base (never a link), at most 256 KiB per file, 128 files per
+          folder and 4 MiB per listing; a view file beyond those limits is
+          left out and the listing still succeeds.
+
+
+          NESTED KNOWLEDGE BASES. A knowledge base that is not itself a
+          collection of the workspace's knowledge scope (for example, one
+          nested inside another knowledge base) contributes no view rows. No
+          folder at or below its root lists one, including its own
+          `.omnipus-vault/views` reached with include_hidden=true. Views of the
+          enclosing collection are still placed by the folder rule below,
+          which never places them inside the nested knowledge base.
 
 
           WHICH FOLDER. A view whose `source` is a clean relative path
