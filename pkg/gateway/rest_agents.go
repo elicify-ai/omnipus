@@ -259,8 +259,9 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 
 	// Test the program a real run would start: the one saved in Settings, with
 	// the same check and the same refusal, never executor.cli_path or a program
-	// on $PATH (T11 FR-9). The file that passed is the file probed. An
-	// unsupported cli has no Settings row and gets unknown-cli below.
+	// on $PATH (T11 FR-9). The file that passed is the file probed, exactly as
+	// returned by the check (TestConnectionCheckedFile: no trimming, no lookup).
+	// An unsupported cli has no Settings row and gets unknown-cli below.
 	resolved := ""
 	if thirdpartycli.IsKnownCLI(cli) {
 		var refusal string
@@ -274,7 +275,7 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 			return
 		}
 	}
-	res := runner.TestConnectionWithPath(r.Context(), cli, resolved)
+	res := runner.TestConnectionCheckedFile(r.Context(), cli, resolved)
 	resp := gen.RunnerTestResponse{
 		Ok:      res.OK,
 		Reason:  gen.RunnerTestResponseReason(res.Reason),

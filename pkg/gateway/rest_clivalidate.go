@@ -113,8 +113,9 @@ func cliValidateCallerKey(r *http.Request) string {
 // HandleSystemCliValidate handles POST /api/v1/system/cli-validate.
 //
 // It decodes {cli, cli_path}, enforces the per-caller in-flight cap, classifies
-// the target (delegating the actual spawn to runner.TestConnectionWithPath,
-// reused as-is), audits the call, and returns the classified CliValidateResponse.
+// the target (delegating the actual spawn to runner.TestConnectionCheckedFile,
+// which runs exactly the file the shared check accepted), audits the call, and
+// returns the classified CliValidateResponse.
 func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -157,7 +158,7 @@ func (a *restAPI) HandleSystemCliValidate(w http.ResponseWriter, r *http.Request
 // directly unit-testable. Order matters and is fail-closed: an unknown cli and
 // an empty / non-regular / non-executable target are rejected WITHOUT a spawn;
 // only a supported cli pointing at a real regular executable file reaches
-// runner.TestConnectionWithPath.
+// runner.TestConnectionCheckedFile.
 func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliValidateResponse {
 	// 1. Unknown cli — no spawn (FR-012).
 	if !isSupportedCLI(cli) {

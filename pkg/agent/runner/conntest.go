@@ -158,9 +158,9 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 	}
 
 	// Resolve which binary to validate: the configured cli_path wins, else the
-	// CLI's default name. resolveCLIBinary trims and applies the same precedence
-	// the drivers use to build the actual exec target, so Test validates exactly
-	// what a real run would exec.
+	// CLI's default name. resolveCLIBinary applies the same precedence the
+	// drivers use to build the actual exec target. A program that already
+	// passed the shared check is tested with TestConnectionCheckedFile instead.
 	target := resolveCLIBinary(cliPath, spec.binary)
 
 	// 1. Binary present? An absolute/relative path is honored as-is by LookPath

@@ -340,12 +340,18 @@ func insideAny(p string, roots []forbiddenRoot) (bool, error) {
 // foldPathCase first: on macOS and Windows the usual volumes are
 // case-insensitive, so /Users/x/OmniHome and /users/x/omnihome name the same
 // folder and a different-case spelling must not escape the check. Folding on
-// a rare case-sensitive volume only refuses more, which is the safe side. A
-// comparison that fails counts as inside.
+// a rare case-sensitive volume only refuses more, which is the safe side.
+//
+// Both arguments are absolute (roots come from expandRoots, p from the
+// resolved chain), so filepath.Rel fails only when the two cannot share a
+// tree by text — on Windows, a different drive or share. That is "not inside
+// by text", never "inside": insideAny still runs its identity walk on every
+// such path, and a root that cannot be examined is refused before this is
+// reached (expandRoots, CheckLocationUnverifiable).
 func pathWithin(root, p string) bool {
 	rel, err := filepath.Rel(foldPathCase(root), foldPathCase(p))
 	if err != nil {
-		return true
+		return false
 	}
 	if rel == "." {
 		return true

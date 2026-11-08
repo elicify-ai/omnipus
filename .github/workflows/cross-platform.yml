@@ -321,7 +321,7 @@ jobs:
           mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
           fail=0
           for sel in "./pkg/tools/|^(TestGuard_.*|TestRootWritableProbe_.*)$" \
-                     "./pkg/thirdpartycli/|^(TestSharedProgramPath_PortedWindows|TestSharedProgramPath_WindowsExtensionMatrix_C1)$" \
+                     "./pkg/thirdpartycli/|^(TestSharedProgramPath_PortedWindows|TestSharedProgramPath_WindowsExtensionMatrix_C1|TestSharedProgramPath_WindowsVolumeContainment|TestSharedProgramPath_WindowsRootDecisions|TestSharedProgramPath_WindowsJunctionLocation)$" \
                      "./pkg/gateway/middleware/|^TestPersonSessionMiddleware_.*$" \
                      "./pkg/gateway/|^(TestCliValidate_.*|TestValidateCLI_.*)$"; do
             pkg="${sel%%|*}"; re="${sel#*|}"
