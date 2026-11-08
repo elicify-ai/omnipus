@@ -1022,7 +1022,9 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 // timeoutRetryPayload is the loop's timeout-retry event (issue #1664 B5): it
 // carries what the provider_retry frame renders — the call ABOUT to be made
 // (the providers.RetryInfo convention, 2..max), the total calls, when the
-// backoff ends (RetryAt = SentAt + Backoff) and the session. Reason
+// backoff ends (RetryAt = SentAt + Backoff) and the frame's session (the
+// transcript session, u9ToolExecSessionIDs — routingSessionID is never a
+// frame destination, ADR-057 consumer set). Reason
 // "empty_reply" marks an empty stream (common.ErrEmptyStream), "timeout"
 // every other timeout-class failure; the hub maps them to the frame's
 // error_code. Error stays log-only.
@@ -1048,6 +1050,6 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) timeoutRetryPayload(retry 
 		SentAt:      sentAt,
 		RetryAt:     sentAt.Add(backoff),
 		MaxAttempts: cr.maxRetries + 1,
-		SessionID:   string(rt.ts.routingSessionID),
+		SessionID:   u9ToolExecSessionIDs(rt.ts),
 	}
 }
