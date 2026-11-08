@@ -326,14 +326,16 @@ func (s *FileMediaStore) PinRef(ref, scope string) error {
 	succ := s.successor
 	s.succMu.Unlock()
 	for succ != nil {
+		// A successor whose copy of ref expired after the handover gets the
+		// complete registration, as Store forwards it, so the ref this store
+		// reports resolves in the live store. storeRef is a no-op when the
+		// successor already holds ref in any scope, including an unpinned one
+		// that a concurrent forward inserted after an earlier check; so the
+		// pin that follows, under the successor's own lock, is what certifies
+		// the result, and its failure is returned.
+		succ.storeRef(ref, entry.path, entry.meta, scope)
 		if err := succ.pinRef(ref, scope); err != nil {
-			if !errors.Is(err, ErrNotFound) {
-				return fmt.Errorf("media store: pin %s in successor: %w", ref, err)
-			}
-			// The successor no longer holds ref (its copy expired after the
-			// handover): forward the complete registration, pinned, as Store
-			// does, so the ref this store reports resolves in the live store.
-			succ.storeRef(ref, entry.path, entry.meta, scope)
+			return fmt.Errorf("media store: pin %s in successor: %w", ref, err)
 		}
 		succ.scheduleSave()
 		succ.succMu.Lock()
