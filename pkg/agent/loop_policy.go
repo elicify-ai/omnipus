@@ -435,7 +435,14 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 // grant-lookup call site along this path (resolveAskPolicy's fast path,
 // requestAskApproval's pre-placeholder check, and this function's own
 // interactive fallback) now shares that one rule via this function.
+//
+// An always-ask tool (tools.AlwaysAskTools; channels-spec-r8 FR-038(a), T-10
+// row 14) is never settled by a standing grant: this one guard covers every
+// grant-lookup call site, so each of its calls gets a fresh approval.
 func (al *AgentLoop) checkStandingGrant(sessionID, agentID, toolName string, args map[string]any) bool {
+	if tools.IsAlwaysAsk(toolName) {
+		return false
+	}
 	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
 		return true
 	}

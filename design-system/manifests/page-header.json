@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "component": "PageHeader",
+  "exports": [
+    "PageHeader"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/page-header.tsx",
+  "documentation": "docs/internal/design/components/page-header.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "with-actions"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/page-header.stories.tsx",
+      "exports": [
+        "Default",
+        "WithActions"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "page-header-unit",
+      "kind": "unit",
+      "file": "src/components/ui/page-header.test.tsx",
+      "test": "PageHeader — landmark and title renders exactly one h1 with the token-driven title classes and no text-2xl",
+      "applicable": true
+    },
+    {
+      "id": "page-header-interaction",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "PageHeader is presentational; actions placed inside it are covered by their own Button contract."
+    },
+    {
+      "id": "page-header-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "PageHeader [check:page-header-axe] axe",
+      "story": "WithActions",
+      "applicable": true
+    },
+    {
+      "id": "page-header-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "PageHeader creates no focus target or keyboard operation."
+    },
+    {
+      "id": "page-header-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "PageHeader [check:page-header-browser] browser",
+      "story": "WithActions",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-slot=\"page-header\"] h1",
+          "text": "Connectors"
+        }
+      ]
+    },
+    {
+      "id": "page-header-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "PageHeader is not a hit target."
+    },
+    {
+      "id": "page-header-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "PageHeader has no animation or transition."
+    },
+    {
+      "id": "page-header-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "PageHeader [check:page-header-forced-colors] forced-colors",
+      "story": "WithActions",
+      "applicable": true
+    },
+    {
+      "id": "page-header-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "PageHeader [check:page-header-root-size] root-size",
+      "story": "WithActions",
+      "applicable": true
+    },
+    {
+      "id": "page-header-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "PageHeader [check:page-header-zoom] zoom",
+      "story": "WithActions",
+      "applicable": true
+    },
+    {
+      "id": "page-header-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "PageHeader [check:page-header-reflow] reflow",
+      "story": "WithActions",
+      "applicable": true
+    }
+  ]
+}

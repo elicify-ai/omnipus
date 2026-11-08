@@ -46,7 +46,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	approvalGated := map[string]bool{
 		"delete_agent": true, "edit_skill": true, "configure_provider": true,
 		"enable_channel": true, "configure_channel": true,
-		"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
+		"connect_channel": true, "set_channel_outbound": true, "connect_mailbox": true, "set_agent_permissions": true,
 		"remove_secret": true, "select_secret_version": true,
 		// install_skill ships Ask (founder decision 2026-11-03).
 		"install_skill": true,

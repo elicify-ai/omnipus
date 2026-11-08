@@ -1,30 +1,62 @@
 import * as React from 'react'
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { CaretDown, CaretUp, Check } from '@phosphor-icons/react'
+import { cva } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 
 const Select = SelectPrimitive.Root
 const SelectGroup = SelectPrimitive.Group
 const SelectValue = SelectPrimitive.Value
 
+// Trigger variants (W2-1 contract §2.3; R39, R41). `field` is the form
+// control and keeps the pre-W2-1 classes byte for byte, so every existing
+// caller renders unchanged. `ghost` is the compact, borderless filter
+// trigger for toolbars (FilterMenu parity): sized to its content, muted
+// text, accent text when `active` (a filter is applied), and a real 44px
+// box on a coarse pointer (skill rule 12). The look lives here; callers
+// pass layout only (R41).
+const selectTriggerVariants = cva('', {
+  variants: {
+    variant: {
+      field:
+        'flex h-9 w-full items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] [@media(pointer:coarse)]:h-[44px] placeholder:text-[var(--color-muted)] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
+      ghost:
+        'inline-flex h-8 w-auto items-center justify-center gap-[var(--space-1)] rounded-md border border-transparent bg-transparent px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium transition-colors motion-reduce:transition-none hover:bg-[var(--color-surface-2)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] forced-colors:text-[ButtonText] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
+    },
+    active: { true: '', false: '' },
+  },
+  compoundVariants: [
+    { variant: 'ghost', active: false, className: 'text-[var(--color-muted)]' },
+    { variant: 'ghost', active: true, className: 'text-[var(--color-accent)]' },
+  ],
+  defaultVariants: { variant: 'field', active: false },
+})
+
+export interface SelectTriggerProps extends React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> {
+  /** `field` (default): the form control. `ghost`: the compact toolbar filter trigger. */
+  variant?: 'field' | 'ghost'
+  /** Ghost only: a filter value is applied, shown in the accent colour. */
+  active?: boolean
+}
+
 const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+  SelectTriggerProps
+>(({ className, children, variant = 'field', active = false, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
     // WebKit tabbability (repo convention): Radix renders the trigger button,
     // so the explicit tabIndex stamp lives here; {...props} may override.
     tabIndex={0}
-    className={cn(
-      'flex h-9 w-full items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] [@media(pointer:coarse)]:h-[44px] placeholder:text-[var(--color-muted)] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
-      className
-    )}
+    data-variant={variant}
+    className={cn(selectTriggerVariants({ variant, active: variant === 'ghost' && active }), className)}
     {...props}
   >
     {children}
     <SelectPrimitive.Icon asChild>
-      <CaretDown size={14} className="opacity-50" aria-hidden="true" />
+      {variant === 'ghost'
+        ? <CaretDown size={11} className="opacity-60" aria-hidden="true" />
+        : <CaretDown size={14} className="opacity-50" aria-hidden="true" />}
     </SelectPrimitive.Icon>
   </SelectPrimitive.Trigger>
 ))
@@ -146,4 +178,5 @@ export {
   SelectSeparator,
   SelectScrollUpButton,
   SelectScrollDownButton,
+  selectTriggerVariants,
 }
