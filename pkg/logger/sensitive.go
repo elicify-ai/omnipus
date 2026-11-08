@@ -64,6 +64,8 @@ func scrubFields(r *strings.Replacer, fields map[string]any) map[string]any {
 
 // maxScrubDecodeDepth bounds how many quoting or escaping layers the scrubber
 // reads through. Composed errors nest a few %q layers; eight leaves margin.
+// A field still decodable at this depth is not read further; it is replaced
+// whole (see scrubString), so the bound limits work, never coverage.
 const maxScrubDecodeDepth = 8
 
 // scrubFailClosedText is logged in place of a field whose registered
@@ -85,11 +87,26 @@ const scrubFailClosedText = "[FILTERED]"
 //   - Otherwise the field is decoded layer by layer, masked at every layer,
 //     and logged quoted once, so the record stays control-free. If a decodable
 //     credential still remained, the whole field is replaced (fail closed).
+//   - A field still decodable beyond maxScrubDecodeDepth layers cannot be
+//     shown credential-free, so it is replaced whole as well (fail closed).
+//
+// Worst-case work per field: each decodeScan visits at most 2^9-1 = 511
+// distinct strings (two decodings per layer, 8 layers), none longer than the
+// field, since decoding never lengthens text. scrubString runs at most two
+// scans plus 8 single decoding steps, so it is linear in the field length
+// with a fixed factor of about 1,030 string passes, and holds at most 511
+// field-sized strings at once.
 func scrubString(r *strings.Replacer, s string) string {
 	masked := r.Replace(s)
 	// Without a backslash or a quote nothing in the field can be decoded.
-	if !strings.ContainsAny(masked, `\"`) || !hasDecodableCredential(r, masked) {
+	if !strings.ContainsAny(masked, `\"`) {
 		return masked
+	}
+	switch decodeScan(r, masked) {
+	case scanClean:
+		return masked
+	case scanTooDeep:
+		return scrubFailClosedText
 	}
 	current := masked
 	for depth := 0; depth < maxScrubDecodeDepth; depth++ {
@@ -100,40 +117,60 @@ func scrubString(r *strings.Replacer, s string) string {
 		current = r.Replace(next)
 	}
 	out := strconv.Quote(current)
-	if hasDecodableCredential(r, out) {
+	if decodeScan(r, out) != scanClean {
 		return scrubFailClosedText
 	}
 	return out
 }
 
-// hasDecodableCredential reports whether s, or any string reachable from it by
-// unquoting a whole quoted string or decoding Go escape sequences (up to
-// maxScrubDecodeDepth layers, both decodings tried at every layer), still
-// contains a registered credential.
-func hasDecodableCredential(r *strings.Replacer, s string) bool {
+// decodeScanResult is the outcome of decodeScan.
+type decodeScanResult int
+
+const (
+	// scanClean: every string reachable within the depth bound was read and
+	// none holds a registered credential.
+	scanClean decodeScanResult = iota
+	// scanCredential: a reachable string holds a registered credential.
+	scanCredential
+	// scanTooDeep: no credential within the bound, but a string at the
+	// bound can still be decoded further, so the field is not known clean.
+	scanTooDeep
+)
+
+// decodeScan reads s and every string reachable from it by unquoting a whole
+// quoted string or decoding Go escape sequences, both decodings tried at
+// every layer, up to maxScrubDecodeDepth layers.
+func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 	seen := map[string]bool{s: true}
 	frontier := []string{s}
-	for depth := 0; depth <= maxScrubDecodeDepth && len(frontier) > 0; depth++ {
+	tooDeep := false
+	for depth := 0; len(frontier) > 0; depth++ {
 		var next []string
 		for _, v := range frontier {
 			if r.Replace(v) != v {
-				return true
+				return scanCredential
 			}
-			if depth == maxScrubDecodeDepth {
-				continue
-			}
-			if u, ok := unquoteWhole(v); ok && !seen[u] {
-				seen[u] = true
-				next = append(next, u)
-			}
-			if u, ok := unescapeGo(v); ok && !seen[u] {
+			for _, decode := range [...]func(string) (string, bool){unquoteWhole, unescapeGo} {
+				u, ok := decode(v)
+				if !ok || seen[u] {
+					continue
+				}
+				if depth == maxScrubDecodeDepth {
+					// Not read further; every string at this depth is
+					// still checked for a credential above.
+					tooDeep = true
+					continue
+				}
 				seen[u] = true
 				next = append(next, u)
 			}
 		}
 		frontier = next
 	}
-	return false
+	if tooDeep {
+		return scanTooDeep
+	}
+	return scanClean
 }
 
 // decodeLogLayer removes one layer: the quotes of a whole quoted string, or
