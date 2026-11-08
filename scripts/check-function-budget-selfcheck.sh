@@ -109,6 +109,7 @@
 #      lines pass with and without a semicolon on that line, 241 fails (Go, TS)
 #   az. an exception reason of only blank-set characters is empty (FAIL) in Go and
 #      TS; a reason of only U+200B or U+180E is a real reason (listed)
+#   ba. a reason edged with any blank-set character is listed trimmed (Go, TS)
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
 
@@ -755,6 +756,22 @@ for entry in "${NOT_WS[@]}"; do
   if expect "(az) exception reason made only of $vname is a real reason (Go and TS)" 0; then
     grep -q '^EXCEPTION .*ReasonGo 260 ' "$TMP/out" || { echo "selfcheck FAIL: (az/$vname) Go did not list it" >&2; FAIL=1; }
     grep -q '^EXCEPTION .*reasonTs 260 ' "$TMP/out" || { echo "selfcheck FAIL: (az/$vname) TS did not list it" >&2; FAIL=1; }
+  fi
+done
+
+# (ba) A reason that starts or ends with a blank-set character is trimmed with the
+# same set, so the listed reason is the bare text in both languages.
+for entry in "${WS_SET[@]}"; do
+  vname="${entry%%:*}"; vbytes="${entry#*:}"
+  # U+2028 and U+2029 end a TS line comment (a JavaScript line terminator), so
+  # text after one is code there; az already covers them as empty reasons.
+  case "$vname" in lf|cr|u2028|u2029) continue ;; esac
+  fresh_tree
+  gen_go_padded "$TMP/tree/pkg/fixture_ba.go" "TrimGo" 260 0 0 "//budget:exception $(printf '%b' "$vbytes")real reason$(printf '%b' "$vbytes")"
+  gen_ts_padded "$TMP/tree/tests/fixture_ba.ts" "trimTs" 260 0 "// budget:exception $(printf '%b' "$vbytes")real reason$(printf '%b' "$vbytes")"
+  if expect "(ba) reason edged with $vname is trimmed (Go and TS)" 0; then
+    grep -q '^EXCEPTION .*TrimGo 260 real reason$' "$TMP/out" || { echo "selfcheck FAIL: (ba/$vname) Go reason was not trimmed" >&2; FAIL=1; }
+    grep -q '^EXCEPTION .*trimTs 260 real reason$' "$TMP/out" || { echo "selfcheck FAIL: (ba/$vname) TS reason was not trimmed" >&2; FAIL=1; }
   fi
 done
 
