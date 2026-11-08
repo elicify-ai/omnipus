@@ -22,8 +22,10 @@ properties:
     maxLength: 4096
     description: >
       Filesystem path to the CLI binary to validate — either the detected
-      prefill or an operator-entered override. An empty value is classified
-      "missing-binary" without a spawn attempt. A non-empty value must pass
+      prefill or an operator-entered override. An empty or whitespace-only
+      value is classified "missing-binary" without a spawn attempt. Any other
+      value is checked exactly as given, surrounding whitespace included, the
+      same bytes Settings Save stores and every run checks; it must pass
       the program-file check (absolute, outside every agent-writable folder,
       a regular file; executable for the gateway user on Linux/macOS), else
       "path-not-allowed" and nothing is spawned.

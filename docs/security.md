@@ -716,7 +716,7 @@ Three named exceptions:
 
 ## Checking an external command-line program
 
-**Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field with `--version` to read its version. It saves nothing.
+**Check CLI** under **Settings → Third-party agents** (`POST /api/v1/system/cli-validate`) runs the program at the path entered in that tool's **Program path** field, exactly as entered, with `--version` to read its version. It saves nothing.
 
 Only a signed-in person can use it: the request must come from one of the configured user accounts. Requests made with the command-line token, while development-bypass mode is on, or with the legacy `OMNIPUS_BEARER_TOKEN` when no user account exists are refused with HTTP 403 before the request is read or any program starts. Settings then shows an error notice. The check itself never saves a program path or an agent, and **Save** works without it.
 
@@ -730,7 +730,7 @@ The check only asks whether an agent could have planted the program. It does not
 
 On Windows the path must be a full drive or network (UNC) path to an `.exe`, `.cmd` or `.bat` file, without short `8.3` names (such as `PROGRA~1`) or alternate data streams. **Windows junctions are not followed yet:** a program reached through a junction (a Windows folder link) that points into an agent-writable folder is not recognised as being there. Use the check on Windows only for programs installed outside agent folders and reached without junctions.
 
-When the check passes, Omnipus runs exactly the file it checked, by the same path, with no further lookup — on Linux, macOS and Windows alike. An empty path is reported as **missing-binary**. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
+When the check passes, Omnipus runs exactly the file it checked, by the same path, with no further lookup — on Linux, macOS and Windows alike. An empty or whitespace-only path is reported as **missing-binary** and nothing starts; any other path is checked exactly as given, surrounding spaces included. Passing the check does not sandbox the program: external command-line workers run outside the Omnipus sandbox (see [sandbox limitations](operations/sandbox-limitations.md#external-command-line-workers-run-outside-the-omnipus-sandbox)).
 
 ## Limits and things to watch
 

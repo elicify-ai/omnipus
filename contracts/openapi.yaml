@@ -13558,10 +13558,11 @@ paths:
         the gateway process can locate its binary — searching $PATH first,
         then a curated per-OS well-known-install-location list — and returns
         the resolved absolute path plus which strategy found it. Read-only,
-        idempotent, and unaudited (no subprocess spawned). The SPA roster uses
-        this to grey-out CLIs the host cannot run, and the create wizard /
-        edit form use the returned path to prefill executor.cli_path. Pure Go
-        probe (no shell-out).
+        idempotent, and unaudited (no subprocess spawned). The web app does
+        not call this endpoint: Settings -> Third-party agents receives the
+        same detection result inside its own settings view and uses it to
+        pre-fill a Program path that is not saved yet. Pure Go probe (no
+        shell-out).
       tags:
       - system
       security:
@@ -13601,7 +13602,9 @@ paths:
         the check location_unverifiable. Ownership and writability of the program are the
         operator's responsibility and are not checked. A refusal is classified "path-not-allowed" and
         nothing is spawned; an accepted candidate launches exactly the
-        checked resolved file. An empty cli_path is "missing-binary". Applies
+        checked resolved file. An empty or whitespace-only cli_path is
+        "missing-binary"; any other cli_path is checked exactly as given,
+        surrounding whitespace included. Applies
         a dedicated rate limiter and a small per-caller in-flight
         concurrency cap, and emits one audit event {cli, resolved_path,
         reason} per call — validation spawns a caller-supplied path, unlike
