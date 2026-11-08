@@ -339,9 +339,17 @@ func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(parent, 0o755))
 	plan := filepath.Join(parent, "plan.md")
 	require.NoError(t, os.WriteFile(plan, []byte("plan"), 0o644))
-	origHome := os.Getenv("OMNIPUS_HOME")
-	t.Cleanup(func() { _ = os.Setenv("OMNIPUS_HOME", origHome) })
-	require.NoError(t, os.Setenv("OMNIPUS_HOME", home))
+	// Each phase below gets its own temporary home via t.Setenv — never a
+	// restore to the saved original: when OMNIPUS_HOME is unset in the
+	// environment the saved value is "", os.Setenv leaves the variable present
+	// but empty, and ensureIsolatedTestOmnipusHome
+	// (pkg/gateway/test_agent_loop_helper_test.go::ensureIsolatedTestOmnipusHome)
+	// then reads that as this test managing its own home and does nothing. The
+	// gateway falls back to $HOME/.omnipus and TestMain's leak guard
+	// (pkg/gateway/testmain_test.go::TestMain) fails the whole run although
+	// every assertion here passed (#1685 round 3, 2026-11-08). t.Setenv
+	// restores the variable at test end and never writes "".
+	t.Setenv("OMNIPUS_HOME", home)
 	stored := media.NewFileMediaStore()
 	t.Cleanup(stored.Stop)
 	ref, err := stored.Store(plan, media.MediaMeta{
@@ -364,12 +372,15 @@ func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
 	if _, resolveErr := loaded.Resolve(ref); resolveErr == nil || errors.Is(resolveErr, media.ErrNotFound) || !errors.Is(resolveErr, fs.ErrPermission) {
 		t.Errorf("Resolve after a permission failure = %v, want the permission cause, not ErrNotFound", resolveErr)
 	}
-	require.NoError(t, os.Setenv("OMNIPUS_HOME", origHome))
+	// The gateway phase gets a fresh home of its own: the fixture's helper must
+	// see a real path, and this phase's media registry stays out of the
+	// fixture's home, as the helper would have arranged itself.
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	sentFileExpectVisibleStoreFailure(t, loaded, ref, "perm-turn", "perm-msg", "perm-viewer")
 
 	// Control: a file that is actually gone is still skipped, on REST and attach.
 	controlHome := t.TempDir()
-	require.NoError(t, os.Setenv("OMNIPUS_HOME", controlHome))
+	t.Setenv("OMNIPUS_HOME", controlHome)
 	gonePath := filepath.Join(controlHome, "gone.md")
 	require.NoError(t, os.WriteFile(gonePath, []byte("gone"), 0o644))
 	origin := media.NewFileMediaStore()
@@ -388,7 +399,7 @@ func TestHistory_RegistryPermissionErrorIsNotAMissingFile(t *testing.T) {
 	if _, resolveErr := skipped.Resolve(goneRef); !errors.Is(resolveErr, media.ErrNotFound) {
 		t.Errorf("control: missing file error = %v, want ErrNotFound", resolveErr)
 	}
-	require.NoError(t, os.Setenv("OMNIPUS_HOME", origHome))
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	sentFileExpectSkippedMissingRef(t, skipped, goneRef)
 }
 
