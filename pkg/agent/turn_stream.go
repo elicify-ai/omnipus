@@ -293,6 +293,15 @@ type streamerStopLimitSetter interface {
 	SetStopLimit(keep int)
 }
 
+// streamerBeforeDoneSetter is an optional interface a Streamer may implement
+// to run one callback after Finalize saved the answer and before it publishes
+// the done frame (#1524). finalizeStreamer passes
+// turnState.persistCancelBeforeDone, so a reload taken when done arrives
+// already shows the turn as stopped.
+type streamerBeforeDoneSetter interface {
+	SetBeforeDone(fn func())
+}
+
 // streamerTruncationSetter is an optional interface a Streamer may implement
 // to receive ADR-087 D2's truncation reason before Finalize is called,
 // mirroring streamerContinuationSetter's calling convention exactly.
@@ -445,6 +454,14 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 			if keep, limited := ts.stopKeepFor(ts.getCurrentMessageID()); limited {
 				ls.SetStopLimit(keep)
 			}
+		}
+		// #1524: a stopped turn's turn_canceled record must be readable when
+		// its done frame is published. Finish (which writes it through the
+		// cancel callback) runs only after this Finalize, so hand the streamer
+		// the same once-only write to run between saving the answer and
+		// publishing done. The record still lands after the assistant entry.
+		if bd, ok := s.(streamerBeforeDoneSetter); ok {
+			bd.SetBeforeDone(ts.persistCancelBeforeDone)
 		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens

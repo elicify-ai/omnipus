@@ -434,6 +434,17 @@ func (s *wsStreamer) SetStopLimit(keep int) {
 	s.statsMu.Unlock()
 }
 
+// SetBeforeDone registers the agent loop's write that must be readable before
+// this turn's done frame goes out (#1524: a stopped turn's turn_canceled
+// record). Called by finalizeStreamer (pkg/agent/turn_stream.go) before
+// Finalize; Finalize runs it after saving the answer and before publishing
+// done.
+func (s *wsStreamer) SetBeforeDone(fn func()) {
+	s.statsMu.Lock()
+	s.beforeDone = fn
+	s.statsMu.Unlock()
+}
+
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
 // Finalize. Implements the streamerStatsSetter interface from pkg/agent.
 func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.Duration) {
@@ -729,6 +740,8 @@ type wsStreamerFinalize struct {
 	// stopLimit/stopLimitSet snapshot SetStopLimit (#1534).
 	stopLimit    int
 	stopLimitSet bool
+	// beforeDone snapshots SetBeforeDone (#1524).
+	beforeDone func()
 	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
 	pendingFinalContent string
 	systemNotice        *generated.ReplayMessageFrame
@@ -767,6 +780,11 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	if persistErr != nil {
 		wsf.persistFailed = true
 		wsf.publishSaveFailureNotice()
+	}
+	// #1524: records the turn must show at done (a stopped turn's
+	// turn_canceled record) are written after the answer and before done.
+	if wsf.beforeDone != nil {
+		wsf.beforeDone()
 	}
 	wsf.publishDone()
 	return persistErr
@@ -983,6 +1001,7 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.publishedAfterCut = wsf.s.publishedAfterCut
 	wsf.stopLimit = wsf.s.stopLimit
 	wsf.stopLimitSet = wsf.s.stopLimitSet
+	wsf.beforeDone = wsf.s.beforeDone
 	wsf.s.statsMu.Unlock()
 
 	// The harness already persisted this system entry. Neither its prose
