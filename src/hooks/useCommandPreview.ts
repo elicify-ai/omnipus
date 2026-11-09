@@ -7,11 +7,8 @@
 // computed server-side for what the operator has typed, via
 // `POST /agents/executor-preview`.
 //
-// Differs from `useCliPathValidation` in ONE deliberate way: that hook is
-// imperative (`validate(cli, path)` called from onBlur) because a blur-only
-// check just needs to happen once per "the operator moved on". A live
-// command-line preview is far more useful when it visibly updates as the
-// operator types, not just after they click away — so this hook is
+// A live command-line preview updates as the operator types, rather than
+// waiting for a blur event or an explicit validation call. This hook is
 // REACTIVE: callers pass the current `ExecutorCommandPreviewRequest` (built
 // fresh from whatever state shape they own — `executor`/`model` in
 // AgentProfile, the flat `WizardSubmitPayload` in the create wizard) on
@@ -20,13 +17,11 @@
 // literal every render does not by itself trigger a re-fetch) and debounces
 // >=400ms before calling `fetchExecutorPreview`. Any pending debounce or
 // in-flight request from a previous burst is cancelled first — via
-// `clearTimeout` / `AbortController.abort()`, matching
-// `useCliPathValidation`'s cancel-in-flight semantics exactly.
+// `clearTimeout` / `AbortController.abort()`.
 //
 // `req` is `undefined` (or has no `cli`) before a CLI has been chosen —
 // `ExecutorCommandPreviewRequest.cli` is required on the wire, so that
-// resets to idle without a network call, same as `useCliPathValidation`'s
-// blank-path short-circuit.
+// resets to idle without a network call when no CLI is selected.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchExecutorPreview, isApiError } from '@/lib/api'
