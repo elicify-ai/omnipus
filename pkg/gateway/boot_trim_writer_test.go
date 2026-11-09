@@ -144,7 +144,7 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 	}()
 	// While the trim goroutine is held, a correct drain is blocked and
 	// cannot return; the wait below ends on that state, never on a timer.
-	if awaitDrainBlockedOrReturned(t, drained) {
+	if awaitDrainBlockedOrReturned(t, drained, gate, stopCancel) {
 		gate.release()
 		<-drained
 		t.Fatal("boot background writers were not joined by the teardown drain: it returned while the boot cache-trim goroutine was still held")
@@ -277,21 +277,44 @@ func installTrimWorkerGate(t *testing.T) *trimWorkerGate {
 // awaitDrainBlockedOrReturned returns true if the drain returned, false once
 // the drain is provably blocked behind the held trim goroutine. "Provably
 // blocked" is read from one stop-the-world goroutine snapshot: the drain is
-// parked in its select, the boot joiner is parked in WaitGroup.Wait, and
-// every other goroutine the boot spawned has already exited (their Done has
-// run, so a joiner that was still parked would be waiting on the held trim
-// goroutine only). No timer is involved: the loop ends on a state, and the
-// go test deadline remains the only bound.
-func awaitDrainBlockedOrReturned(t *testing.T, drained <-chan struct{}) bool {
+// parked in its select, the held trim goroutine is present, exactly ONE other
+// goroutine the boot spawned is alive and it is the boot joiner (identified
+// by being parked in WaitGroup.Wait called DIRECTLY by an initializeAgentLoop
+// closure — a writer that waits on some other WaitGroup has a different
+// caller and disqualifies the snapshot), and every other boot writer has
+// exited (its Done has run). The joiner's counter can then only be held by
+// the trim goroutine. No timer paces the loop: it ends on a state, and its
+// only bound is the go test deadline — if the snapshot never qualifies (for
+// example another boot writer never finishes) the wait fails there with a
+// named message instead of passing.
+func awaitDrainBlockedOrReturned(t *testing.T, drained <-chan struct{}, gate *trimWorkerGate, cancel context.CancelFunc) bool {
 	t.Helper()
+	var guard <-chan time.Time
+	if deadline, ok := t.Deadline(); ok {
+		timer := time.NewTimer(max(time.Until(deadline)-30*time.Second, time.Second))
+		defer timer.Stop()
+		guard = timer.C
+	}
 	buf := make([]byte, 1<<20)
 	for {
 		select {
 		case <-drained:
 			return true
+		case <-guard:
+			gate.release()
+			cancel()
+			<-drained
+			t.Fatal("teardown drain was never provably blocked behind the held boot cache-trim goroutine before the test deadline: another boot writer is still alive, or the goroutine snapshot never matched; the drain's wait cannot be attributed to the trim worker")
 		default:
 		}
-		n := runtime.Stack(buf, true)
+		var n int
+		for { // a truncated dump could hide a live writer: grow until complete
+			n = runtime.Stack(buf, true)
+			if n < len(buf) {
+				break
+			}
+			buf = make([]byte, 2*len(buf))
+		}
 		if drainBlockedBehindTrimWorker(string(buf[:n])) {
 			select {
 			case <-drained:
@@ -304,8 +327,11 @@ func awaitDrainBlockedOrReturned(t *testing.T, drained <-chan struct{}) bool {
 	}
 }
 
+const bootJoinerCaller = "(*runContextWithOptions).initializeAgentLoop.func"
+
 func drainBlockedBehindTrimWorker(dump string) bool {
-	var drainParked, joinerParked, worker bool
+	var drainParked, joiners, worker bool
+	nJoiners := 0
 	for _, g := range strings.Split(dump, "\n\n") {
 		header, _, _ := strings.Cut(g, "\n")
 		switch {
@@ -314,12 +340,32 @@ func drainBlockedBehindTrimWorker(dump string) bool {
 		case strings.Contains(g, "runBrowserCacheTrimSchedule"):
 			worker = true
 		case strings.Contains(g, "created by") && strings.Contains(g, "initializeAgentLoop"):
-			if strings.Contains(g, "sync.(*WaitGroup).Wait") && !strings.Contains(header, "runnable") {
-				joinerParked = true
-			} else {
+			if !isBootJoiner(g) || strings.Contains(header, "runnable") {
 				return false // another boot writer is still alive
 			}
+			nJoiners++
 		}
 	}
-	return drainParked && joinerParked && worker
+	joiners = nJoiners == 1
+	return drainParked && joiners && worker
+}
+
+// isBootJoiner reports whether the goroutine block is parked in
+// sync.WaitGroup.Wait with an initializeAgentLoop closure as the direct
+// caller of that Wait — the boot joiner's own frame, which no other boot
+// writer (the trim worker, the preprovision, the primer) has.
+func isBootJoiner(block string) bool {
+	var frames []string
+	for _, line := range strings.Split(block, "\n")[1:] {
+		if line == "" || strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "created by") {
+			continue
+		}
+		frames = append(frames, line)
+	}
+	for i, f := range frames {
+		if strings.HasPrefix(f, "sync.(*WaitGroup).Wait(") {
+			return i+1 < len(frames) && strings.Contains(frames[i+1], bootJoinerCaller)
+		}
+	}
+	return false
 }
