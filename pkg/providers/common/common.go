@@ -257,6 +257,10 @@ func NewHTTPClient(proxy string) (*http.Client, error) {
 	// Age stale pooled connections out quickly (default is 90s).
 	transport.IdleConnTimeout = 30 * time.Second
 
+	// Hosted edition: dial only addresses the provider endpoint guard accepts
+	// (endpoint_guard.go). A no-op on every other edition.
+	GuardTransport(transport)
+
 	// Enable HTTP/1.1 and HTTP/2 explicitly — the modern replacement for the
 	// deprecated http2.ConfigureTransports — and configure HTTP/2 with
 	// health-check pings: if no frame is received on a pooled connection for

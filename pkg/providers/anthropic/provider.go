@@ -67,6 +67,7 @@ func newStreamHTTPClient(headerTimeout time.Duration) *http.Client {
 		transport = &http.Transport{}
 	}
 	transport.ResponseHeaderTimeout = headerTimeout
+	common.GuardTransport(transport)
 	return &http.Client{Transport: transport}
 }
 
@@ -95,7 +96,7 @@ func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provi
 		timeout = time.Duration(timeoutSeconds[0]) * time.Second
 		explicit = timeout
 	}
-	client := anthropic.NewClient(
+	opts := []option.RequestOption{
 		option.WithAuthToken(""),
 		option.WithAPIKey(token),
 		option.WithRequestTimeout(timeout),
@@ -107,7 +108,13 @@ func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provi
 		// fact — so the SDK's default 2 retries are disabled here and the
 		// boundary error reaches the chain verbatim.
 		option.WithMaxRetries(0),
-	)
+	}
+	// Hosted edition: the non-streaming client dials through the provider
+	// endpoint guard too (common/endpoint_guard.go); nil elsewhere.
+	if guarded := common.GuardedHTTPClient(); guarded != nil {
+		opts = append(opts, option.WithHTTPClient(guarded))
+	}
+	client := anthropic.NewClient(opts...)
 	return &Provider{
 		client:                 &client,
 		baseURL:                baseURL,

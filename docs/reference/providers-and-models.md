@@ -423,10 +423,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Atomic Chat (`atomic-chat`)
 
-| Models | Tool use |
-|---|---|
-| `Meta-Llama-3_1-8B-Instruct-GGUF`<br>`Qwen3_5-9B-MLX-4bit`<br>`Qwen3_5-9B-Q4_K_M` | Yes |
-| `gemma-4-E4B-it-IQ4_XS`<br>`gemma-4-E4B-it-MLX-4bit` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Auriko (`auriko`)
 
@@ -442,17 +439,11 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Azure (`azure`)
 
-| Models | Tool use |
-|---|---|
-| `claude-fable-5-1`<br>`claude-fable-5`<br>`claude-haiku-4-5`<br>`claude-haiku-5-5`<br>`claude-mythos-5`<br>`claude-opus-4-1`<br>`claude-opus-4-5`<br>`claude-opus-4-6`<br>`claude-opus-4-7`<br>`claude-opus-4-8`<br>`claude-opus-5-5`<br>`claude-opus-5`<br>`claude-sonnet-4-5`<br>`claude-sonnet-4-6`<br>`claude-sonnet-5-5`<br>`claude-sonnet-5`<br>`codestral-2501`<br>`codex-mini`<br>`cohere-command-a`<br>`deepseek-v3.2`<br>`deepseek-v4-flash`<br>`deepseek-v4-pro`<br>`deepseek-v4.1-flash`<br>`gpt-4-turbo-vision`<br>`gpt-4-turbo`<br>`gpt-4.1-mini`<br>`gpt-4.1-nano`<br>`gpt-4.1`<br>`gpt-4o-mini`<br>`gpt-4o`<br>`gpt-5-codex`<br>`gpt-5-mini`<br>`gpt-5-nano`<br>`gpt-5-pro`<br>`gpt-5.1-codex-max`<br>`gpt-5.1-codex-mini`<br>`gpt-5.1-codex`<br>`gpt-5.1`<br>`gpt-5.2-codex`<br>`gpt-5.2`<br>`gpt-5.3-codex`<br>`gpt-5.4-mini`<br>`gpt-5.4-nano`<br>`gpt-5.4-pro`<br>`gpt-5.4`<br>`gpt-5.5`<br>`gpt-5.6-luna`<br>`gpt-5.6-sol`<br>`gpt-5.6-terra`<br>`gpt-5`<br>`gpt-6-astra`<br>`gpt-6-luna`<br>`gpt-6-sol`<br>`gpt-6.1-sol`<br>`gpt-6.1-terra`<br>`gpt-chat-latest`<br>`grok-4-1-fast-non-reasoning`<br>`grok-4-1-fast-reasoning`<br>`grok-4-20-non-reasoning`<br>`grok-4-20-reasoning`<br>`grok-4.6`<br>`grok-4.7`<br>`kimi-k2.5`<br>`kimi-k2.6`<br>`kimi-k2.7-code`<br>`llama-3.3-70b-instruct`<br>`llama-4-maverick-17b-128e-instruct-fp8`<br>`llama-4-scout-17b-16e-instruct`<br>`ministral-3b`<br>`mistral-medium-2505`<br>`mistral-small-2503`<br>`model-router`<br>`o1`<br>`o3-mini`<br>`o3`<br>`o4-mini`<br>`phi-4-mini-reasoning`<br>`phi-4-mini` | Yes |
-| `cohere-embed-v-4-0`<br>`cohere-embed-v3-english`<br>`cohere-embed-v3-multilingual`<br>`deepseek-r1`<br>`deepseek-v3.2-speciale`<br>`gpt-3.5-turbo-0125`<br>`gpt-3.5-turbo-1106`<br>`gpt-3.5-turbo-instruct`<br>`phi-4-multimodal`<br>`phi-4-reasoning-plus`<br>`phi-4-reasoning`<br>`phi-4`<br>`text-embedding-3-large`<br>`text-embedding-3-small`<br>`text-embedding-ada-002` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Azure Cognitive Services (`azure-cognitive-services`)
 
-| Models | Tool use |
-|---|---|
-| `claude-fable-5-1`<br>`claude-fable-5`<br>`claude-haiku-4-5`<br>`claude-haiku-5-5`<br>`claude-mythos-5`<br>`claude-opus-4-1`<br>`claude-opus-4-5`<br>`claude-opus-4-6`<br>`claude-opus-4-7`<br>`claude-opus-4-8`<br>`claude-opus-5-5`<br>`claude-opus-5`<br>`claude-sonnet-4-5`<br>`claude-sonnet-4-6`<br>`claude-sonnet-5-5`<br>`claude-sonnet-5`<br>`codestral-2501`<br>`codex-mini`<br>`cohere-command-a`<br>`deepseek-v3.2`<br>`deepseek-v4-flash`<br>`deepseek-v4-pro`<br>`deepseek-v4.1-flash`<br>`gpt-4-turbo-vision`<br>`gpt-4-turbo`<br>`gpt-4.1-mini`<br>`gpt-4.1-nano`<br>`gpt-4.1`<br>`gpt-4o-mini`<br>`gpt-4o`<br>`gpt-5-codex`<br>`gpt-5-mini`<br>`gpt-5-nano`<br>`gpt-5-pro`<br>`gpt-5.1-codex-max`<br>`gpt-5.1-codex-mini`<br>`gpt-5.1-codex`<br>`gpt-5.1`<br>`gpt-5.2-codex`<br>`gpt-5.2`<br>`gpt-5.3-codex`<br>`gpt-5.4-mini`<br>`gpt-5.4-nano`<br>`gpt-5.4-pro`<br>`gpt-5.4`<br>`gpt-5.5`<br>`gpt-5.6-luna`<br>`gpt-5.6-sol`<br>`gpt-5.6-terra`<br>`gpt-5`<br>`gpt-6-astra`<br>`gpt-6-luna`<br>`gpt-6-sol`<br>`gpt-6.1-sol`<br>`gpt-6.1-terra`<br>`gpt-chat-latest`<br>`grok-4-1-fast-non-reasoning`<br>`grok-4-1-fast-reasoning`<br>`grok-4-20-non-reasoning`<br>`grok-4-20-reasoning`<br>`grok-4.6`<br>`grok-4.7`<br>`kimi-k2.5`<br>`kimi-k2.6`<br>`kimi-k2.7-code`<br>`llama-3.3-70b-instruct`<br>`llama-4-maverick-17b-128e-instruct-fp8`<br>`llama-4-scout-17b-16e-instruct`<br>`ministral-3b`<br>`mistral-medium-2505`<br>`mistral-small-2503`<br>`model-router`<br>`o1`<br>`o3-mini`<br>`o3`<br>`o4-mini`<br>`phi-4-mini-reasoning`<br>`phi-4-mini` | Yes |
-| `cohere-embed-v-4-0`<br>`cohere-embed-v3-english`<br>`cohere-embed-v3-multilingual`<br>`deepseek-r1`<br>`deepseek-v3.2-speciale`<br>`gpt-3.5-turbo-0125`<br>`gpt-3.5-turbo-1106`<br>`gpt-3.5-turbo-instruct`<br>`phi-4-multimodal`<br>`phi-4-reasoning-plus`<br>`phi-4-reasoning`<br>`phi-4`<br>`text-embedding-3-large`<br>`text-embedding-3-small`<br>`text-embedding-ada-002` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Bailing (`bailing`)
 
@@ -538,17 +529,11 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Cloudflare AI Gateway (`cloudflare-ai-gateway`)
 
-| Models | Tool use |
-|---|---|
-| `alibaba/qwen3-max`<br>`alibaba/qwen3.5-397b-a17b`<br>`alibaba/qwen3.7-max`<br>`alibaba/qwen3.7-plus`<br>`alibaba/qwen3.8-max`<br>`anthropic/claude-fable-5.1`<br>`anthropic/claude-fable-5`<br>`anthropic/claude-haiku-4.5`<br>`anthropic/claude-haiku-5.5`<br>`anthropic/claude-opus-4.5`<br>`anthropic/claude-opus-4.6`<br>`anthropic/claude-opus-4.7`<br>`anthropic/claude-opus-4.8`<br>`anthropic/claude-opus-5.5`<br>`anthropic/claude-opus-5`<br>`anthropic/claude-sonnet-4.5`<br>`anthropic/claude-sonnet-4.6`<br>`anthropic/claude-sonnet-5.5`<br>`anthropic/claude-sonnet-5`<br>`deepseek/deepseek-v4-pro`<br>`fireworks/ember-1`<br>`google/gemini-2.5-flash-lite`<br>`google/gemini-2.5-flash`<br>`google/gemini-2.5-pro`<br>`google/gemini-3-flash`<br>`google/gemini-3.1-flash-lite`<br>`google/gemini-3.1-pro`<br>`google/gemini-3.5-flash-lite`<br>`google/gemini-3.5-flash`<br>`google/gemini-3.6-flash`<br>`google/gemini-3.7-flash`<br>`google/gemini-3.8-flash`<br>`google/gemini-4-argon`<br>`meta/muse-spark-1.1`<br>`meta/muse-spark-1.2`<br>`meta/muse-spark-1.3`<br>`meta/muse-spark-open`<br>`meta/muse-wonder-1.0`<br>`minimax/m3.1-flash`<br>`moonshotai/kimi-k3`<br>`openai/gpt-4-turbo`<br>`openai/gpt-4.1-mini`<br>`openai/gpt-4.1-nano`<br>`openai/gpt-4.1`<br>`openai/gpt-4`<br>`openai/gpt-4o-mini`<br>`openai/gpt-4o`<br>`openai/gpt-5-mini`<br>`openai/gpt-5-nano`<br>`openai/gpt-5-pro`<br>`openai/gpt-5.1`<br>`openai/gpt-5.2-chat-latest`<br>`openai/gpt-5.2-pro`<br>`openai/gpt-5.2`<br>`openai/gpt-5.3-chat-latest`<br>`openai/gpt-5.3-codex-spark`<br>`openai/gpt-5.3-codex`<br>`openai/gpt-5.4-mini`<br>`openai/gpt-5.4-nano`<br>`openai/gpt-5.4-pro`<br>`openai/gpt-5.4`<br>`openai/gpt-5.5-pro`<br>`openai/gpt-5.5`<br>`openai/gpt-5.6-luna`<br>`openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-5.6`<br>`openai/gpt-5`<br>`openai/gpt-6-astra`<br>`openai/gpt-6-luna`<br>`openai/gpt-6-sol`<br>`openai/gpt-6.1-sol`<br>`openai/gpt-6.1-terra`<br>`openai/o1-pro`<br>`openai/o1`<br>`openai/o3-mini`<br>`openai/o3-pro`<br>`openai/o3`<br>`openai/o4-mini`<br>`reflection-ai/beam-1.0-501b-a23b`<br>`unbiased/pareto`<br>`workers-ai/@cf/google/gemma-4-26b-a4b-it`<br>`workers-ai/@cf/ibm-granite/granite-4.0-h-micro`<br>`workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`<br>`workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct`<br>`workers-ai/@cf/mistralai/mistral-small-3.1-24b-instruct`<br>`workers-ai/@cf/moonshotai/kimi-k2.6`<br>`workers-ai/@cf/moonshotai/kimi-k2.7-code`<br>`workers-ai/@cf/nvidia/nemotron-3-120b-a12b`<br>`workers-ai/@cf/openai/gpt-oss-120b`<br>`workers-ai/@cf/openai/gpt-oss-20b`<br>`workers-ai/@cf/qwen/qwen3-30b-a3b-fp8`<br>`workers-ai/@cf/zai-org/glm-4.7-flash`<br>`workers-ai/@cf/zai-org/glm-5.2`<br>`xai/grok-4.20-0309-non-reasoning`<br>`xai/grok-4.20-0309-reasoning`<br>`xai/grok-4.3`<br>`xai/grok-4.5`<br>`xai/grok-4.6`<br>`xai/grok-4.7` | Yes |
-| `openai/gpt-3.5-turbo`<br>`typesafe/jev`<br>`workers-ai/@cf/aisingapore/gemma-sea-lion-v4-27b-it`<br>`workers-ai/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`<br>`workers-ai/@cf/meta/llama-3.1-8b-instruct-fp8`<br>`workers-ai/@cf/meta/llama-3.2-11b-vision-instruct`<br>`workers-ai/@cf/meta/llama-3.2-1b-instruct`<br>`workers-ai/@cf/meta/llama-3.2-3b-instruct`<br>`workers-ai/@cf/meta/llama-guard-3-8b`<br>`workers-ai/@cf/qwen/qwen2.5-coder-32b-instruct`<br>`workers-ai/@cf/qwen/qwq-32b` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Cloudflare Workers AI (`cloudflare-workers-ai`)
 
-| Models | Tool use |
-|---|---|
-| `@cf/deepseek-ai/deepseek-v4-flash-0731`<br>`@cf/deepseek-ai/deepseek-v4-pro-0813`<br>`@cf/deepseek-ai/deepseek-v4.1-flash-1017`<br>`@cf/google/gemma-4-26b-a4b-it`<br>`@cf/ibm-granite/granite-4.0-h-micro`<br>`@cf/meta/llama-3.3-70b-instruct-fp8-fast`<br>`@cf/meta/llama-4-scout-17b-16e-instruct`<br>`@cf/mistralai/mistral-small-3.1-24b-instruct`<br>`@cf/moonshotai/kimi-k2.6`<br>`@cf/moonshotai/kimi-k2.7-code`<br>`@cf/nvidia/nemotron-3-120b-a12b`<br>`@cf/openai/gpt-oss-120b`<br>`@cf/openai/gpt-oss-20b`<br>`@cf/qwen/qwen3-30b-a3b-fp8`<br>`@cf/qwen/qwen3.8-27b`<br>`@cf/zai-org/glm-4.7-flash`<br>`@cf/zai-org/glm-5.2`<br>`@cf/zai-org/glm-5.3-flash`<br>`@cf/zai-org/glm-5.3` | Yes |
-| `@cf/aisingapore/gemma-sea-lion-v4-27b-it`<br>`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`<br>`@cf/meta/llama-3.1-8b-instruct-fp8`<br>`@cf/meta/llama-3.2-11b-vision-instruct`<br>`@cf/meta/llama-3.2-1b-instruct`<br>`@cf/meta/llama-3.2-3b-instruct`<br>`@cf/meta/llama-guard-3-8b`<br>`@cf/qwen/qwen2.5-coder-32b-instruct`<br>`@cf/qwen/qwq-32b` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Cohere (`cohere`)
 
@@ -603,9 +588,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Databricks (`databricks`)
 
-| Models | Tool use |
-|---|---|
-| `databricks-claude-haiku-4-5`<br>`databricks-claude-opus-4-1`<br>`databricks-claude-opus-4-5`<br>`databricks-claude-opus-4-6`<br>`databricks-claude-opus-4-7`<br>`databricks-claude-sonnet-4-5`<br>`databricks-claude-sonnet-4-6`<br>`databricks-claude-sonnet-4`<br>`databricks-gemini-2-5-flash`<br>`databricks-gemini-2-5-pro`<br>`databricks-gemini-3-1-flash-lite`<br>`databricks-gemini-3-1-pro`<br>`databricks-gemini-3-5-flash`<br>`databricks-gemini-3-flash`<br>`databricks-gemini-3-pro`<br>`databricks-glm-5-2`<br>`databricks-gpt-5-1`<br>`databricks-gpt-5-2`<br>`databricks-gpt-5-4-mini`<br>`databricks-gpt-5-4-nano`<br>`databricks-gpt-5-4`<br>`databricks-gpt-5-5`<br>`databricks-gpt-5-6-luna`<br>`databricks-gpt-5-6-sol`<br>`databricks-gpt-5-6-terra`<br>`databricks-gpt-5-mini`<br>`databricks-gpt-5-nano`<br>`databricks-gpt-5`<br>`databricks-gpt-oss-120b`<br>`databricks-gpt-oss-20b`<br>`databricks-kimi-k2-7-code` | Yes |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Deep Infra (`deepinfra`)
 
@@ -711,9 +694,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### GitLab Duo (`gitlab`)
 
-| Models | Tool use |
-|---|---|
-| `duo-chat-fable-5-1`<br>`duo-chat-fable-5`<br>`duo-chat-gpt-5-1`<br>`duo-chat-gpt-5-2-codex`<br>`duo-chat-gpt-5-2`<br>`duo-chat-gpt-5-3-codex`<br>`duo-chat-gpt-5-4-mini`<br>`duo-chat-gpt-5-4-nano`<br>`duo-chat-gpt-5-4`<br>`duo-chat-gpt-5-5`<br>`duo-chat-gpt-5-6-luna`<br>`duo-chat-gpt-5-6-sol`<br>`duo-chat-gpt-5-6-terra`<br>`duo-chat-gpt-5-codex`<br>`duo-chat-gpt-5-mini`<br>`duo-chat-gpt-6-1-sol`<br>`duo-chat-gpt-6-astra`<br>`duo-chat-gpt-6-luna`<br>`duo-chat-gpt-6-sol`<br>`duo-chat-haiku-4-5`<br>`duo-chat-haiku-5-5`<br>`duo-chat-opus-4-5`<br>`duo-chat-opus-4-6`<br>`duo-chat-opus-4-7`<br>`duo-chat-opus-4-8`<br>`duo-chat-opus-5-5`<br>`duo-chat-opus-5`<br>`duo-chat-sonnet-4-5`<br>`duo-chat-sonnet-4-6`<br>`duo-chat-sonnet-5-5`<br>`duo-chat-sonnet-5` | Yes |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### GMI Cloud (`gmicloud`)
 
@@ -846,10 +827,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Infomaniak (`infomaniak`)
 
-| Models | Tool use |
-|---|---|
-| `Qwen/Qwen3.5-122B-A10B-FP8`<br>`Qwen/Qwen3.5-397B-A17B-FP8`<br>`google/gemma-4-31B-it`<br>`mistralai/Ministral-3-14B-Instruct-2512`<br>`mistralai/Mistral-Small-4-119B-2603`<br>`moonshotai/Kimi-K2.6`<br>`nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8`<br>`swiss-ai/Apertus-v1.5-70B` | Yes |
-| `bge_multilingual_gemma2`<br>`mini_lm_l12_v2` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### IO.NET (`io-net`)
 
@@ -940,9 +918,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### LiteLLM Proxy (`litellm`)
 
-| Models | Tool use |
-|---|---|
-| Unknown (no models in catalog) | Unknown |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Llama (`llama`)
 
@@ -1003,9 +979,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Lynkr (`lynkr`)
 
-| Models | Tool use |
-|---|---|
-| `lynkr-auto` | Yes |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Meganova (`meganova`)
 
@@ -1172,9 +1146,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Neon (`neon`)
 
-| Models | Tool use |
-|---|---|
-| `claude-fable-5-1`<br>`claude-fable-5`<br>`claude-haiku-4-5`<br>`claude-haiku-5-5`<br>`claude-opus-4-1`<br>`claude-opus-4-5`<br>`claude-opus-4-6`<br>`claude-opus-4-7`<br>`claude-opus-4-8`<br>`claude-opus-5-5`<br>`claude-opus-5`<br>`claude-sonnet-4-5`<br>`claude-sonnet-4-6`<br>`claude-sonnet-5-5`<br>`claude-sonnet-5`<br>`deepseek-v4-1-flash`<br>`gemini-3-1-flash-lite`<br>`gemini-3-1-pro`<br>`gemini-3-5-flash-lite`<br>`gemini-3-5-flash`<br>`gemini-3-6-flash`<br>`gemini-3-7-flash`<br>`gemini-3-8-flash`<br>`gemini-3-flash`<br>`gemini-4-argon`<br>`gemma-3-12b`<br>`glm-5-2`<br>`glm-5-3-flash`<br>`glm-5-3`<br>`gpt-5-1`<br>`gpt-5-2`<br>`gpt-5-3-codex`<br>`gpt-5-4-mini`<br>`gpt-5-4-nano`<br>`gpt-5-4`<br>`gpt-5-5-pro`<br>`gpt-5-5`<br>`gpt-5-6-luna`<br>`gpt-5-6-sol`<br>`gpt-5-6-terra`<br>`gpt-5-mini`<br>`gpt-5-nano`<br>`gpt-5`<br>`gpt-6-1-sol`<br>`gpt-6-astra`<br>`gpt-6-luna`<br>`gpt-6-sol`<br>`gpt-oss-120b`<br>`gpt-oss-20b`<br>`grok-4-6`<br>`grok-4-7`<br>`inkling`<br>`kimi-k3`<br>`llama-4-maverick`<br>`meta-llama-3-1-8b-instruct`<br>`meta-llama-3-3-70b-instruct`<br>`qwen3-next-80b-a3b-instruct`<br>`qwen35-122b-a10b` | Yes |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### NeoSmith (`neosmith`)
 
@@ -1345,10 +1317,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Privatemode AI (`privatemode-ai`)
 
-| Models | Tool use |
-|---|---|
-| `glm-5.3-flash`<br>`glm-5.3`<br>`glm-flash-latest`<br>`glm-latest`<br>`gpt-oss-120b`<br>`kimi-k2.6`<br>`kimi-latest` | Yes |
-| `deepseek-ocr-2`<br>`qwen3-embedding-4b` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### QiHang (`qihang-ai`)
 
@@ -1365,9 +1334,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### QVAC (`qvac`)
 
-| Models | Tool use |
-|---|---|
-| `gemma4-31b`<br>`gpt-oss-120b`<br>`gpt-oss-20b`<br>`qwen3.5-0.8b`<br>`qwen3.5-2b`<br>`qwen3.5-4b`<br>`qwen3.5-9b`<br>`qwen3.6-27b`<br>`qwen3.6-35b-a3b` | Yes |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### Reflection (`reflection`)
 
@@ -1409,9 +1376,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### SaladCloud AI Gateway (`salad-cloud`)
 
-| Models | Tool use |
-|---|---|
-| `qwen3.6-35b-a3b` | Yes |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### SambaNova (`sambanova`)
 
@@ -1479,10 +1444,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 
 ### Snowflake Cortex (`snowflake-cortex`)
 
-| Models | Tool use |
-|---|---|
-| `claude-fable-5`<br>`claude-haiku-4-5`<br>`claude-opus-4-5`<br>`claude-opus-4-6`<br>`claude-opus-4-7`<br>`claude-opus-4-8`<br>`claude-opus-5`<br>`claude-sonnet-4-5`<br>`claude-sonnet-4-6`<br>`claude-sonnet-5`<br>`gemini-3.1-pro`<br>`openai-gpt-4.1`<br>`openai-gpt-5-mini`<br>`openai-gpt-5-nano`<br>`openai-gpt-5.1`<br>`openai-gpt-5.2`<br>`openai-gpt-5.4`<br>`openai-gpt-5.5`<br>`openai-gpt-5.6-luna`<br>`openai-gpt-5.6-sol`<br>`openai-gpt-5.6-terra`<br>`openai-gpt-5` | Yes |
-| `deepseek-r1`<br>`mistral-large2`<br>`snowflake-llama3.3-70b` | No |
+Not available as a listed provider: each account has its own address. If that address is OpenAI-compatible or Anthropic-compatible, add it in Settings, Providers with **Custom endpoint**.
 
 ### STACKIT (`stackit`)
 

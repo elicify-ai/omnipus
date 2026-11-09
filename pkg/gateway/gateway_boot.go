@@ -2107,7 +2107,7 @@ func runCatalogRefreshLoop(
 	if cat == nil {
 		return
 	}
-	refresh := func(failureLogMsg string, attemptTimeout time.Duration) error {
+	refresh := func(failureLogMsg string, attemptTimeout time.Duration, attempt int) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		defer cancel()
 		err := cat.Refresh(attemptCtx)
@@ -2122,7 +2122,11 @@ func runCatalogRefreshLoop(
 			logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
 				map[string]any{"error": err})
 		} else {
-			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
+			fields := map[string]any{"error": err}
+			if attempt > 0 {
+				fields["attempt"] = attempt
+			}
+			logger.WarnCF("gateway", failureLogMsg, fields)
 		}
 		return err
 	}
@@ -2137,7 +2141,7 @@ func runCatalogRefreshLoop(
 	} else {
 		attempts, err := runCatalogStartupRefresh(ctx, func(attempt int) error {
 			attemptTimeout := catalogStartupAttemptTimeout(attempt, refreshTimeout)
-			return refresh("gateway: catalog startup refresh failed; served document retained", attemptTimeout)
+			return refresh("gateway: catalog startup refresh failed; served document retained", attemptTimeout, attempt)
 		}, waitForCatalogRetry)
 		if ctx.Err() != nil {
 			return
@@ -2155,7 +2159,7 @@ func runCatalogRefreshLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = refresh("gateway: catalog refresh failed; last-known-good retained", refreshTimeout)
+			_ = refresh("gateway: catalog refresh failed; last-known-good retained", refreshTimeout, 0)
 		}
 	}
 }
