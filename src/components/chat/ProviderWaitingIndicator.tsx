@@ -144,7 +144,10 @@ export function ProviderWaitingIndicator(props: ProviderWaitingIndicatorProps) {
       <div role="status" aria-live="polite" className="sr-only">
         {announcement}
       </div>
-      <span className="min-w-0 truncate font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+      {/* Issue #1664 B3/B4 — wraps, never truncates (same rule as
+          ProviderRetryIndicator): at a narrow chat width the end time and
+          "(attempt N of M)" at the end of the sentence stay readable. */}
+      <span className="min-w-0 break-words font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {visibleText}
         {stallClause}
       </span>

@@ -71,6 +71,10 @@ export function retryProblemClause(errorCode: string | undefined): string {
     // anything streamed, made the loop retry the call.
     case 'no_response':
       return 'did not start answering in time'
+    // Issue #1664 Q4 A (founder 2026-11-08): the stream ended with nothing
+    // in it — no text, no tool call, no finish reason.
+    case 'empty_reply':
+      return 'sent an empty reply'
     default:
       return 'ran into a problem'
   }
@@ -103,8 +107,20 @@ export function remainingRetrySeconds(
   return Math.max(0, Math.ceil((retryMs - serverNowMs) / 1000))
 }
 
+/**
+ * Causes whose founder-approved sentence names the MODEL as the subject
+ * (issue #1664 B5 and Q4 A): "<model> did not start answering in time …",
+ * "<model> sent an empty reply …". The other causes describe the provider
+ * (rate limits, reachability, server errors) and keep the provider subject.
+ */
+const MODEL_SUBJECT_CAUSES: ReadonlySet<string> = new Set(['no_response', 'empty_reply'])
+
 function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsValue: number): string {
   const { provider, model, previousProvider, previousModel, attempt, maxAttempts, errorCode } = props
+  const countdown = formatRetryCountdown(remainingSecondsValue)
+  if (errorCode !== undefined && MODEL_SUBJECT_CAUSES.has(errorCode)) {
+    return `${model} ${retryProblemClause(errorCode)}. Retrying automatically in ${countdown} (attempt ${attempt} of ${maxAttempts}).`
+  }
   // MIN-104 — the model-switch qualifier applies only when the chain moved
   // within ONE provider (openrouter/model-a → openrouter/model-b). A
   // same-model retry or a cross-provider move renders the plain provider line.
@@ -114,7 +130,7 @@ function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsVa
   // Issues #1280/#1478 wording round — the cause in plain words per
   // error_code (retryProblemClause), never the blanket "is busy" and never
   // the raw code.
-  return `${displayName} ${retryProblemClause(errorCode)}. Retrying automatically in ${formatRetryCountdown(remainingSecondsValue)} (attempt ${attempt} of ${maxAttempts}).`
+  return `${displayName} ${retryProblemClause(errorCode)}. Retrying automatically in ${countdown} (attempt ${attempt} of ${maxAttempts}).`
 }
 
 // MAJ-016 — one {key, text} pair for the frozen announcement: the key
