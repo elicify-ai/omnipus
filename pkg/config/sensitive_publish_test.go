@@ -62,11 +62,12 @@ func TestRegisterSensitiveValues_PublishesTheScrubberForLogsAndDetail(t *testing
 	}
 }
 
-// Given a registered credential with a character in U+00A0..U+00FF
+// Given a registered credential that holds an accented letter
 // When the same text goes through the published scrubber and the config's
 // own replacer
-// Then both answer identically for the plain text and for the escaped
-// one-byte spelling of that character, and both scrub the plain text.
+// Then both give the same answer, for the credential in plain text and for
+// the credential with that letter written as an escape, and in both cases
+// the credential is replaced by the mask.
 func TestRegisterSensitiveValues_RegisteredSpellingParityWithPublishedScrubber(t *testing.T) {
 	t.Cleanup(logger.SetSensitiveValueReplacer(nil))
 	const cred = "sk-live-parité-6W"

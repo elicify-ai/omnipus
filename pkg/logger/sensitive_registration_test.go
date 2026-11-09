@@ -65,10 +65,10 @@ func scrubberUnquoteWhole(s string) (string, bool) {
 }
 
 // scrubberDecodeClosure returns every string reachable from seed by
-// repeatedly unquoting whole strings and decoding escape sequences. The
-// bound is 16 levels — twice the product's decoding limit — so the oracle
-// can price the boundary: anything the product leaves encoded at eight
-// layers must still be decodable here.
+// repeatedly unquoting whole strings and decoding escape sequences. Its
+// bound is deeper than the product's own decoding limit, so a field the
+// product leaves encoded can still be unwound here. It models a log reader
+// undoing whatever escaping sits over the credential.
 func scrubberDecodeClosure(seed string) []string {
 	seen := map[string]bool{seed: true}
 	frontier := []string{seed}
@@ -135,10 +135,9 @@ func scrubberFileStringValues(t *testing.T, raw []byte) []string {
 	return out
 }
 
-// scrubberSingleByteSpellings returns the one-escaped-byte spelling (\xHH)
-// of every code point U+00A0..U+00FF in s — the spelling a diagnostic source
-// outside this process may use for an accented character, writing its code
-// point instead of the character's UTF-8 bytes.
+// scrubberSingleByteSpellings returns, for each character of s in the range
+// U+00A0..U+00FF, the \xHH escape that names it by code point. An external
+// diagnostic source may write an accented character that way.
 func scrubberSingleByteSpellings(s string) []string {
 	var out []string
 	for _, r := range s {
@@ -171,16 +170,14 @@ func scrubberRegisterCredential(t *testing.T, cred string) {
 	cfg.RegisterSensitiveValues([]string{cred})
 }
 
-// TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink extends the
-// echo regressions to the one-byte code-point reading (round-5 decision on
-// the developer's round-4 open question; round 5b re-homes the rows onto the
-// production registration path): a diagnostic source outside this process
-// may spell an accented character of a registered value as ONE escaped byte
-// of its code point (U+00A0..U+00FF), inside a quoted field, within the
-// decode limit. The rule is unchanged — the value must not reach the sink in
-// that or any other recoverable spelling, and the mask must stand in. The
-// ASCII row shows the existing byte-spelling masking is unchanged: an ASCII
-// value spelled byte-for-byte is masked today and must stay masked.
+// TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink covers a
+// registered value whose accented character an external diagnostic source
+// writes as a single \xHH escape naming its code point, inside a quoted
+// field. The value is registered through the product's registration path.
+// The rule is the same as everywhere in this file: the value must not reach
+// the sink in that or any other recoverable spelling, and the mask must
+// stand in. The ASCII row is the control: an ASCII value written with byte
+// escapes stays masked.
 func TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink(t *testing.T) {
 	t.Run("code_point_within_depth", func(t *testing.T) {
 		const cred = "token-é-9W"
@@ -220,9 +217,9 @@ func TestScrubber_SingleByteCodeEchoCredentialNeverReachesFileSink(t *testing.T)
 	})
 }
 
-// scrubberCodePointSpellings returns the one-byte escaped spellings of a
-// code point in U+0080..U+00FF in both hex cases — the forms a diagnostic
-// source outside this process may use for one of a value's characters.
+// scrubberCodePointSpellings returns the \xHH escapes that name the code
+// point r, in lowercase and in uppercase hex, for a code point in the range
+// U+0080..U+00FF.
 func scrubberCodePointSpellings(r rune) []string {
 	return []string{
 		fmt.Sprintf(`\x%02x`, r),
@@ -233,8 +230,9 @@ func scrubberCodePointSpellings(r rune) []string {
 // scrubberAssertSpellingEchoMasked runs the echo oracle for one spelling
 // row: exactly one field in the sink, no decoding variant recovers the
 // registered credential, no escaped spelling of the registered characters
-// survives, and the mask stands in.
-func scrubberAssertSpellingEchoMasked(t *testing.T, cred string, spellings []string, field string) {
+// survives, and the mask stands in. It returns the logged field value so a
+// row can also require the exact value.
+func scrubberAssertSpellingEchoMasked(t *testing.T, cred string, spellings []string, field string) string {
 	t.Helper()
 	raw := scrubberLogRawField(t, field)
 	values := scrubberFileStringValues(t, raw)
@@ -251,18 +249,17 @@ func scrubberAssertSpellingEchoMasked(t *testing.T, cred string, spellings []str
 	}
 	require.Contains(t, values[0], scrubberMaskToken,
 		"the mask token %s must stand in for the credential", scrubberMaskToken)
+	return values[0]
 }
 
-// TestScrubber_RegisteredSpellingEchoesNeverReachFileSink prices the echo
-// variants of the spelling rule (round 6): the one-byte escaped spelling of
-// a registered value's character may arrive with uppercase hex digits, may
-// be mixed with literal characters of the same value, and may concern a
-// code point below U+00A0 as well. In every variant the value must not
-// reach the sink in any recoverable spelling, and the mask must stand in.
-// The unicode_* rows mix a Unicode escape with a \xHH escape in one
-// field; character_octal spells a character as a three-digit octal escape.
-// The byte-identity controls below show credential-free content is
-// untouched.
+// TestScrubber_RegisteredSpellingEchoesNeverReachFileSink covers escaped
+// spellings of a registered value that an external diagnostic source may
+// write: in either hex case, mixed with literal characters of the same
+// value, for a code point below U+00A0, and with other kinds of escape. In
+// every row the value must not reach the sink in any recoverable spelling
+// and the mask must stand in. The rows without a spelling list also require
+// the logged field to equal the mask token exactly. The byte-identity
+// controls below show that credential-free content is untouched.
 func TestScrubber_RegisteredSpellingEchoesNeverReachFileSink(t *testing.T) {
 	t.Run("uppercase_hex", func(t *testing.T) {
 		const cred = "token-é-9W"
@@ -298,22 +295,28 @@ func TestScrubber_RegisteredSpellingEchoesNeverReachFileSink(t *testing.T) {
 		const cred = "töken-éa-7M"
 		scrubberRegisterCredential(t, cred)
 		field := strconv.Quote(`provider echoed t\u00f6ken-\xe9a-7M at retry`)
-		// No spelling list: the mask assertion carries this row.
-		scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+		// No spelling list: the exact-value check below carries this row.
+		masked := scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+		require.Equal(t, scrubberMaskToken, masked,
+			"the whole field must be replaced by %s", scrubberMaskToken)
 	})
 
 	t.Run("unicode_long_hex_composed", func(t *testing.T) {
 		const cred = "tüken-éb-3N"
 		scrubberRegisterCredential(t, cred)
 		field := strconv.Quote(`provider echoed t\U000000fcken-\xe9b-3N at retry`)
-		scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+		masked := scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+		require.Equal(t, scrubberMaskToken, masked,
+			"the whole field must be replaced by %s", scrubberMaskToken)
 	})
 
 	t.Run("character_octal", func(t *testing.T) {
 		const cred = "token-é-9W"
 		scrubberRegisterCredential(t, cred)
 		field := strconv.Quote(`provider echoed token-\351-9W at retry`)
-		scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+		masked := scrubberAssertSpellingEchoMasked(t, cred, nil, field)
+		require.Equal(t, scrubberMaskToken, masked,
+			"the whole field must be replaced by %s", scrubberMaskToken)
 	})
 }
 
@@ -345,10 +348,10 @@ func TestScrubber_AsciiCredentialUnrelatedFieldStaysByteIdentical(t *testing.T) 
 		"an unrelated field must reach the sink byte-for-byte")
 }
 
-// TestScrubber_ComposedEscapeKindsCredentialFreeFieldStaysByteIdentical
-// extends the byte-identity controls to the remaining escape kinds: a
-// credential-free field mixing short hex with a Unicode escape, and one
-// carrying octal escapes, must both reach the sink unchanged.
+// TestScrubber_ComposedEscapeKindsCredentialFreeFieldStaysByteIdentical is
+// the byte-identity control for the composed-escape rows: credential-free
+// fields that combine escape kinds, or that carry octal escapes, must reach
+// the sink unchanged.
 func TestScrubber_ComposedEscapeKindsCredentialFreeFieldStaysByteIdentical(t *testing.T) {
 	t.Run("hex_with_unicode", func(t *testing.T) {
 		scrubberRegisterCredential(t, "plain-needle-4K")
@@ -371,11 +374,11 @@ func TestScrubber_ComposedEscapeKindsCredentialFreeFieldStaysByteIdentical(t *te
 	})
 }
 
-// TestScrubber_FinalCheckMasksWholeField is the regression for the scrubber's
-// last check before a decoded field is written: a field whose written form
-// would itself hold the registered value is replaced whole. It is separate
-// from TestScrubber_QuoteBoundaryFailSafeMasksWholeField, whose input is
-// handled earlier in the scrub.
+// TestScrubber_FinalCheckMasksWholeField covers a registered value that ends
+// in a double quote, carried in a field in an escaped spelling. The field
+// must reach the sink as the mask token alone, with no decodable copy of the
+// value. It complements TestScrubber_QuoteBoundaryFailSafeMasksWholeField,
+// which covers a value that begins with a double quote.
 func TestScrubber_FinalCheckMasksWholeField(t *testing.T) {
 	const unit = "edge-é-9"
 	const cred = unit + "\""

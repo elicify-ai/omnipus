@@ -13,13 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// CHECK finding 1, at the scrubber. ORACLE: a registered credential never
-// reaches a log sink in plain form or in an escaped form. Production
-// registers only the original plaintext (pkg/config/security.go::
-// sensitiveReplacementPairs: each value longer than 3 bytes maps to
-// [FILTERED], with no escaped variant). safeLogValue quotes with Go %q
-// BEFORE logMessage scrubs. This table feeds the scrubber a value that is
-// already in that quoted spelling and reads the real file sink.
+// ORACLE: a registered credential never reaches a log sink in plain form or
+// in an escaped form. The gateway quotes a value with Go %q (safeLogValue)
+// before the logger scrubs it, so the scrubber receives values that are
+// already in the quoted spelling. The tables here feed the scrubber such
+// values and read the real file sink. The replacer holds only the
+// credential's plain text, so the scrubber's own handling is what is tested;
+// the registration path the product uses is covered in
+// sensitive_registration_test.go.
 //
 // Synthetic values only. Not real credentials. Not parallel: the file sink
 // and the process-wide replacer are process-wide.
@@ -92,8 +93,8 @@ func scrubberAssertMasked(t *testing.T, raw []byte, shape, cred string) {
 
 func scrubberLogPreQuoted(t *testing.T, cred string) []byte {
 	t.Helper()
-	// The production pair is one original plaintext to the mask token
-	// (sensitiveReplacementPairs). No escaped variant is registered.
+	// A replacer holding only the plain-text pair: the scrubber's own
+	// handling of the quoted field is what the rows exercise.
 	restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
 	t.Cleanup(restore)
 	path := filepath.Join(t.TempDir(), "gateway.log")
@@ -131,28 +132,24 @@ func TestScrubber_PlainCredentialIsStillMasked(t *testing.T) {
 	scrubberAssertMasked(t, raw, "plain", cred)
 }
 
-// --- Round 3, CHECK R2-1: composed fields ---------------------------------
+// --- Composed fields -------------------------------------------------------
 //
-// A composed error carries %q fragments INSIDE a longer text, so the
-// credential's escaping sits at depth 2+: one whole-field decode cannot
-// reach it. The rows below feed the scrubber the exact field shapes the
-// production chains produce, and the oracle is the rule itself — no
-// reversible Go spelling of the credential at any depth may survive, and
-// [FILTERED] must stand in.
+// An error composed from several messages carries quoted fragments inside a
+// longer text. The rows below feed the scrubber field shapes like the ones
+// the gateway's error chains produce, and the oracle is the rule itself: no
+// reversible Go spelling of the credential may reach the sink, and the mask
+// token must stand in for it.
 
 type scrubberComposedRow struct {
 	name  string
 	field func(ws string) string
 }
 
-// scrubberComposedRows builds each shape from ws = the credential carrier.
-// fragment_middle is pkg/media/store.go::resolveWorkspaceRef's composition
-// (`media store: workspace library %q unavailable: %w`) around
-// gateway_boot.go:589's provider error (`workspace library unavailable for
-// %q`) — both fragments are %q of the same workspace id. nested_quote wraps
-// one quoted string inside another. escape_unicode / escape_hex spell the
-// non-plain runes with alternative VALID Go escapes — the spellings another
-// encoding layer could emit, all decodable by a log reader.
+// scrubberComposedRows builds each row's field from ws, the text that
+// carries the credential. fragment_middle follows the message composition of
+// the media store's workspace-reference error, nested_quote nests one quoted
+// string inside another, and the escape_* rows write the same kind of
+// fragment with other valid Go escapes.
 func scrubberComposedRows() []scrubberComposedRow {
 	quote := strconv.Quote
 	return []scrubberComposedRow{
@@ -198,15 +195,12 @@ func scrubberHexSpell(r rune) string {
 	return fmt.Sprintf(`\u%04x`, r)
 }
 
-// scrubberUnescapeGo decodes Go escape sequences in arbitrary text, following
-// Go's grammar exactly by delegating to strconv.UnquoteChar (the standard
-// library's own per-character decoder): \xHH is a BYTE (two hex digits),
-// octal is exactly three digits, \uNNNN four and \UNNNNNNNN eight, and an
-// invalid sequence is left as written — Go's behavior for text that is not a
-// valid literal. Round-4 decision D4: the grammar authority is strconv; the
-// oracle's independence lives in the closure around it (per-field
-// application, both decodings at every layer, dedup, and a depth beyond the
-// product's).
+// scrubberUnescapeGo decodes the Go escape sequences in arbitrary text with
+// strconv.UnquoteChar, the standard library's own per-character decoder, so
+// the oracle reads an escape the way Go does. A sequence that is not a valid
+// escape is left as written. The oracle's independence from the product lies
+// in the closure built around this decoder (scrubberDecodeClosure), not in
+// the decoder itself.
 func scrubberUnescapeGo(s string) (string, bool) {
 	if !strings.Contains(s, `\`) {
 		return s, false
@@ -245,10 +239,10 @@ func scrubberUnquoteWhole(s string) (string, bool) {
 }
 
 // scrubberDecodeClosure returns every string reachable from seed by
-// repeatedly unquoting whole strings and decoding escape sequences. The
-// bound is 16 levels — twice the product's decoding limit — so the oracle
-// can price the boundary: anything the product leaves encoded at eight
-// layers must still be decodable here (round-4 decision D4).
+// repeatedly unquoting whole strings and decoding escape sequences. Its
+// bound is deeper than the product's own decoding limit, so a field the
+// product leaves encoded can still be unwound here. It models a log reader
+// undoing whatever escaping sits over the credential.
 func scrubberDecodeClosure(seed string) []string {
 	seen := map[string]bool{seed: true}
 	frontier := []string{seed}
@@ -357,15 +351,14 @@ func TestScrubber_ComposedNoCredentialStaysByteIdentical(t *testing.T) {
 		"a composed field with no registered credential must reach the sink byte-for-byte")
 }
 
-// --- Round 4: depth limit, fail-safe branch, byte escapes (decisions D1-D4)
+// --- Decoding limit, whole-field replacement, byte-escaped echoes ----------
 //
 // Rule: a registered credential never reaches a log sink in plain form or in
-// any form a reader can decode back to it. D1 adds: a field the scrubber
-// cannot fully decode within its limit must not survive as it came in; byte
-// identity stays required for fields it CAN fully decode and that hold no
-// credential. D2 adds: the final whole-field defense gets its own
-// regression. D3 adds: a one-byte \xHH echo of a Latin-1 credential must be
-// masked, because external diagnostics carry such text into logs.
+// any form a reader can decode back to it. A field the scrubber cannot fully
+// decode within its limit must not reach the sink as it came in; a field it
+// can fully decode that holds no credential still reaches the sink
+// byte-for-byte. Text that external diagnostics write with byte escapes for a
+// credential's non-ASCII characters must be masked too.
 
 // scrubberDeepQuote wraps s in the given number of whole Go quoting layers —
 // the encoding depth a composed diagnostic chain can reach.
@@ -391,11 +384,11 @@ func scrubberAssertControlFree(t *testing.T, s string) {
 	}
 }
 
-// TestScrubber_DeeplyEncodedCredentialNeverReachesFileSink is decision D1.
-// The oracle boundary is the product's own decode limit: at the limit the
-// credential must be masked (control row, green before and after); one layer
-// beyond, and well beyond, the field must NOT come out as it came in — no
-// decoding path may recover the credential and the mask must stand in.
+// TestScrubber_DeeplyEncodedCredentialNeverReachesFileSink checks the
+// scrubber at and beyond its decoding limit. At the limit the credential must
+// be masked; one layer beyond, and well beyond, the field must not reach the
+// sink as it came in: no decoding path of the logged field may recover the
+// credential, and the mask token must be present.
 func TestScrubber_DeeplyEncodedCredentialNeverReachesFileSink(t *testing.T) {
 	const cred = "qa\"needle-7Q"
 	for _, row := range []struct {
@@ -424,10 +417,10 @@ func TestScrubber_DeeplyEncodedCredentialNeverReachesFileSink(t *testing.T) {
 	}
 }
 
-// TestScrubber_DeepCredentialFreeFieldStaysByteIdentical is D1's preservation
-// clause: a deeply encoded field the scrubber can fully decode within its
-// limit, holding no credential, must reach the sink byte-for-byte — the
-// depth machinery may not rewrite text it does not mask.
+// TestScrubber_DeepCredentialFreeFieldStaysByteIdentical is the control for
+// the decoding-limit test: a deeply encoded field that holds no credential
+// and can be fully decoded within the limit must reach the sink
+// byte-for-byte; the scrubber may not rewrite text it does not mask.
 func TestScrubber_DeepCredentialFreeFieldStaysByteIdentical(t *testing.T) {
 	restore := SetSensitiveValueReplacer(strings.NewReplacer("plain-needle-4K", scrubberMaskToken))
 	t.Cleanup(restore)
@@ -439,14 +432,12 @@ func TestScrubber_DeepCredentialFreeFieldStaysByteIdentical(t *testing.T) {
 		"a credential-free field fully decodable within the limit must reach the sink byte-for-byte")
 }
 
-// TestScrubber_QuoteBoundaryFailSafeMasksWholeField is decision D2: the
-// final whole-field defense gets its own regression, separate from the depth
-// test. The witness: a credential whose first character is a double quote,
-// a field starting with the credential's tail and carrying an escaped copy
-// later — the decoded copy forces masking, and the re-quoted output would
-// match the credential across the opening quote boundary, so only the whole
-// field replacement satisfies the rule. The assertions are the full output
-// (every decoding path clean, control-free, mask present), not a marker.
+// TestScrubber_QuoteBoundaryFailSafeMasksWholeField covers a registered value
+// that begins with a double quote. A field that holds that value in an
+// escaped spelling must reach the sink without any decodable copy of it. The
+// assertions are on the whole logged field (no decoding path recovers the
+// value, the record is control-free, the mask token is present) and do not
+// depend on which step of the scrubber decides the outcome.
 func TestScrubber_QuoteBoundaryFailSafeMasksWholeField(t *testing.T) {
 	const cred = "\"edge-9Z"
 	restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))
@@ -465,14 +456,11 @@ func TestScrubber_QuoteBoundaryFailSafeMasksWholeField(t *testing.T) {
 		"the mask token %s must stand in for the credential", scrubberMaskToken)
 }
 
-// TestScrubber_Latin1ByteEchoCredentialNeverReachesFileSink is decision D3.
-// A credential with a Latin-1 character, echoed by an external system with
-// one-byte \xHH spellings of its UTF-8 bytes, must be masked: provider error
-// previews and onboarding raw detail log external text verbatim. The
-// within-depth row is the byte-grammar regression (green before and after;
-// proven real by the byte-to-rune mutant); the beyond-depth row is the same
-// carrier through the depth rule, and must fail while the limit returns
-// undecoded fields unchanged.
+// TestScrubber_Latin1ByteEchoCredentialNeverReachesFileSink covers a
+// credential with a Latin-1 character that an external system echoes with
+// byte escapes. Text from an external system can reach the log as it was
+// sent, so the echo must be masked. The second row carries the same echo
+// under more quoting layers than the scrubber's decoding limit.
 func TestScrubber_Latin1ByteEchoCredentialNeverReachesFileSink(t *testing.T) {
 	const cred = "token-é-9W"
 	const echo = `provider echoed token-\xc3\xa9-9W at retry`
@@ -504,11 +492,9 @@ func TestScrubber_Latin1ByteEchoCredentialNeverReachesFileSink(t *testing.T) {
 	}
 }
 
-// TestScrubber_EscapeGrammarOctalEchoIsDecoded prices the octal part of the
-// grammar (decision D4): a three-digit octal spelling of the quote character
-// inside a composed field must decode and mask like any other Go escape.
-// Green before and after; it fails if the oracle or the scrubber stops
-// reading exact-three-digit octal.
+// TestScrubber_EscapeGrammarOctalEchoIsDecoded checks that a three-digit
+// octal escape of the quote character inside a composed field is read and
+// masked like any other Go escape.
 func TestScrubber_EscapeGrammarOctalEchoIsDecoded(t *testing.T) {
 	const cred = "qa\"needle-7Q"
 	restore := SetSensitiveValueReplacer(strings.NewReplacer(cred, scrubberMaskToken))

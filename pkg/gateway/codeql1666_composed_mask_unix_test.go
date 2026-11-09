@@ -16,26 +16,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// #1666 CHECK R2-1, round 3. ORACLE, independent of today's code: a
-// credential registered for masking never reaches a log sink in plain form
-// or in an escaped form — and an escaped form is any reversible Go spelling
-// at any depth, because a log reader can undo it. Composed errors carry %q
-// fragments INSIDE a longer error text, so the escaping sits at depth 2+,
-// where a single whole-field unquote cannot see the credential.
+// ORACLE, independent of the product code: a credential registered for
+// masking never reaches a log sink in plain form or in an escaped form,
+// where an escaped form is any Go spelling a log reader could undo by
+// unquoting or unescaping (the decode closure below reads up to its own
+// bound). The tests drive real gateway log sites whose error text is
+// composed from quoted fragments, and read the real file sink.
 //
 // The values below are synthetic; they are not real credentials. None of
 // these tests may run in parallel: they install the process-wide slog
 // bridge, file sink and credential replacer.
 
-// codeQL1666UnescapeGo decodes Go escape sequences in arbitrary text,
-// following Go's grammar exactly by delegating to strconv.UnquoteChar (the
-// standard library's own per-character decoder): \xHH is a BYTE (two hex
-// digits), octal is exactly three digits, \uNNNN four and \UNNNNNNNN eight,
-// and an invalid sequence is left as written — Go's behavior for text that
-// is not a valid literal. Round-4 decision D4: the grammar authority is
-// strconv; the oracle's independence lives in the closure around it
-// (per-field application, both decodings at every layer, dedup, and a depth
-// beyond the product's).
+// codeQL1666UnescapeGo decodes the Go escape sequences in arbitrary text with
+// strconv.UnquoteChar, the standard library's own per-character decoder, so
+// the oracle reads an escape the way Go does. A sequence that is not a valid
+// escape is left as written. The oracle's independence from the product lies
+// in the closure built around this decoder (codeQL1666DecodeClosure), not in
+// the decoder itself.
 func codeQL1666UnescapeGo(s string) (string, bool) {
 	if !strings.Contains(s, `\`) {
 		return s, false
@@ -74,12 +71,10 @@ func codeQL1666UnquoteWhole(s string) (string, bool) {
 }
 
 // codeQL1666DecodeClosure returns every string reachable from seed by
-// repeatedly unquoting whole strings and decoding escape sequences. The
-// bound is 16 levels — twice the product's decoding limit — so the oracle
-// can price the boundary: anything the product leaves encoded at eight
-// layers must still be decodable here (round-4 decision D4). It is the
-// test's model of a log reader unwinding whatever escaping sits over the
-// credential.
+// repeatedly unquoting whole strings and decoding escape sequences. Its
+// bound is deeper than the product's own decoding limit, so a field the
+// product leaves encoded can still be unwound here. It models a log reader
+// undoing whatever escaping sits over the credential.
 func codeQL1666DecodeClosure(seed string) []string {
 	seen := map[string]bool{seed: true}
 	frontier := []string{seed}
@@ -162,18 +157,13 @@ func codeQL1666AssertComposedCredentialMasked(t *testing.T, logPath, shape, cred
 		"shape %s: the mask token %s must stand in for the credential", shape, codeQL1666MaskToken)
 }
 
-// TestCodeQL1666_ComposedErrorQuotedCredentialNeverReachesFileSink drives
-// the composed chain through the real split route: HandleMediaByRef
-// (rest_uploads.go:646) -> store.go::resolveWorkspaceRef:386, which wraps
-// the provider error in `media store: workspace library %q unavailable: %w`
-// around gateway_boot.go:589's `workspace library unavailable for %q` (the
-// fixture's provider closure copies that boot line verbatim — the round-1
-// resolve-failed precedent), -> serveMedia's catch-all at rest_uploads.go:737.
-// The workspace id IS the credential carrier, so the credential sits inside
-// TWO %q fragments before safeLogValue quotes the whole error.
-// Backslash is excluded: validateEntityID (rest_tasks.go:2104) and
-// ParseWorkspaceRef (resolve.go:120) reject it, so it cannot ride a
-// workspace id — its real composed carrier is the guard chain below.
+// TestCodeQL1666_ComposedErrorQuotedCredentialNeverReachesFileSink drives a
+// real media-by-reference request whose workspace id carries the credential.
+// The workspace-library error is composed from quoted fragments of that id
+// and is logged by the media handler; the logged record must hold no
+// decodable copy of the credential and must hold the mask token. The
+// backslash shape is skipped because validateEntityID rejects a workspace id
+// that holds one; the guard test below covers that shape.
 func TestCodeQL1666_ComposedErrorQuotedCredentialNeverReachesFileSink(t *testing.T) {
 	for _, shape := range codeQL1666CredentialShapes() {
 		if shape.name == "backslash" {
@@ -186,7 +176,8 @@ func TestCodeQL1666_ComposedErrorQuotedCredentialNeverReachesFileSink(t *testing
 			logPath := codeQL1666WithMaskedFileSink(t, shape.value)
 			store := media.NewFileMediaStore()
 			store.SetWorkspaceLibraryProvider(func(id string) (media.WorkspaceLibraryResolver, error) {
-				return nil, fmt.Errorf("workspace library unavailable for %q", id) // gateway_boot.go:589 shape
+				// Same message shape as the gateway boot's provider error.
+				return nil, fmt.Errorf("workspace library unavailable for %q", id)
 			})
 			api := &restAPI{homePath: t.TempDir(), mediaStore: store}
 
@@ -204,15 +195,13 @@ func TestCodeQL1666_ComposedErrorQuotedCredentialNeverReachesFileSink(t *testing
 }
 
 // TestCodeQL1666_GuardComposedQuotedCredentialNeverReachesFileSink covers
-// the backslash shape's real composed carrier: ValidateCallerWorkspace
-// (resolve.go:136) formats `caller=%q ref_workspace=%q` into the denial it
-// returns, and serveMedia logs that error at rest_uploads.go:684. The two
-// registered routes derive caller and ref workspace from the same path
-// segments, so the mismatch is unreachable through them — the test drives
-// the real serveMedia method with the mismatched opts a caller in another
-// workspace would produce, the same direct-seam precedent the landed #1618
-// tests set for finishWorkspaceUpload and round 1 set for the 403 branch.
-// The caller workspace has no validator, so all four shapes ride it.
+// the workspace guard's denial, which quotes the caller and referenced
+// workspace ids into its message before serveMedia logs it. The registered
+// media route derives both ids from the same path segment, so the test
+// drives serveMedia directly with a caller workspace that differs from the
+// referenced one. The caller workspace carries the credential; the logged
+// record must hold no decodable copy of it and must hold the mask token.
+// All four credential shapes are used, including the backslash shape.
 func TestCodeQL1666_GuardComposedQuotedCredentialNeverReachesFileSink(t *testing.T) {
 	for _, shape := range codeQL1666CredentialShapes() {
 		t.Run(shape.name, func(t *testing.T) {
