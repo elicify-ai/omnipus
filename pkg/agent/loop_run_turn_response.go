@@ -312,6 +312,11 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 			if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 			}
+			// Issue #1664 B7: same Stop rule as the timeout retry below.
+			if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+				cr.rr.rq.ri.rf.err = context.Canceled
+				return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+			}
 			// Apply the same "don't retry if partial content was already
 			// streamed" guard as the isTimeoutError path to avoid duplicating
 			// text in an in-progress SPA bubble.
@@ -349,7 +354,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 					Backoff:    backoff,
 				},
 			)
-			if sleepErr := sleepWithContext(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
+			if sleepErr := cr.rr.rq.ri.rf.rt.ts.waitRetryBackoff(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
 				if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 					cr.rr.rq.ri.turnStatus = TurnEndStatusAborted
 					cr.rr.ret0, cr.rr.ret1 = cr.rr.rq.ri.rf.rt.al.abortTurn(cr.rr.rq.ri.rf.rt.ts, "llm_retry_backoff", hardInterruptAbortReason)
@@ -426,6 +431,12 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		// events before the canceled turnCtx collapses the backoff. Breaking
 		// here lets the canceled turn finalize quietly.
 		if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
+		// Issue #1664 B7: a Stop that already reached the turn ends it
+		// canceled — no retry frame, no further provider call.
+		if cr.rr.rq.ri.rf.rt.ts.cancelRequestedBeforeRetry() {
+			cr.rr.rq.ri.rf.err = context.Canceled
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
 		// FIX 1: only inline-retry a transport-drop when NO partial content
@@ -591,7 +602,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 			"retry":   retry,
 			"backoff": backoff.String(),
 		})
-		if sleepErr := sleepWithContext(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
+		// Issue #1664 B7: a Stop during the announced backoff wakes the wait
+		// (context.Canceled) and the turn ends canceled below, before any
+		// further provider call or retry frame.
+		if sleepErr := cr.rr.rq.ri.rf.rt.ts.waitRetryBackoff(cr.rr.rq.ri.rf.rt.turnCtx, backoff); sleepErr != nil {
 			if cr.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 				cr.rr.rq.ri.turnStatus = TurnEndStatusAborted
 				cr.rr.ret0, cr.rr.ret1 = cr.rr.rq.ri.rf.rt.al.abortTurn(cr.rr.rq.ri.rf.rt.ts, "llm_timeout_backoff", hardInterruptAbortReason)

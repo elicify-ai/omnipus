@@ -172,6 +172,11 @@ type turnState struct {
 	gracefulInterruptHint string
 	gracefulTerminalUsed  bool
 	hardAbort             bool
+	// cancelWakeCh is closed once a claimed Stop/cancel requests the
+	// graceful interrupt, waking a retry backoff (issue #1664 B7). Guarded
+	// by mu; created lazily by cancelWake.
+	cancelWakeCh     chan struct{}
+	cancelWakeClosed bool
 	// providerCancel is fired by the graceful cascade (Interrupt — ADR-057
 	// FR-041 collapsed the retired InterruptSession into it) to abort the
 	// in-flight LLM/provider call immediately; turnCancel is fired by the
