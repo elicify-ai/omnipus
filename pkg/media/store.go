@@ -32,10 +32,25 @@ const (
 // (CleanExpired) never expires them — they stay resolvable so chat history keeps
 // rendering — and they are freed only by ReleaseAll when the owning session is
 // deleted. The full scope is SessionInlineScopePrefix + "<sessionID>" so a single
-// ReleaseAll frees all of a session's inline media. Other forget_only scopes
-// (user uploads, send_file) are NOT pinned and still age out of the in-memory
-// index via CleanExpired (their files are preserved; only the ref is dropped).
+// ReleaseAll frees all of a session's inline media. Sent files are pinned too
+// (SentFileScopePrefix). Other forget_only scopes (user uploads) are NOT pinned
+// and still age out of the in-memory index via CleanExpired (their files are
+// preserved; only the ref is dropped).
 const SessionInlineScopePrefix = "tool:inline:session:"
+
+// SentFileScopePrefix is the media-store scope prefix for files the send_file
+// tool delivered; the full scope is SentFileScopePrefix + "<channel>:<chatID>".
+// Entries under it are pinned from the TTL cleaner like session inline media, so
+// the file's card and download keep working in chat history. Unlike session
+// inline media, nothing releases them when a session is deleted. send_file
+// stores them forget_only, so the store never deletes the file and a pinned
+// entry costs one registry row, not a copy of the file.
+const SentFileScopePrefix = "tool:send_file:"
+
+// isPinnedScope reports whether entries in scope are exempt from CleanExpired.
+func isPinnedScope(scope string) bool {
+	return strings.HasPrefix(scope, SessionInlineScopePrefix) || strings.HasPrefix(scope, SentFileScopePrefix)
+}
 
 // MediaMeta holds metadata about a stored media file.
 type MediaMeta struct {
@@ -157,6 +172,26 @@ type FileMediaStore struct {
 	// held while acquiring any other lock.
 	succMu    sync.Mutex
 	successor *FileMediaStore
+
+	// failedRefs holds registry rows whose file LoadRegistry could not inspect
+	// for a reason other than "does not exist" (permission, I/O). They are not
+	// live refs: resolving one returns its kept cause, never ErrNotFound, and
+	// SaveRegistry keeps writing the row so it is not lost. Guarded by mu.
+	failedRefs map[string]failedRegistryRef
+
+	// beforeSuccessorPinRegistration, when non-nil, runs in PinRef right
+	// before a successor's storeRef, with no lock held. It is a field only so
+	// a test can land a concurrent registration of the same ref in that
+	// window (SFH-4). Production code never sets it; nil changes nothing. A
+	// test sets it before the store is shared, so it is not guarded by mu.
+	beforeSuccessorPinRegistration func(successor *FileMediaStore, ref string)
+}
+
+// failedRegistryRef is one registry row LoadRegistry kept with its inspection
+// error instead of loading it.
+type failedRegistryRef struct {
+	rec registryRecord
+	err error
 }
 
 // saveDebounce is the coalescing window for SaveRegistry. Calls landing
@@ -269,6 +304,80 @@ func (s *FileMediaStore) forwardToSuccessors(ref, localPath string, meta MediaMe
 		succ.succMu.Unlock()
 		succ = next
 	}
+}
+
+// PinRef moves ref into scope unless it already sits in a pinned scope (see
+// isPinnedScope), so an existing ref that send_file reuses gets the sent-file
+// lifetime instead of expiring with its original scope (for example the
+// person's upload). The ref ID, path and metadata do not change. Returns
+// ErrNotFound when ref is not registered, e.g. it expired before the pin. The
+// change is persisted and forwarded down the handover chain like Store: on
+// success every successor, including the live store users are served from,
+// holds ref pinned.
+func (s *FileMediaStore) PinRef(ref, scope string) error {
+	if !isPinnedScope(scope) {
+		return fmt.Errorf("media store: pin %s: scope %q is not a pinned scope", ref, scope)
+	}
+	if err := s.pinRef(ref, scope); err != nil {
+		return err
+	}
+	s.mu.RLock()
+	entry, ok := s.refs[ref]
+	s.mu.RUnlock()
+	if !ok {
+		// Released between the pin and this read: nothing is left to send.
+		return fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
+	s.scheduleSave()
+	s.succMu.Lock()
+	succ := s.successor
+	s.succMu.Unlock()
+	for succ != nil {
+		// A successor whose copy of ref expired after the handover gets the
+		// complete registration, as Store forwards it, so the ref this store
+		// reports resolves in the live store. storeRef is a no-op when the
+		// successor already holds ref in any scope, including an unpinned one
+		// that a concurrent forward inserted after an earlier check; so the
+		// pin that follows, under the successor's own lock, is what certifies
+		// the result, and its failure is returned.
+		if s.beforeSuccessorPinRegistration != nil {
+			s.beforeSuccessorPinRegistration(succ, ref)
+		}
+		succ.storeRef(ref, entry.path, entry.meta, scope)
+		if err := succ.pinRef(ref, scope); err != nil {
+			return fmt.Errorf("media store: pin %s in successor: %w", ref, err)
+		}
+		succ.scheduleSave()
+		succ.succMu.Lock()
+		next := succ.successor
+		succ.succMu.Unlock()
+		succ = next
+	}
+	return nil
+}
+
+func (s *FileMediaStore) pinRef(ref, scope string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.refs[ref]; !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
+	old := s.refToScope[ref]
+	if isPinnedScope(old) {
+		return nil
+	}
+	if refs, ok := s.scopeToRefs[old]; ok {
+		delete(refs, ref)
+		if len(refs) == 0 {
+			delete(s.scopeToRefs, old)
+		}
+	}
+	if s.scopeToRefs[scope] == nil {
+		s.scopeToRefs[scope] = make(map[string]struct{})
+	}
+	s.scopeToRefs[scope][ref] = struct{}{}
+	s.refToScope[ref] = scope
+	return nil
 }
 
 // RefByPath returns the most-recently-registered ref pointing at localPath,
@@ -403,6 +512,9 @@ func (s *FileMediaStore) resolveLegacyWithMeta(ref string) (string, MediaMeta, e
 
 	entry, ok := s.refs[ref]
 	if !ok {
+		if failed, isFailed := s.failedRefs[ref]; isFailed {
+			return "", MediaMeta{}, fmt.Errorf("media store: %s: registered file could not be inspected when the registry loaded: %w", ref, failed.err)
+		}
 		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
 	return entry.path, entry.meta, nil
@@ -449,14 +561,12 @@ func (s *FileMediaStore) ReleaseAll(scope string) error {
 	return nil
 }
 
-// CleanExpired removes all entries older than MaxAge that use
-// CleanupPolicyDeleteOnCleanup. Entries with CleanupPolicyForgetOnly are
-// intentionally skipped — they are session-bound and must remain fully
-// resolvable until their session is released via ReleaseAll. Releasing them
-// here would cause 404s when revisiting chat history that contains
-// tool-generated screenshots or charts.
+// CleanExpired removes all entries older than MaxAge, except pinned scopes (see
+// isPinnedScope). Those must stay fully resolvable: dropping them here would
+// cause 404s when revisiting chat history that contains tool-generated
+// screenshots, charts or sent files.
 //
-// Phase 1 (under lock): identify expired delete_on_cleanup entries and remove
+// Phase 1 (under lock): identify expired, unpinned entries and remove them
 // from maps.
 // Phase 2 (no lock): delete store-managed files from disk to minimize lock
 // contention.
@@ -479,14 +589,11 @@ func (s *FileMediaStore) CleanExpired() int {
 		if !entry.storedAt.Before(cutoff) {
 			continue
 		}
-		// Never TTL-expire SESSION-PINNED inline media (scope prefix
-		// SessionInlineScopePrefix): it must stay resolvable so chat history keeps
-		// rendering tool-generated screenshots/charts, and it is freed explicitly
-		// by ReleaseAll on session delete. Other forget_only entries (user uploads,
-		// send_file) are NOT pinned — they still age out of the in-memory index
-		// here as before (their files are preserved; only the ref is dropped),
-		// which avoids an unbounded ref leak for those non-session scopes.
-		if scope, ok := s.refToScope[ref]; ok && strings.HasPrefix(scope, SessionInlineScopePrefix) {
+		// Never TTL-expire pinned scopes: session inline media and sent files stay
+		// resolvable so chat history keeps rendering them. Other forget_only entries
+		// (user uploads) are NOT pinned — they still age out of the in-memory index
+		// here as before (their files are preserved; only the ref is dropped).
+		if scope, ok := s.refToScope[ref]; ok && isPinnedScope(scope) {
 			continue
 		}
 
@@ -658,7 +765,7 @@ func (s *FileMediaStore) Stop() {
 //     ID, forwardToSuccessors), so the live store resolves them and, being
 //     the only store with saves armed, persists them.
 //
-// Only the five ref-state maps are copied; dst keeps its own cleaner config,
+// Only the ref-state maps (including failedRefs) are copied; dst keeps its own cleaner config,
 // cleanup goroutine, workspace-library provider and save machinery. A ref
 // whose file was deleted externally stays handled exactly as before the swap
 // (it resolves to a path that fails on open) — handover preserves the old
@@ -716,12 +823,24 @@ func (s *FileMediaStore) HandoverTo(dst *FileMediaStore) {
 	dst.refToScope = copyStringMap(s.refToScope)
 	dst.refToPath = copyStringMap(s.refToPath)
 	dst.pathStates = copyPathStates(s.pathStates)
+	dst.failedRefs = copyFailedRefs(s.failedRefs)
 	dst.mu.Unlock()
 	s.mu.Unlock()
 
 	// Persist the handed-over state on dst: saves on s are retired from this
 	// point, so dst's save machinery is the only path to registry.json.
 	dst.scheduleSave()
+}
+
+func copyFailedRefs(src map[string]failedRegistryRef) map[string]failedRegistryRef {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]failedRegistryRef, len(src))
+	for ref, failed := range src {
+		dst[ref] = failed
+	}
+	return dst
 }
 
 func copyRefEntries(src map[string]mediaEntry) map[string]mediaEntry {
