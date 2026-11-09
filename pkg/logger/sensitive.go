@@ -65,8 +65,8 @@ func scrubFields(r *strings.Replacer, fields map[string]any) map[string]any {
 
 // maxScrubDecodeDepth bounds how many quoting or escaping layers the scrubber
 // reads through. Composed errors nest a few %q layers; eight leaves margin.
-// A field still decodable at this depth is not read further; it is replaced
-// whole (see scrubString), so the bound limits work, never coverage.
+// A field that can still be decoded at this depth is not read further and is
+// replaced whole (see scrubString).
 const maxScrubDecodeDepth = 8
 
 // scrubFailClosedText is logged in place of a field whose registered
@@ -74,34 +74,26 @@ const maxScrubDecodeDepth = 8
 // pkg/config/security.go::sensitiveReplacementPairs uses.
 const scrubFailClosedText = "[FILTERED]"
 
-// scrubString replaces registered credentials in one string field (#1666).
-// A registered credential must not reach a log sink in plain form or in any
-// form a reader can decode back to it: Go quoting (pkg/gateway's safeLogValue,
-// %q fragments inside composed errors, nested quoting) and Go escape
-// sequences (\" \\ \n \xHH \uNNNN ...). Doing it here, at the one scrub choke
-// point, covers every call site and works with the plaintext-only replacer
-// pkg/config publishes.
+// scrubString replaces registered credentials in one string field. Its aim is
+// that a credential r replaces reaches the log sink neither as written nor
+// in a form that the decodings of decodeScan turn back into it, within
+// maxScrubDecodeDepth layers. It runs at the scrub choke point every log call
+// site passes through, so call sites need no masking of their own.
 //
-//   - No credential in the field, decoded or not: the field is returned
-//     byte-for-byte (an operator compares these lines with real files).
-//   - Only plain occurrences: the plain replacement, as before.
+//   - A field with no credential, as written or decoded, is returned byte for
+//     byte, so log lines can be compared with real files.
+//   - When the plain replacement leaves nothing that decodes to a
+//     credential, that replacement is returned.
 //   - Otherwise the field is decoded layer by layer, masked at every layer,
-//     and logged quoted once, so the record stays control-free. If a decodable
-//     credential still remained, the whole field is replaced (fail closed).
-//   - A field still decodable beyond maxScrubDecodeDepth layers cannot be
-//     shown credential-free, so it is replaced whole as well (fail closed).
-//   - A field whose code-point reading (codePointReading) holds a credential
-//     is replaced whole as well.
+//     and logged quoted once, so the record holds no control characters. If a
+//     credential can still be decoded from that result, the field is replaced
+//     whole by scrubFailClosedText.
+//   - A field that can still be decoded at maxScrubDecodeDepth, or whose
+//     code-point reading (codePointReading) holds a credential, is replaced
+//     whole as well.
 //
-// Work per field, as estimated from this code (not measured): the depth
-// bound caps how many distinct strings one decodeScan reads (two decodings
-// per layer, maxScrubDecodeDepth layers), plus one code-point reading of
-// each; scrubString runs at most two scans and maxScrubDecodeDepth single
-// decoding steps. For a fixed depth and registered set the work therefore
-// grows with the field's length, by a large constant factor. The actual
-// time and memory also depend on the registered values (matcher cost and
-// expansion by the mask) and on intermediate strings, and are not
-// established here.
+// The work per field grows with the field's length and with the registered
+// set, within the depth bound; its time and memory have not been measured.
 func scrubString(r *strings.Replacer, s string) string {
 	masked := r.Replace(s)
 	// Without a backslash or a quote nothing in the field can be decoded.
@@ -149,8 +141,8 @@ const (
 // decodeScan reads s and every string reachable from it by unquoting a whole
 // quoted string or decoding Go escape sequences, both decodings tried at
 // every layer, up to maxScrubDecodeDepth layers. Each of those strings is
-// also checked in its code-point reading (codePointReading: all escape forms
-// read as characters in one pass); that reading is not decoded further.
+// also checked in its code-point reading (codePointReading), which is not
+// decoded further. It returns at the first credential it finds.
 func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 	seen := map[string]bool{s: true}
 	frontier := []string{s}
@@ -187,14 +179,11 @@ func decodeScan(r *strings.Replacer, s string) decodeScanResult {
 	return scanClean
 }
 
-// codePointReading returns s with every escape sequence read as the
-// character it names, written in UTF-8, in one pass: \xHH as U+00HH, \uHHHH
-// as U+HHHH, \UHHHHHHHH as that code point, a three-digit octal \NNN up to
-// \377 as U+0NNN (hex digits of either case), and the single-character
-// escapes (\n, \", \\ ...) as their character. This is how some other
-// systems spell characters, where Go reads \xHH and octal as bytes. Text
-// that is not such an escape, including a surrogate or out-of-range code
-// point, is kept as written. ok is false when nothing was read.
+// codePointReading returns s with every escape that readEscapedChar accepts
+// replaced by the character it names, written in UTF-8, in one pass. A
+// numeric escape names a code point here, where Go reads the hex and octal
+// byte escapes as single bytes. Text that readEscapedChar does not accept is
+// kept as written. ok is false when nothing was read.
 //
 // The result is never longer than s: every escape is longer than the UTF-8
 // form of the character it names.
@@ -220,9 +209,15 @@ func codePointReading(s string) (string, bool) {
 	return b.String(), changed
 }
 
-// readEscapedChar reads the escape at the start of s (s[0] is a backslash)
-// as codePointReading describes. It returns the character, the length of
-// the escape in bytes, and false when s does not start with one.
+// readEscapedChar reads the escape at the start of s (s[0] is a backslash).
+// It returns the character the escape names, the length of the escape in
+// bytes, and false when s does not start with an escape it accepts. After
+// the backslash it accepts:
+//
+//   - x, u or U followed by 2, 4 or 8 hex digits (readHexChar);
+//   - three octal digits whose value is at most 0377 (255), naming the code
+//     point with that value;
+//   - one of the single-character escapes in simpleEscapes.
 func readEscapedChar(s string) (rune, int, bool) {
 	if len(s) < 2 {
 		return 0, 0, false
@@ -254,7 +249,9 @@ func readEscapedChar(s string) (rune, int, bool) {
 }
 
 // readHexChar reads the escape at the start of s made of a backslash, one
-// letter and the given number of hex digits.
+// letter and the given number of hex digits of either case, and returns the
+// code point the digits name. It returns false when a digit is missing or
+// not hex, or when the value is not a valid code point (utf8.ValidRune).
 func readHexChar(s string, digits int) (rune, int, bool) {
 	if len(s) < 2+digits {
 		return 0, 0, false
