@@ -135,7 +135,7 @@ func TestAvailability_StatesUseContractEnumSpellings(t *testing.T) {
 // (manager_outbound.go::Availability consults the interface first).
 func TestAvailability_ChannelWithoutNotRunningReasonerKeepsTheSharedReasons(t *testing.T) {
 	m, ch := newAvailabilityFixture(false)
-	_, implements := interface{}(ch).(NotRunningReasoner)
+	_, implements := any(ch).(NotRunningReasoner)
 	require.False(t, implements,
 		"fixture: the mock channel must not implement NotRunningReasoner for this pin")
 
