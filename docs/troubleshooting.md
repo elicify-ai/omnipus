@@ -426,6 +426,10 @@ The operator must correct the storage layout; **Retry** does not remove or repla
 
 Other session reads and writes that hit a storage failure answer in the same way — "This session could not be read / renamed / deleted / created because session storage failed. Check disk space and permissions, then retry. Details are in the server log." — with the cause only in the log.
 
+A sent file that is no longer on record is not a storage failure. The chat opens normally, and the gateway log gets a warning, `replay: skipped file card, media ref unknown to the store`, with the session and the file's reference. When preparing a saved-history page or snapshot, another error while reading a file's record still fails that history read with the message above.
+
+One such error has its own log line. When a sent file's record cannot be checked at startup for a reason other than the file being gone, such as a permission or disk error on its folder, the gateway log gets a warning, `registry: registered file could not be inspected; its ref fails until a restart after the cause is fixed`, with the reference, the path and the cause, followed by `media: failed to load persisted registry`. A saved-history page containing that file then fails with the storage-failure message above; the other file records still load. Fix the permission or disk problem, then restart the gateway so the file can be fetched again by anything that still holds its address. This does not bring the file card back.
+
 ## Two more errors with short fixes
 
 **"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.
