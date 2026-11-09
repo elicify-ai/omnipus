@@ -85,9 +85,9 @@ vi.mock('@assistant-ui/react', () => {
       Send: ({ disabled, children, className, 'data-testid': testId }: {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
       }) =>
-        React.createElement(Button, { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
+        React.createElement(Button, { type: 'button', disabled, className, ...{ 'data-testid': testId ?? 'chat-send' } }, children),
       AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement(Button, { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+        React.createElement(Button, { type: 'button', disabled, className, ...{ 'data-testid': 'add-attachment' } }, children),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
