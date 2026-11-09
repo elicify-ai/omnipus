@@ -21,8 +21,9 @@ properties:
     minLength: 1
     maxLength: 64
     description: >
-      Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must
-      be a known protocol; unknown values are rejected with 400.
+      Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A
+      catalog provider id, or — together with `endpoint` and `protocol` — the
+      name of a custom endpoint. Anything else is rejected with 400.
     example: anthropic
   api_key:
     type: string
@@ -48,11 +49,24 @@ properties:
   endpoint:
     type: string
     description: >
-      Optional custom API base URL, persisted as the provider entry's api_base.
-      Required for providers that have no fixed default endpoint (e.g. azure,
-      azure-openai — a per-resource host); also usable to override the regional
-      default. When omitted, the provider's built-in default base is used.
-    example: https://my-resource.openai.azure.com/openai/deployments/gpt-4o
+      Base URL, persisted as the provider entry's api_base. For a catalog
+      provider: optional override of its base URL. For a custom endpoint (see
+      `protocol`): required, the endpoint's base URL.
+    example: https://llm.example.com/v1
+  protocol:
+    type: string
+    enum:
+      - openai-compatible
+      - anthropic
+    description: >
+      Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3,
+      clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog
+      provider id: then `id`, `endpoint` (the base URL) and `protocol` together
+      create a custom row, saved with custom=true, this protocol and endpoint
+      as api_base; `model` is then required and `region` is refused. Must be
+      absent for a catalog provider id (400 on field `id`). Omitted by older
+      clients: the request then behaves exactly as before this field existed.
+    example: openai-compatible
   region:
     type: string
     maxLength: 128

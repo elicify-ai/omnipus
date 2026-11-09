@@ -7667,6 +7667,24 @@ func (e OnboardingProviderApiKeyAuthMethod) Valid() bool {
 	}
 }
 
+// Defines values for OnboardingProviderApiKeyProtocol.
+const (
+	OnboardingProviderApiKeyProtocolAnthropic        OnboardingProviderApiKeyProtocol = "anthropic"
+	OnboardingProviderApiKeyProtocolOpenaiCompatible OnboardingProviderApiKeyProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderApiKeyProtocol enum.
+func (e OnboardingProviderApiKeyProtocol) Valid() bool {
+	switch e {
+	case OnboardingProviderApiKeyProtocolAnthropic:
+		return true
+	case OnboardingProviderApiKeyProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OnboardingProviderSignInAuthMethod.
 const (
 	OnboardingProviderSignInAuthMethodSignIn OnboardingProviderSignInAuthMethod = "sign_in"
@@ -22642,14 +22660,17 @@ type OnboardingProviderApiKey struct {
 	// AuthMethod Discriminator — this variant authenticates with an API key.
 	AuthMethod OnboardingProviderApiKeyAuthMethod `json:"auth_method"`
 
-	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+	// Endpoint Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
 	Endpoint *string `json:"endpoint,omitempty"`
 
-	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A catalog provider id, or — together with `endpoint` and `protocol` — the name of a custom endpoint. Anything else is rejected with 400.
 	Id string `json:"id"`
 
 	// Model The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// Protocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+	Protocol *OnboardingProviderApiKeyProtocol `json:"protocol,omitempty"`
 
 	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
@@ -22660,6 +22681,9 @@ type OnboardingProviderApiKey struct {
 
 // OnboardingProviderApiKeyAuthMethod Discriminator — this variant authenticates with an API key.
 type OnboardingProviderApiKeyAuthMethod string
+
+// OnboardingProviderApiKeyProtocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+type OnboardingProviderApiKeyProtocol string
 
 // OnboardingProviderSignIn The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in").
 type OnboardingProviderSignIn struct {

@@ -599,6 +599,10 @@ function OnboardingWizard() {
               ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
               ...(selection.awsRegion ? { region: selection.awsRegion } : {}),
+              // #1700: only the Custom endpoint path sets `protocol`; with it the
+              // server saves a custom row. A catalog row never carries one (the
+              // server refuses `protocol` on a catalog id).
+              ...(selection.protocol ? { protocol: selection.protocol } : {}),
             }
       const resp = await completeOnboardingTransaction({
         provider,
