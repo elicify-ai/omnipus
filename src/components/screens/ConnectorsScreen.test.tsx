@@ -38,6 +38,17 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 
+// The screen under test, imported STATICALLY (like roster-visibility and
+// ordering do). The per-test `await import('./ConnectorsScreen')` pattern put
+// the whole app-graph module transform on each test's 30s testTimeout clock:
+// under pod CPU contention the first import alone exceeds 30s, timing the test
+// out before its first assertion (observed 2026-11-06 on both the committed
+// and the repaired file; the earlier pass was a warm-cache window).
+// vi.mock hoisting registers every module mock before this import, and the
+// module binds the mock vi.fn REFERENCES, whose implementations beforeEach
+// replaces per test — behaviour is identical, minus the test-clock race.
+import { ConnectorsScreen } from './ConnectorsScreen'
+
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
 vi.mock('@tanstack/react-router', () => ({
@@ -55,7 +66,16 @@ vi.mock('@tanstack/react-router', () => ({
 // Stub ChannelConfigPanel — records the props it was opened with (channelId in
 // particular) so tests can assert Configure/Connect opens the right instance
 // without exercising the panel's full internals (owned by its own test file).
-const channelConfigPanelOpens: Array<{ channelId: string; channelName: string; enabled?: boolean; nativeAvailable?: boolean }> = []
+// vi.hoisted: the factory below runs at file load now that the screen is
+// imported statically, before a plain const would be initialized.
+const { channelConfigPanelOpens } = vi.hoisted(() => ({
+  channelConfigPanelOpens: [] as Array<{
+    channelId: string
+    channelName: string
+    enabled?: boolean
+    nativeAvailable?: boolean
+  }>,
+}))
 vi.mock('@/components/skills/ChannelConfigPanel', () => ({
   ChannelConfigPanel: (props: { channelId: string; channelName: string; enabled?: boolean; nativeAvailable?: boolean; open: boolean }) => {
     if (!props.open) return null
@@ -74,8 +94,9 @@ vi.mock('@/components/connectors/EmailMailboxPanel', () => ({
   EmailMailboxPanel: () => null,
 }))
 
-// Stub the ui store to capture toast calls
-const addToastMock = vi.fn()
+// Stub the ui store to capture toast calls (vi.hoisted for the same reason as
+// channelConfigPanelOpens above)
+const { addToastMock } = vi.hoisted(() => ({ addToastMock: vi.fn() }))
 vi.mock('@/store/ui', () => ({
   useUiStore: () => ({ addToast: addToastMock }),
 }))
@@ -124,23 +145,43 @@ vi.mock('@/components/ui/select', () => {
   return { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectLabel, SelectGroup, SelectSeparator }
 })
 
-// API mocks — defined as module-level spies so individual tests can override
-const mockFetchChannels = vi.fn()
-const mockCreateChannelInstance = vi.fn()
-const mockDeleteChannelInstance = vi.fn()
-const mockEnableChannel = vi.fn()
-const mockDisableChannel = vi.fn()
-const mockFetchChannelRouting = vi.fn()
-const mockSetChannelRouting = vi.fn()
-const mockFetchWorkspaces = vi.fn()
-const mockFetchWorkspace = vi.fn()
-const mockFetchAgents = vi.fn()
+// API mocks — defined as module-level spies so individual tests can override.
+// vi.hoisted: the vi.mock('@/lib/api') factory below references them and, with
+// the screen imported statically, runs at file load — before plain const
+// declarations would be initialized ("Cannot access 'mockFetchChannels'
+// before initialization").
+const {
+  mockFetchChannels,
+  mockCreateChannelInstance,
+  mockDeleteChannelInstance,
+  mockEnableChannel,
+  mockDisableChannel,
+  mockFetchChannelRouting,
+  mockSetChannelRouting,
+  mockFetchWorkspaces,
+  mockFetchWorkspace,
+  mockFetchAgents,
+  mockFetchChannelConfig,
+} = vi.hoisted(() => ({
+  mockFetchChannels: vi.fn(),
+  mockCreateChannelInstance: vi.fn(),
+  mockDeleteChannelInstance: vi.fn(),
+  mockEnableChannel: vi.fn(),
+  mockDisableChannel: vi.fn(),
+  mockFetchChannelRouting: vi.fn(),
+  mockSetChannelRouting: vi.fn(),
+  mockFetchWorkspaces: vi.fn(),
+  mockFetchWorkspace: vi.fn(),
+  mockFetchAgents: vi.fn(),
+  mockFetchChannelConfig: vi.fn(),
+}))
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchChannels: mockFetchChannels,
+    fetchChannelConfig: mockFetchChannelConfig,
     createChannelInstance: mockCreateChannelInstance,
     deleteChannelInstance: mockDeleteChannelInstance,
     enableChannel: mockEnableChannel,
@@ -228,6 +269,15 @@ beforeEach(() => {
   mockFetchWorkspace.mockResolvedValue({ id: 'ws1', name: 'Sales', core_team: ['mia'] })
   mockFetchAgents.mockResolvedValue([])
   mockSetChannelRouting.mockResolvedValue({})
+  // The saved-settings read for a disabled bare stub (the #1569/D1/D2
+  // classification read) succeeds with an EMPTY body — a never-configured
+  // read. Nothing here carries the "[configured]" sentinel
+  // (configHasSavedCredential promotes a stub to a card on that value), so
+  // every stub stays a roster tile, which is the premise these tests state.
+  // A FAILED read must not be this default: under decision D2 a failed read
+  // keeps the stub's card (settingsUnchecked), which would strand a roster
+  // premise on an unmocked fetch (src/test/setup.ts rejects relative URLs).
+  mockFetchChannelConfig.mockResolvedValue({})
 })
 
 afterEach(() => {
@@ -266,8 +316,6 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
     // BDD: Given three whatsapp.* instances, When the list renders, Then one
     // WhatsApp group header shows both rows with an in-group "Add another…".
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM, STUB_WHATSAPP_SALES, STUB_WHATSAPP_SUPPORT])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const group = await screen.findByTestId('channel-type-group-whatsapp')
@@ -283,7 +331,6 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
   it('renders the brand disclaimer on the populated (grouped) list', async () => {
     // FR-014: the disclaimer must be present on every screen showing a BrandIcon.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await screen.findByTestId('channel-type-group-telegram')
@@ -294,24 +341,36 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
     // FR-008: only configured instances (instance_id set) render as rows; the
     // static unconfigured Discord placeholder must not appear as a group.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM, STUB_DISCORD_UNCONFIGURED])
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await screen.findByTestId('channel-type-group-telegram')
     expect(screen.queryByTestId('channel-type-group-discord')).not.toBeInTheDocument()
   })
 
-  it('does not render the empty-state roster when at least one type is configured (B2 — mutual exclusivity)', async () => {
+  it('renders the unconfigured types\' Configure tiles alongside the configured connector (#1569 — unconfigured types stay discoverable)', async () => {
     // Mixed state: one configured type (telegram) + one unconfigured type
-    // (discord). FR-010's grouped-list/roster split is mutually exclusive —
-    // the grouped list wins as soon as ANY instance is configured, so the
-    // roster must be completely absent, not just missing a discord entry.
+    // (discord). Issue #1569 "Expected": "…unconfigured types stay
+    // discoverable." The pre-#1569 rule asserted the opposite (B2 mutual
+    // exclusivity: the roster disappears entirely once ANY instance is
+    // configured — the exact behaviour the issue reports: "Once one
+    // connector is configured, the tiles of the other, unconfigured
+    // connector types disappear from Connectors; they can only be reached
+    // through 'Add channel'."). The unconfigured type stays discoverable as
+    // a roster Configure tile beside the configured group — never as an
+    // instance group of its own.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM, STUB_DISCORD_UNCONFIGURED])
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await screen.findByTestId('channel-type-group-telegram')
-    expect(screen.queryByTestId('channel-roster')).not.toBeInTheDocument()
+    // The configured connector still renders as its grouped card…
+    expect(screen.getByTestId('channel-card-telegram')).toBeInTheDocument()
+    // …an unconfigured type gains NO instance group…
+    expect(screen.queryByTestId('channel-type-group-discord')).not.toBeInTheDocument()
+    // …and its roster Configure tile stays visible alongside it (the
+    // roster container renders in both states — the inverse of the retired
+    // mutual-exclusivity absence assertion).
+    expect(screen.getByTestId('channel-roster')).toBeInTheDocument()
+    expect(screen.getByTestId('channel-roster-connect-discord')).toBeInTheDocument()
   })
 
   it('resolves each row\'s workspace→agent binding independently via its own instance id (B1)', async () => {
@@ -332,8 +391,6 @@ describe('ConnectorsScreen — type-grouped rows (US-9 AS-1)', () => {
       { id: 'agent-1', name: 'Mia' },
       { id: 'agent-2', name: 'Jim' },
     ])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -351,8 +408,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-1' })
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
     mockFetchAgents.mockResolvedValue([{ id: 'agent-1', name: 'Mia' }])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -368,8 +423,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-unknown', default_agent_id: 'agent-unknown' })
     mockFetchWorkspaces.mockResolvedValue([]) // ws-unknown not present
     mockFetchAgents.mockResolvedValue([]) // agent-unknown not present
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -382,8 +435,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: 'agent-ghost' })
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
     mockFetchAgents.mockResolvedValue([]) // agent-ghost not present
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -396,8 +447,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-ghost', default_agent_id: 'agent-1' })
     mockFetchWorkspaces.mockResolvedValue([]) // ws-ghost not present
     mockFetchAgents.mockResolvedValue([{ id: 'agent-1', name: 'Mia' }])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -410,8 +459,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     mockFetchChannelRouting.mockResolvedValue({ workspace_id: 'ws-1' })
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws-1', name: 'Sales' }])
     mockFetchAgents.mockResolvedValue([])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -422,8 +469,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
   it('shows "No workspace bound" when the instance has no routing binding', async () => {
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
     mockFetchChannelRouting.mockResolvedValue({})
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -437,8 +482,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
     // would mislead an operator into thinking the channel is genuinely unbound.
     mockFetchChannels.mockResolvedValue([STUB_TELEGRAM])
     mockFetchChannelRouting.mockRejectedValue(new Error('network error'))
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {
@@ -453,8 +496,6 @@ describe('ConnectorsScreen — binding-first row title (US-9 AS-2)', () => {
 describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
   it('renders a Connect roster of every known channel type when 0 instances are configured', async () => {
     mockFetchChannels.mockResolvedValue([STUB_DISCORD_UNCONFIGURED, { ...STUB_TELEGRAM, instance_id: undefined }])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const roster = await screen.findByTestId('channel-roster')
@@ -485,8 +526,6 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
       description: '',
     }))
     mockFetchChannels.mockResolvedValue(templates)
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const roster = await screen.findByTestId('channel-roster')
@@ -508,8 +547,6 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
     mockFetchChannels.mockResolvedValue([
       { ...stub, identity: { kind: 'agent' as const, id: 'mia' } },
     ])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     // Renders as a configured group row, and the roster stays hidden.
@@ -520,8 +557,6 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
   it('roster Configure opens ChannelConfigPanel DIRECTLY on the bare type — the original one-click flow, no slug/create step (operator-mandated)', async () => {
     mockFetchChannels.mockResolvedValue([{ ...STUB_TELEGRAM, instance_id: undefined, identity: undefined }])
     const user = userEvent.setup()
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await user.click(await screen.findByTestId('channel-roster-connect-telegram'))
@@ -535,8 +570,6 @@ describe('ConnectorsScreen — empty-state roster (US-9 AS-3)', () => {
   it('the global "+ Add channel" button still opens the slug-create Sheet with an open type picker (multi-instance tool)', async () => {
     mockFetchChannels.mockResolvedValue([{ ...STUB_TELEGRAM, instance_id: undefined }])
     const user = userEvent.setup()
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await user.click(await screen.findByTestId('add-channel-instance-btn'))
@@ -564,7 +597,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
 
   it('the global "Add channel" button opens a Sheet with an open type picker (no modal Dialog)', async () => {
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const sheet = await openCreateSheetGlobal(user)
@@ -579,7 +611,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
   it('"Add another…" on a group opens the Sheet locked to that group\'s type', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const addAnother = await screen.findByTestId('channel-type-add-another-whatsapp')
@@ -592,7 +623,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
   it('clears the type lock when reopened via the global "Add channel" after a locked open (B6)', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     // Open locked via the group's "Add another…".
@@ -616,7 +646,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
 
   it('submit stays disabled until channel, workspace AND agent are all chosen — no slug field exists', async () => {
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const sheet = await openCreateSheetGlobal(user)
@@ -642,7 +671,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     })
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
@@ -681,7 +709,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     })
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
@@ -701,7 +728,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     mockCreateChannelInstance.mockRejectedValueOnce(conflictError)
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
@@ -724,7 +750,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     mockCreateChannelInstance.mockRejectedValueOnce(serverErr)
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
@@ -740,7 +765,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     mockCreateChannelInstance.mockRejectedValueOnce(new Error('Unexpected token < in JSON at position 0'))
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
@@ -759,7 +783,6 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     mockCreateChannelInstance.mockRejectedValueOnce(schemaErr)
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await openCreateSheetGlobal(user)
@@ -781,7 +804,6 @@ describe('ConnectorsScreen — delete instance', () => {
     mockDeleteChannelInstance.mockResolvedValueOnce(undefined)
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const deleteBtn = await screen.findByTestId('channel-delete-btn-whatsapp.sales')
@@ -804,7 +826,6 @@ describe('ConnectorsScreen — delete instance', () => {
     mockFetchChannels.mockResolvedValue([STUB_WHATSAPP_SALES])
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     const deleteBtn = await screen.findByTestId('channel-delete-btn-whatsapp.sales')
@@ -832,7 +853,6 @@ describe('ConnectorsScreen — Enable/Disable toggle fires the real mutation', (
     mockEnableChannel.mockResolvedValueOnce({ id: 'telegram', enabled: true })
 
     const user = userEvent.setup()
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     // STUB_WHATSAPP_SALES.enabled === true -> the toggle reads "Disable".
@@ -859,8 +879,6 @@ describe('ConnectorsScreen — Enable/Disable toggle fires the real mutation', (
 describe('ConnectorsScreen — built-in Web Chat is excluded from grouping/roster', () => {
   it('renders Web Chat as an always-on built-in row, separate from the (empty) Channels roster (B9)', async () => {
     mockFetchChannels.mockResolvedValue([STUB_WEBCHAT])
-
-    const { ConnectorsScreen } = await import('./ConnectorsScreen')
     render(React.createElement(ConnectorsScreen), { wrapper })
 
     await waitFor(() => {

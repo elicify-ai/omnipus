@@ -20,6 +20,15 @@ export const CUSTOM_ENDPOINT_PROTOCOLS = ['openai-compatible', 'anthropic'] as c
 
 export type CustomEndpointProtocol = (typeof CUSTOM_ENDPOINT_PROTOCOLS)[number]
 
+/**
+ * #1700 (design M1): the refusal shown when the operator names a custom
+ * endpoint after a listed provider. Same text the server returns from
+ * `POST /onboarding/complete`, so the two never read differently.
+ */
+export function takenProviderIdMessage(id: string): string {
+  return `"${id}" is the name of a listed provider. Choose a different name for your custom endpoint, for example "my-${id}".`
+}
+
 /** What the panel emits. Mapped to `ProviderUpdateRequest` by the caller. */
 export interface CustomEndpointDraft {
   id: string
@@ -34,6 +43,13 @@ export interface CustomEndpointPanelProps {
   /** Server-side failure copy, rendered as an assertive alert (4.1.3). */
   error?: string | null
   submitting?: boolean
+  /**
+   * #1700: ids a custom endpoint may not take — the loaded catalog's provider
+   * ids. A matching (trimmed, exact) id shows the M1 refusal and keeps
+   * *Add endpoint* disabled. Omitted while the catalog is loading or failed;
+   * the server's identical refusal is then the backstop.
+   */
+  takenIds?: ReadonlySet<string>
   'data-testid'?: string
 }
 
@@ -42,6 +58,7 @@ export function CustomEndpointPanel({
   onCancel,
   error,
   submitting = false,
+  takenIds,
   'data-testid': testId = 'custom-endpoint-panel',
 }: CustomEndpointPanelProps) {
   const [id, setId] = React.useState('')
@@ -49,7 +66,10 @@ export function CustomEndpointPanel({
   const [protocol, setProtocol] = React.useState<CustomEndpointProtocol>('openai-compatible')
   const [apiKey, setApiKey] = React.useState('')
 
-  const complete = id.trim().length > 0 && apiBase.trim().length > 0 && apiKey.trim().length > 0
+  const trimmedId = id.trim()
+  const idTaken = trimmedId.length > 0 && (takenIds?.has(trimmedId) ?? false)
+  const complete = trimmedId.length > 0 && !idTaken && apiBase.trim().length > 0 && apiKey.trim().length > 0
+  const idTakenId = `${testId}-id-taken`
 
   return (
     <form
@@ -61,7 +81,7 @@ export function CustomEndpointPanel({
         event.preventDefault()
         if (!complete || submitting) return
         onSubmit({
-          id: id.trim(),
+          id: trimmedId,
           api_base: apiBase.trim(),
           protocol,
           api_key: apiKey,
@@ -79,12 +99,24 @@ export function CustomEndpointPanel({
           id={`${testId}-id`}
           tabIndex={0}
           data-testid="custom-endpoint-id"
+          aria-invalid={idTaken || undefined}
+          aria-describedby={idTaken ? idTakenId : undefined}
           value={id}
           onChange={(e) => setId(e.target.value)}
           className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </Label>
+      {idTaken && (
+        <div
+          id={idTakenId}
+          role="alert"
+          data-testid="custom-endpoint-id-taken"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
+        >
+          {takenProviderIdMessage(trimmedId)}
+        </div>
+      )}
 
       <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-base`}>
         API base URL

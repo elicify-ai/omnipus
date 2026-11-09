@@ -1,7 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within } from 'storybook/test'
+import { Info } from '@phosphor-icons/react'
 import { Badge } from './badge'
-import { Tooltip } from './tooltip'
+import { IconButton } from './icon-button'
+import { Tooltip, TooltipContent, TooltipTrigger } from './tooltip'
+
+const TEXT = 'No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows.'
 
 const designSystem = {
   pointerTargets: ['[data-testid="tooltip-trigger"]'],
@@ -16,57 +20,78 @@ const designSystem = {
 const meta = {
   title: 'Design System/Tooltip',
   component: Tooltip,
-  args: {
-    content: 'No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows.',
-    // Satisfies TooltipProps' required `children` for CSF3's story-arg
-    // typing — the render below supplies the actual trigger JSX directly
-    // and never reads `args.children`.
-    children: <Badge variant="warning">Auto — no sandbox</Badge>,
-  },
+  // Default opens on mount so every generic browser-kind check reads the
+  // open bubble (axe, browser, forced-colors, pointer, reduced-motion,
+  // root-size, reflow).
+  args: { defaultOpen: true },
   render: (args) => (
-    <Tooltip {...args} data-testid="tooltip-trigger">
-      <Badge variant="warning">Auto — no sandbox</Badge>
+    <Tooltip {...args}>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} data-testid="tooltip-trigger" className="inline-flex">
+          <Badge variant="warning">Auto — no sandbox</Badge>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{TEXT}</TooltipContent>
     </Tooltip>
   ),
-  // Matches the Popover/Dialog overlay stories' own convention
-  // (overlays.stories.tsx) — without it the trigger renders left-aligned in
-  // Storybook's default 'padded' layout, not viewport-centered, which is
-  // what actually caused the reflow/zoom overflow this fix corrects.
+  // Viewport-centred like the overlay stories (overlays.stories.tsx).
   parameters: { layout: 'centered', designSystem },
 } satisfies Meta<typeof Tooltip>
 export default meta
 type Story = StoryObj<typeof meta>
 
-// Default — hover reveals the bubble; used by every generic browser-kind
-// check (axe, browser, forced-colors, pointer, reduced-motion, root-size,
-// zoom, reflow) via the manifest, all reading the OPEN state this play()
-// function leaves behind before the story-finished signal fires.
 export const Default: Story = {
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement)
-    const trigger = canvas.getByTestId('tooltip-trigger')
-    await userEvent.hover(trigger)
-    await expect(canvas.getByRole('tooltip')).toBeVisible()
-    await expect(trigger).toHaveAttribute('aria-describedby')
+    const page = within(canvasElement.ownerDocument.body)
+    await expect(await page.findByRole('tooltip')).toBeVisible()
+    await expect(within(canvasElement).getByTestId('tooltip-trigger')).toHaveAttribute('aria-describedby')
   },
 }
 
-// Keyboard — proves the trigger is keyboard-reachable and that Escape
-// dismisses the bubble WITHOUT moving focus off the trigger (not a focus
-// trap). Playwright's `.press()` focuses the target before sending the key,
-// so this single step both reaches the trigger by keyboard and exercises
-// the dismiss path.
+// Keyboard: focus opens the bubble, Escape dismisses it and focus stays on
+// the trigger (not a focus trap).
 export const Keyboard: Story = {
+  args: { defaultOpen: false },
   parameters: {
     designSystem: {
       ...designSystem,
-      keyboard: [
-        {
-          trigger: '[data-testid="tooltip-trigger"]',
-          key: 'Escape',
-          expectFocus: '[data-testid="tooltip-trigger"]',
-        },
-      ],
+      browserAssertions: [{ selector: '[data-testid="tooltip-trigger"]', attribute: 'tabindex', value: '0' }],
+      keyboard: [{ trigger: '[data-testid="tooltip-trigger"]', key: 'Escape', expectFocus: '[data-testid="tooltip-trigger"]' }],
     },
   },
+  play: async ({ canvasElement }) => {
+    const trigger = within(canvasElement).getByTestId('tooltip-trigger')
+    await userEvent.tab()
+    await expect(trigger).toHaveFocus()
+    const page = within(canvasElement.ownerDocument.body)
+    await expect(await page.findByRole('tooltip')).toBeVisible()
+    await userEvent.keyboard('{Escape}')
+    await expect(trigger).toHaveFocus()
+  },
+}
+
+// EdgeOfViewport: an icon-only control flush with the left edge; Radix's
+// collision padding (8px = --space-2) keeps the bubble inside the viewport.
+export const EdgeOfViewport: Story = {
+  parameters: {
+    layout: 'fullscreen',
+    designSystem: {
+      ...designSystem,
+      pointerTargets: ['[data-testid="tooltip-edge-trigger"]'],
+      browserAssertions: [{ selector: '[data-testid="tooltip-edge-trigger"]', attribute: 'aria-describedby' }],
+      forcedColors: { boundaries: ['[role="tooltip"]'], focus: ['[data-testid="tooltip-edge-trigger"]'] },
+    },
+  },
+  render: (args) => (
+    <div className="pt-[var(--space-8)]">
+      <Tooltip {...args}>
+        <TooltipTrigger asChild>
+          <IconButton aria-label="Sandbox details" data-testid="tooltip-edge-trigger">
+            <Info aria-hidden="true" className="size-[var(--icon-size-medium)]" />
+          </IconButton>
+        </TooltipTrigger>
+        <TooltipContent side="top">{TEXT}</TooltipContent>
+      </Tooltip>
+    </div>
+  ),
 }

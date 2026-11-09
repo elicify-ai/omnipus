@@ -139,7 +139,8 @@
         "tests/e2e/preview-pdf.spec.ts",
         "tests/e2e/truncation-notice.spec.ts",
         "tests/e2e/stop-scope-tree.spec.ts",
-        "tests/e2e/chat-history-paging.open-scroll-anchor.spec.ts"
+        "tests/e2e/chat-history-paging.open-scroll-anchor.spec.ts",
+        "tests/e2e/tooltip-visibility.spec.ts"
       ]
     },
     {
@@ -165,6 +166,7 @@
         "tests/e2e/onboarding.spec.ts",
         "tests/e2e/profile-fontsize.spec.ts",
         "tests/e2e/providers.spec.ts",
+        "tests/e2e/providers-toast.spec.ts",
         "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts",
         "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts",
         "tests/e2e/trace-secret-canary.spec.ts"

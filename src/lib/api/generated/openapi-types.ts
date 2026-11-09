@@ -295,7 +295,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
+         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. Returns 422 when a custom endpoint's base URL is refused by the address (SSRF) guard.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -4447,7 +4447,7 @@ export interface components {
              */
             auth_method: "api_key";
             /**
-             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A catalog provider id, or — together with `endpoint` and `protocol` — the name of a custom endpoint. Anything else is rejected with 400.
              * @example anthropic
              */
             id: string;
@@ -4462,10 +4462,16 @@ export interface components {
              */
             model?: string;
             /**
-             * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
-             * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
+             * @description Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
+             * @example https://llm.example.com/v1
              */
             endpoint?: string;
+            /**
+             * @description Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic";
             /**
              * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
              * @example eu-central-1
@@ -15000,7 +15006,7 @@ export interface components {
          */
         ProviderUpdateRequest: {
             /**
-             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
              * @example openai-compatible
              * @enum {string}
              */
@@ -15012,7 +15018,7 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+             * @description Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
@@ -19962,6 +19968,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503ServiceUnavailable"];

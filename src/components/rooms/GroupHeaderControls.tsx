@@ -16,7 +16,7 @@ import { useAttentionMotion } from '@/components/layout/sidebar/attentionCue'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { AvatarStack } from '@/components/ui/avatar-stack'
 import { Button } from '@/components/ui/button'
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { needsAttention, useRoomCardRequestIds, useRoomView } from './useRoomView'
 
 /** Toggle this room's Participants panel through the outgoing panel's leave gate. */
@@ -51,7 +51,8 @@ export function GroupHeaderControls({ workspaceId, roomId }: { workspaceId: stri
   })
   return (
     <>
-      <Tooltip content="Participants" side="bottom" className="w-max" interactive>
+      <Tooltip>
+        <TooltipTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
@@ -65,6 +66,8 @@ export function GroupHeaderControls({ workspaceId, roomId }: { workspaceId: stri
           <AvatarStack items={items} max={3} total={count} />
           <span data-testid="participants-count" className="text-[length:var(--type-utility-xs-size)]">{count}</span>
         </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Participants</TooltipContent>
       </Tooltip>
     </>
   )

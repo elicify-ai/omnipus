@@ -354,7 +354,13 @@ async function createStubWorkerAgent(page: Page, name: string, claimText: string
     name,
     description:
       'Stub external-CLI worker for ADR-052 Test 32 e2e eval — ignores its prompt and prints a pre-loaded claim, then gives up. See tests/e2e/verifier-eval.spec.ts.',
-    soul: 'You are a stub. Your CLI process ignores this prompt entirely and prints a fixed claim regardless of input.',
+    // No `soul` key: AgentCreateRequestSubagent3p has additionalProperties:false
+    // and no soul field ("There is no soul: a third-party agent has no SOUL.md"),
+    // and the create handler decodes variant bodies with
+    // json.Decoder.DisallowUnknownFields (pkg/gateway/rest_agents_create.go), so
+    // a soul key is refused 400 "unknown field \"soul\"" (#1661, CI run
+    // 42279413808). The claim text and give-up marker already ride
+    // executor.env_overrides (stubCliExecutor below) — nothing needs a soul.
     executor: stubCliExecutor({ firstTry: claimText, laterTry: blockedMarker(STUB_GIVE_UP_SUMMARY) }),
   });
   if (!res.ok) {

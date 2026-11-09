@@ -7640,6 +7640,24 @@ func (e OnboardingProviderApiKeyAuthMethod) Valid() bool {
 	}
 }
 
+// Defines values for OnboardingProviderApiKeyProtocol.
+const (
+	OnboardingProviderApiKeyProtocolAnthropic        OnboardingProviderApiKeyProtocol = "anthropic"
+	OnboardingProviderApiKeyProtocolOpenaiCompatible OnboardingProviderApiKeyProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderApiKeyProtocol enum.
+func (e OnboardingProviderApiKeyProtocol) Valid() bool {
+	switch e {
+	case OnboardingProviderApiKeyProtocolAnthropic:
+		return true
+	case OnboardingProviderApiKeyProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OnboardingProviderSignInAuthMethod.
 const (
 	OnboardingProviderSignInAuthMethodSignIn OnboardingProviderSignInAuthMethod = "sign_in"
@@ -22513,14 +22531,17 @@ type OnboardingProviderApiKey struct {
 	// AuthMethod Discriminator — this variant authenticates with an API key.
 	AuthMethod OnboardingProviderApiKeyAuthMethod `json:"auth_method"`
 
-	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+	// Endpoint Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
 	Endpoint *string `json:"endpoint,omitempty"`
 
-	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A catalog provider id, or — together with `endpoint` and `protocol` — the name of a custom endpoint. Anything else is rejected with 400.
 	Id string `json:"id"`
 
 	// Model The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// Protocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+	Protocol *OnboardingProviderApiKeyProtocol `json:"protocol,omitempty"`
 
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
 	Region *string `json:"region,omitempty"`
@@ -22528,6 +22549,9 @@ type OnboardingProviderApiKey struct {
 
 // OnboardingProviderApiKeyAuthMethod Discriminator — this variant authenticates with an API key.
 type OnboardingProviderApiKeyAuthMethod string
+
+// OnboardingProviderApiKeyProtocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+type OnboardingProviderApiKeyProtocol string
 
 // OnboardingProviderSignIn The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in").
 type OnboardingProviderSignIn struct {
@@ -23869,7 +23893,7 @@ type ProviderDependentRole string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {
-	// ApiBase Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+	// ApiBase Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
 	ApiBase *string `json:"api_base,omitempty"`
 
 	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
@@ -23884,7 +23908,7 @@ type ProviderUpdateRequest struct {
 	// Models User-supplied catalogue of model slugs for a provider that does NOT expose a live /models endpoint (custom / unknown OpenAI-compatible gateways). When present, these slugs replace the provider's stored catalogue and constrain the model picker. Ignored for providers WITH a live endpoint (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit to leave the existing list unchanged; send an empty array to clear it.
 	Models *[]string `json:"models,omitempty"`
 
-	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
 	Protocol *ProviderUpdateRequestProtocol `json:"protocol,omitempty"`
 
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider row whose catalog entry carries `regions` (CatalogProvider.regions). Precedence at runtime is row setting → `AWS_REGION` environment variable → the catalog's own default `region`. Ignored for a provider whose catalog entry carries no `regions`.
@@ -23894,7 +23918,7 @@ type ProviderUpdateRequest struct {
 // ProviderUpdateRequestAuthMethod Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
 type ProviderUpdateRequestAuthMethod string
 
-// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
 type ProviderUpdateRequestProtocol string
 
 // ProviderValidation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
