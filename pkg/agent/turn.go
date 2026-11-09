@@ -193,7 +193,10 @@ type turnState struct {
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
-	cancelMu        sync.Mutex
+	cancelMu sync.Mutex
+	// stopCheckpoint is the client's screen checkpoint stored by the winning
+	// user Stop claim (#1534, stop_checkpoint.go). Guarded by cancelMu.
+	stopCheckpoint  *stopCheckpoint
 	cancelFired     atomic.Bool               // true once handleCancel has claimed this turn
 	stopRequested   atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
 	abandoned       atomic.Bool               // true once a controller detaches a stuck turn goroutine
@@ -369,6 +372,10 @@ type turnState struct {
 	// call round UNLESS continueSameMessageID says this round continues the
 	// PREVIOUS round's message. Guarded by mu like every other field here.
 	currentMessageID string
+	// mintedMessageIDs lists every id nextRoundMessageID minted for this
+	// turn, in order (#1534): a Stop checkpoint keeps nothing of a message
+	// minted after the one the client showed. Guarded by mu.
+	mintedMessageIDs []string
 
 	// continueSameMessageID is a ONE-SHOT flag consumed by
 	// nextRoundMessageID (turn_stream.go): true only for the single round

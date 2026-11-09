@@ -378,8 +378,25 @@ func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlo
 		return wsHandlerReadLoopContinue
 	}
 	stopAll := f.Scope != nil && *f.Scope == "tree"
-	wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
+	wh.h.handleCancelShown(wh.wc, f.SessionId, stopAll, stopShownFromFrame(f))
 	return wsHandlerReadLoopNext
+}
+
+// stopShownFromFrame copies the web client's screen checkpoint (#1534,
+// CancelFrame.shown) into the engine's plain type. nil when the frame carries
+// none: the server then cuts the stopped answer where it received the Stop.
+func stopShownFromFrame(f generated.CancelFrame) *agent.StopShown {
+	if f.Shown == nil {
+		return nil
+	}
+	shown := &agent.StopShown{CodePoints: int(f.Shown.CodePoints)}
+	if f.Shown.TurnId != nil {
+		shown.TurnID = *f.Shown.TurnId
+	}
+	if f.Shown.MessageId != nil {
+		shown.MessageID = *f.Shown.MessageId
+	}
+	return shown
 }
 
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
@@ -395,6 +412,12 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 }
 
 func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll bool) {
+	h.handleCancelShown(wc, sessionID, stopAll, nil)
+}
+
+// handleCancelShown is handleCancelWithScope carrying the web client's screen
+// checkpoint (#1534, CancelFrame.shown). nil keeps the cut at server receipt.
+func (h *WSHandler) handleCancelShown(wc *wsConn, sessionID string, stopAll bool, shown *agent.StopShown) {
 	if sessionID == "" {
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -403,7 +426,7 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 		return
 	}
 
-	report, cascaded, outcome, staged, err := h.requestScopedStop(wc, sessionID, stopAll)
+	report, cascaded, outcome, staged, err := h.requestScopedStopShown(wc, sessionID, stopAll, shown)
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)

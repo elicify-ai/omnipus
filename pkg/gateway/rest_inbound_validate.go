@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -204,13 +205,28 @@ func formatSchemaError(err error) string {
 	// jsonschema/v6 ValidationError has a rich tree; use the top-level message
 	// which already summarizes the first failure nicely.
 	msg := err.Error()
+	// The first failure reads "at '<instance location>': <reason>". Keep a
+	// nested location (#1534: a cancel frame's /shown/message_id), so the
+	// message names the field it rejects; a failure at the document root
+	// keeps its bare reason, as before.
+	location := ""
+	if m := schemaErrorLocation.FindStringSubmatch(msg); m != nil {
+		location = m[1]
+	}
 	// Trim verbose path prefixes like "jsonschema: '' does not validate..."
 	// to leave just the actionable part.
 	if idx := strings.Index(msg, ": "); idx >= 0 {
 		msg = msg[idx+2:]
 	}
+	if location != "" {
+		msg = location + ": " + msg
+	}
 	return msg
 }
+
+// schemaErrorLocation matches the instance location of the first failure in
+// a jsonschema/v6 ValidationError message ("at '/shown/code_points': ...").
+var schemaErrorLocation = regexp.MustCompile(`at '([^']*)': `)
 
 // decodeAndValidate reads and validates r.Body against schemaName, then decodes
 // into dst. Returns true on success, false on any failure (error response

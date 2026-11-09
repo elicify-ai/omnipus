@@ -157,6 +157,7 @@ func (ts *turnState) nextRoundMessageID() string {
 		return ts.currentMessageID
 	}
 	ts.currentMessageID = uuid.New().String()
+	ts.recordMintedMessageIDLocked(ts.currentMessageID)
 	return ts.currentMessageID
 }
 
@@ -281,6 +282,15 @@ type streamerFailedSetter interface {
 // streamed.
 type streamerContinuationSetter interface {
 	SetContinuationContent(full string)
+}
+
+// streamerStopLimitSetter is an optional interface a Streamer may implement
+// to receive a user Stop's screen checkpoint (#1534): the number of Unicode
+// code points of this message's whole text the saved stopped answer keeps.
+// Called by finalizeStreamer before Finalize, only when the checkpoint limits
+// the streamer's message.
+type streamerStopLimitSetter interface {
+	SetStopLimit(keep int)
 }
 
 // streamerTruncationSetter is an optional interface a Streamer may implement
@@ -424,6 +434,16 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 		if truncReason != "" {
 			if tset, ok := s.(streamerTruncationSetter); ok {
 				tset.SetTruncation(truncReason)
+			}
+		}
+		// #1534 W2: hand the client's screen checkpoint to the streamer that
+		// saves the stopped answer, BEFORE Finalize, mirroring the
+		// continuation probe above. The streamer cuts the whole message text
+		// it persists (W1). The last streamer always carries the turn's
+		// current message id (stamped right after nextRoundMessageID).
+		if ls, ok := s.(streamerStopLimitSetter); ok {
+			if keep, limited := ts.stopKeepFor(ts.getCurrentMessageID()); limited {
+				ls.SetStopLimit(keep)
 			}
 		}
 		// Pass finalContent so the streamer can persist the assistant message
