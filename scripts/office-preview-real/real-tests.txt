@@ -1,0 +1,16 @@
+# The tests that need real LibreOffice or the real PDF renderer.
+# One line per top-level test: <package directory> <test name>.
+#
+# This list is the one source for all of these:
+#   - run-real-tests.sh runs exactly these, and fails unless each one passed
+#   - notice.sh names them in the normal Go jobs
+#   - the test helper refuses to hand a test over to the dedicated job unless
+#     it is listed here, so a test can never end up running nowhere
+pkg/preview TestPreviewOffice_RealStaleFormulaCacheRecalculatesToTwo
+pkg/preview TestPreviewRenderer_RealPagesGeometryAndDistinctPixelControl
+pkg/preview TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch
+pkg/preview/launcher TestRunLimitedLinuxThirteenHundredStartsHaveNoRuntimeFatals
+pkg/agent TestOfficeUpload_ImageOnlyPDFOffersPagesAndActionablePath
+pkg/gateway TestOfficePreview_RetryLibraryRendersOnlyForPerson
+pkg/gateway TestOfficePreview_RetryMissingIs403AndChangedIs409
+pkg/gateway TestOfficePreview_RetryPersistsInBrowserHistoryWithoutModelMedia

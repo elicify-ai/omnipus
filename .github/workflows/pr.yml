@@ -167,6 +167,9 @@ jobs:
               # nothing red. A change to a gate's own definition must never be
               # filtered against a stale copy of that definition.
               - 'scripts/**'
+              # The PDF renderer's C source and its pins are built and tested by
+              # the Office preview real programs job.
+              - 'native/**'
             spa:
               - 'src/**'
               - 'design-system/**'
@@ -1899,6 +1902,10 @@ jobs:
     env:
       # See comment on the lint job above.
       CGO_ENABLED: "0"
+      # Tests that need real LibreOffice or the real PDF renderer hand over
+      # to the job named here instead of failing BLOCKED. Only normal Go jobs
+      # set this; the dedicated job must not, and refuses to run if it is set.
+      OMNIPUS_OFFICE_REAL_TESTS_JOB: "Office preview real programs"
       # OPENROUTER_API_KEY is required by tests that boot a real gateway via
       # testutil.StartTestGateway (the test_harness override hook was removed
       # 2026-05-10; tests now hit real OpenRouter for any LLM-driven path).
@@ -1930,6 +1937,17 @@ jobs:
         # The real SPA remains built by Playwright and hermetic-build.
         run: |
           mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+
+      - name: Setup Python for the Office inspector tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install the Office inspector test packages
+        run: bash scripts/office-preview-real/python-test-deps.sh
+
+      - name: State which Office preview tests belong to the dedicated job
+        run: bash scripts/office-preview-real/notice.sh
 
       - name: Run go generate
         run: go generate ./...
@@ -2471,6 +2489,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, setup, go-test-plan]
     if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
+    env:
+      # Tests that need real LibreOffice or the real PDF renderer hand over
+      # to the job named here instead of failing BLOCKED. Only normal Go jobs
+      # set this; the dedicated job must not, and refuses to run if it is set.
+      OMNIPUS_OFFICE_REAL_TESTS_JOB: "Office preview real programs"
     strategy:
       fail-fast: false
       matrix:
@@ -2500,6 +2523,9 @@ jobs:
       - name: Prepare SPA embed stub (backend tests)
         run: |
           mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+
+      - name: State which Office preview tests belong to the dedicated job
+        run: bash scripts/office-preview-real/notice.sh
 
       - name: Run go generate
         run: go generate ./...
@@ -3053,6 +3079,65 @@ jobs:
             --exclude './pkg/api/generated/**' \
             --exclude './src/lib/api/generated/**' \
             --exclude './src/routeTree.gen.ts'
+  office-preview-real:
+    name: Office preview real programs
+    # The tests in scripts/office-preview-real/real-tests.txt, on real programs:
+    # the pinned official LibreOffice and an omnipus-pdfium built from its pins.
+    # Each test runs in its own process. The job fails if any test fails, is
+    # skipped, reports BLOCKED or did not run at all; run-real-tests.test.sh
+    # proves those checks can fail before the real tests start.
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
+    timeout-minutes: 75
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare SPA embed stub
+        run: |
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+
+      - name: Prove the pass checks can fail
+        run: bash scripts/office-preview-real/run-real-tests.test.sh
+
+      - name: Install the system libraries LibreOffice links against
+        # From the ELF NEEDED entries of soffice.bin and libmergedlo.so that the
+        # LibreOffice archive does not ship itself, plus a known font set.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-6 libxext6 libxinerama1 libcairo2 libcups2t64 libdbus-1-3 \
+            libfontconfig1 libfreetype6 libglib2.0-0t64 libnss3 libnspr4 fonts-liberation
+
+      - name: Restore downloaded archives
+        # Saves re-downloading only. provision.sh and build.sh check the
+        # SHA-256 of every archive, restored or fresh.
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/office-real-downloads
+          key: office-real-${{ hashFiles('scripts/office-preview-real/pins.env', 'native/omnipus-pdfium/pins.env') }}
+
+      - name: Provision the pinned LibreOffice and PDF renderer
+        run: bash scripts/office-preview-real/provision.sh "$RUNNER_TEMP/office-real" "$RUNNER_TEMP/office-real-downloads"
+
+      - name: Run the real-program tests
+        run: bash scripts/office-preview-real/run-real-tests.sh "$RUNNER_TEMP/office-real-logs"
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: office-preview-real-logs
+          path: ${{ runner.temp }}/office-real-logs
+          if-no-files-found: warn
+
   perf-smoke:
     name: Perf Smoke
     # ADR-067 step 12: skips when no Go-relevant file changed (see the
@@ -3890,6 +3975,7 @@ jobs:
       - chat-history-core
       - history-e2e-fixtures
       - security
+      - office-preview-real
       - perf-smoke
       - e2e-plan
       - playwright
