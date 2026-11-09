@@ -70,8 +70,8 @@ func TestGenuineSessionResend_RefusalBranches(t *testing.T) {
 }
 
 // guardResponse runs one request with cookieHeader through the real
-// PlantedCookieGuard wired with users, and returns the recorded response.
-func guardResponse(t *testing.T, users []config.UserConfig, cookieHeader string) *http.Response {
+// PlantedCookieGuard wired with users, and returns the response headers.
+func guardResponse(t *testing.T, users []config.UserConfig, cookieHeader string) http.Header {
 	t.Helper()
 	guard := PlantedCookieGuard(WithPlantedCookieSessionUsers(func() []config.UserConfig { return users }))
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -80,14 +80,14 @@ func guardResponse(t *testing.T, users []config.UserConfig, cookieHeader string)
 	w := httptest.NewRecorder()
 	guard(next).ServeHTTP(w, r)
 	resp := w.Result()
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	return resp
+	defer func() { _ = resp.Body.Close() }()
+	return resp.Header
 }
 
-func resentSessionCookies(t *testing.T, resp *http.Response) []*http.Cookie {
+func resentSessionCookies(t *testing.T, resp http.Header) []*http.Cookie {
 	t.Helper()
 	var out []*http.Cookie
-	for _, raw := range resp.Header.Values("Set-Cookie") {
+	for _, raw := range resp.Values("Set-Cookie") {
 		c, err := http.ParseSetCookie(raw)
 		require.NoError(t, err, raw)
 		if c.Name == SessionCookieName && c.Value != "" {
@@ -97,10 +97,10 @@ func resentSessionCookies(t *testing.T, resp *http.Response) []*http.Cookie {
 	return out
 }
 
-func clearLineCount(t *testing.T, resp *http.Response) int {
+func clearLineCount(t *testing.T, resp http.Header) int {
 	t.Helper()
 	n := 0
-	for _, raw := range resp.Header.Values("Set-Cookie") {
+	for _, raw := range resp.Values("Set-Cookie") {
 		c, err := http.ParseSetCookie(raw)
 		require.NoError(t, err, raw)
 		if c.Name == SessionCookieName && c.Value == "" {
@@ -198,7 +198,7 @@ func TestPlantedCookieResend_ExpiryCheckedAfterVerification(t *testing.T) {
 		require.True(t, resent[0].Expires.Equal(deadline),
 			"Expires is issued_at + 24 h to the second: want %s, got %s", deadline, resent[0].Expires)
 		require.Zero(t, resent[0].MaxAge, "no Max-Age attribute on the re-send")
-		for _, raw := range resp.Header.Values("Set-Cookie") {
+		for _, raw := range resp.Values("Set-Cookie") {
 			if strings.HasPrefix(raw, SessionCookieName+"="+tok) {
 				require.NotContains(t, strings.ToLower(raw), "max-age", "re-send line: %q", raw)
 			}
