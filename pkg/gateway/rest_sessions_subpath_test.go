@@ -18,7 +18,7 @@
 //	PUT/DELETE .../messages|messages/0  → 405  (issue primary rule "any sub-path
 //	                                      returns 405": messages is a DEFINED
 //	                                      GET-only sub-resource, so a non-GET on it
-//	                                      is Method Not Allowed, RFC 9110 §15.5.5;
+//	                                      is Method Not Allowed, RFC 9110 §15.5.6;
 //	                                      the issue names messages/{position} — the
 //	                                      #1452 D2 per-message address — explicitly)
 //	PUT/DELETE .../unknown              → 404  (issue: "or 404 for an unknown
@@ -340,4 +340,75 @@ func TestSessionsSubPathToolResults(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 		subPathAssertSessionIntact(t, env, id, originalTitle)
 	})
+}
+
+// TestSessionsSubPathRouteBoundaries pins CHECK round 2 F1's held-out input
+// classes through the real router. The oracle is getSession's contract:
+// messages and tool-results (including descendants) are GET-only and advertise
+// Allow: GET on 405; unknown sub-paths return 404. Neither refusal may rename
+// or delete the session. These generic refusals specify no exact error text.
+func TestSessionsSubPathRouteBoundaries(t *testing.T) {
+	env := u1NewEnv(t, false)
+	position := "hp1_" + strings.Repeat("A", 43) // getSessionHistoryEntry's 47-character pattern.
+
+	groups := []struct {
+		name     string
+		subPaths []string
+		methods  []string
+		expected int
+		allow    string
+	}{
+		{
+			name: "known GET-only resources",
+			subPaths: []string{
+				"messages", "messages/", "messages/" + position, "messages/a/b/c",
+				"tool-results", "tool-results/", "tool-results/abc", "tool-results/a/b",
+			},
+			methods: []string{
+				http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete,
+				http.MethodHead, http.MethodOptions,
+			},
+			expected: http.StatusMethodNotAllowed,
+			allow:    sessionsSubPathAllowGet,
+		},
+		{
+			name: "unknown names including look-alikes",
+			subPaths: []string{
+				"unknown", "messagesfoo", "messages-x", "message", "Messages", "MESSAGES",
+				"tool-resultsfoo", "tool_results", "TOOL-RESULTS", "messages.json", "x/messages",
+				"unknown/messages", "a/b/c",
+			},
+			methods: []string{
+				http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodPut, http.MethodDelete,
+			},
+			expected: http.StatusNotFound,
+		},
+	}
+
+	for _, group := range groups {
+		t.Run(group.name, func(t *testing.T) {
+			for _, subPath := range group.subPaths {
+				for _, method := range group.methods {
+					t.Run(method+"/"+subPath, func(t *testing.T) {
+						id, originalTitle := subPathNewChat(t, env)
+						path := "/api/v1/sessions/" + id + "/" + subPath
+						body := ""
+						switch method {
+						case http.MethodPost, http.MethodPatch, http.MethodPut:
+							body = sessionsSubPathRequestBody
+						}
+
+						rec := subPathDo(env, method, path, body)
+						assert.Equal(t, group.expected, rec.Code,
+							"contract refusal for %s %s: body=%s", method, path, rec.Body.String())
+						if group.allow != "" {
+							assert.Equal(t, group.allow, rec.Header().Get("Allow"),
+								"GET-only sub-resource must advertise exactly Allow: GET (%s %s)", method, path)
+						}
+						subPathAssertSessionIntact(t, env, id, originalTitle)
+					})
+				}
+			}
+		})
+	}
 }
