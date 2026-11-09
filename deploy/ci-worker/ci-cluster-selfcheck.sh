@@ -15,6 +15,15 @@
 #   5. a machine we started that is running a gate (busy) at exit is not stopped
 #   6. the DEFAULT tier map (no CI_CLUSTER_TIERS): the shipped machine ids and gates per tier, a
 #      per-tier id override, and an explicitly EMPTY id skipping its tier while an UNSET one does not
+#   7. a gate whose console stays OPEN with no verdict while the remote gate process is
+#      GONE (the 2026-10-18 half-open hang, lint@d52b70bdc) ends in the explicit
+#      STALLED/DIED verdict with exit 1 within the watchdog window — never a hang
+#   8. a gate whose console dropped but whose REMOTE RUNLOG holds a verdict is
+#      recovered and PASSes (a transport-only drop is not a gate failure)
+#   9. a HEALTHY slow gate (console open ~3s, remote process alive) survives the
+#      watchdog and PASSes — liveness, not an idle timer, is what is checked
+#  10. a gate whose runci.sh wrote the KILLED-by-signal trailer gets the
+#      FAIL:killed-by-signal verdict, not a STALLED stamp over the trailer
 #
 # Usage: bash deploy/ci-worker/ci-cluster-selfcheck.sh   (exit 0 = all cases behave)
 set -uo pipefail
@@ -35,7 +44,13 @@ mkdir -p "$TMP/bin"
 # are passed through the environment, so nothing in it needs escaping.
 cat >"$TMP/bin/fly" <<'FAKE'
 #!/usr/bin/env bash
-# fake flyctl: state lives in files under $FAKE_DIR (state-<id>, owner-<id>, busy-<id>, die-<id>)
+# fake flyctl: state lives in files under $FAKE_DIR
+#   state-<id> machine state; owner-<id> owner marker; busy-<id> a live gate process;
+#   die-<id> the console dies mid-gate (2026-10-11 machine-stop case);
+#   hang-<id> the console stays OPEN with no verdict (2026-10-18 half-open session case);
+#   slow-<id> the console stays open ~3s and then completes (healthy long gate);
+#   unreach-<id> pgrep probes fail (machine unreachable mid-run);
+#   runlog-<id> contents the sftp get delivers (default: a verdict-bearing RUNLOG)
 D="$FAKE_DIR"
 echo "$*" >> "$D/calls.log"
 arg() { local want="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$want" ] && { echo "$2"; return; }; shift; done; }
@@ -58,7 +73,16 @@ case "$1 $2" in
       "md5sum /cache/runci.sh") echo "$FAKE_MD5  /cache/runci.sh"; exit 0 ;;
       *">"*"/tmp/ci-owner"*) tok=$(printf '%s' "$cmd" | sed -n "s/.*echo \([^ ]*\) > .*/\1/p"); echo "$tok" > "$D/owner-$id"; exit 0 ;;
       "cat /tmp/ci-owner") cat "$D/owner-$id" 2>/dev/null || exit 1; exit 0 ;;
-      pgrep*) [ -f "$D/busy-$id" ] && exit 0; exit 1 ;;
+      pgrep*)
+        # unreachable model: flyctl prints an error to STDERR and exits 1
+        if [ -f "$D/unreach-$id" ]; then echo "Error: ssh shell: connection refused" >&2; exit 1; fi
+        # a real pgrep prints the matched pids on stdout — exit 0 with EMPTY
+        # output means 'no match', which is how ci-cluster.sh reads it.
+        # busy- = OUR gate's live process (the gate console clears it when the
+        # gate completes); keepbusy- = a process that outlives our gate (a
+        # foreign run), so `busy at exit` cases can model it.
+        if [ -f "$D/busy-$id" ] || [ -f "$D/keepbusy-$id" ]; then echo 4242; exit 0; fi
+        exit 1 ;;
       /cache/runci.sh*)
         gate=${cmd##* }
         echo "RUNLOG: /cache/logs/$gate@x.log"
@@ -68,12 +92,33 @@ case "$1 $2" in
         # background poller (which lost the race under load once this check ran in CI)
         if [ -f "$D/foreign-$id" ]; then echo "ci-cluster:99999:other:1" > "$D/owner-$id"; fi
         if [ -f "$D/die-$id" ]; then echo stopped > "$D/state-$id"; echo "Error: ssh shell: wait: remote command exited without exit status or exit signal"; exit 1; fi
+        # half-open-session model: the console never returns and never prints a verdict;
+        # the dispatcher's watchdog must end the tier (killed from outside on detection)
+        if [ -f "$D/hang-$id" ]; then sleep 45; exit 0; fi
+        # healthy-long-gate model: no output growth for ~3s (longer than the test
+        # watchdog's strike window), then a normal completion — a pure idle-timer
+        # watchdog would kill this; a liveness one must not
+        if [ -f "$D/slow-$id" ]; then sleep 3; rm -f "$D/busy-$id"; echo "ALL GATES GREEN"; exit 0; fi
+        # runci.sh's signal-death trailer, delivered then the session ends without a verdict
+        if [ -f "$D/killed-$id" ]; then echo "RUNCI: KILLED by signal HUP — no verdict written; gate state at death is unknown"; exit 1; fi
+        # our gate's process is gone once the gate completes (case 9's stop
+        # assert depends on this matching reality)
+        rm -f "$D/busy-$id"
         echo "ALL GATES GREEN"; exit 0 ;;
       ls*) echo "/cache/logs/x.log"; exit 0 ;;
+      # the dispatcher's run-log fallback runs `sh -c 'ls -1t …'` (the console
+      # has no shell, so pipes and globs must be wrapped) — model it the same
+      sh\ -c*) echo "/cache/logs/x.log"; exit 0 ;;
     esac
     exit 0 ;;
   "ssh sftp")
-    dest="$5"; printf 'HEAD: %s selfcheck\nALL GATES GREEN\n' "$FAKE_SHORT" > "$dest"; exit 0 ;;
+    id=$(arg --machine "$@")
+    st=$(cat "$D/state-$id" 2>/dev/null)
+    # a stopped machine serves no files — the real sftp get fails to connect
+    if [ "$st" != "started" ]; then echo "Error: machine $id is not started" >&2; exit 1; fi
+    dest="$5"
+    if [ -f "$D/runlog-$id" ]; then cat "$D/runlog-$id" > "$dest"; else printf 'HEAD: %s selfcheck\nALL GATES GREEN\n' "$FAKE_SHORT" > "$dest"; fi
+    exit 0 ;;
 esac
 echo "fake fly: unhandled: $*" >&2; exit 1
 FAKE
@@ -131,7 +176,8 @@ run_cluster $'go|mA|gofmt go-build\nxplat|mB|cli-verb-guard'
 grep -q 'tier go job exited 1' "$OUT" || fail "(3) the dead tier did not report a non-zero job exit"
 grep -q 'tier go job exited 0' "$OUT" && fail "(3) the dead tier reported 'exited 0'"
 grep -q 'OVERALL: FAIL' "$OUT" || fail "(3) no OVERALL: FAIL"
-[ "$FAIL" -eq 0 ] && ok "(3) a machine stopped mid-run fails its tier"
+grep -q 'STALLED/DIED' "$OUT" || fail "(3) the console-exit-no-verdict path did not say STALLED/DIED"
+[ "$FAIL" -eq 0 ] && ok "(3) a machine stopped mid-run fails its tier with STALLED/DIED"
 
 # 4. a machine we started now carries another dispatcher's marker -> not stopped
 new_case c4; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
@@ -141,8 +187,9 @@ grep -q 'STOP mB' "$FAKE_DIR/stops.log" && fail "(4) stopped a machine carrying 
 grep -q 'STOP mA' "$FAKE_DIR/stops.log" || fail "(4) control: the machine with our own marker (mA) was not stopped"
 [ "$FAIL" -eq 0 ] && ok "(4) foreign owner marker respected"
 
-# 5. busy at exit -> not stopped
-new_case c5; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"; touch "$FAKE_DIR/busy-mB"
+# 5. busy at exit -> not stopped (keepbusy: a process that outlives OUR gate —
+#    our own gate's process is cleared by the fake console when it completes)
+new_case c5; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"; touch "$FAKE_DIR/keepbusy-mB"
 run_cluster "$TIERS"
 grep -q 'STOP mB' "$FAKE_DIR/stops.log" && fail "(5) stopped a machine that is running a gate"
 grep -q 'STOP mA' "$FAKE_DIR/stops.log" || fail "(5) control: the idle machine (mA) was not stopped"
@@ -218,6 +265,75 @@ grep -q "tiers 'go' and 'node' share machine mA — one tier per machine" "$OUT"
 [ ! -s "$FAKE_DIR/calls.log" ] || fail "(7) Fly was called before rejecting the overlapping map"
 [ "$FAIL" -eq 0 ] && ok "(7) shared machine refused (exit 2), zero Fly calls"
 
+# ---- cases 8-11: the 2026-10-18 half-open-session hang and its verdicts ----
+# Like run_cluster, but at the watchdog's fastest cadence AND with a hard 60s
+# cap: cases 8 and 9 have a console that would hang forever, so if the
+# watchdog is broken these cases must FAIL by cap (RC=143), not hang the
+# selfcheck. RC=1/0 within the cap IS the no-hang proof.
+run_cluster_bounded() { # $1 tiers-spec
+  OUT="$TMP/out.txt"
+  PATH="$TMP/bin:$PATH" CI_CLUSTER_APP=selfcheck CI_CLUSTER_START_TIMEOUT=20 CI_CLUSTER_LOG_DIR="$FAKE_DIR/logs" \
+    CI_CLUSTER_TIERS="$1" CI_CLUSTER_WATCH_INTERVAL=1 CI_CLUSTER_DEAD_STRIKES=2 GIT_TERMINAL_PROMPT=0 \
+    bash "$CLUSTER" "$FULL" >"$OUT" 2>&1 &
+  local p=$! i=0
+  while kill -0 "$p" 2>/dev/null && [ "$i" -lt 60 ]; do sleep 1; i=$((i + 1)); done
+  if kill -0 "$p" 2>/dev/null; then
+    kill -9 "$p" 2>/dev/null; wait "$p" 2>/dev/null; RC=143
+    echo "selfcheck: dispatcher was KILLED at the 60s cap — it HUNG (watchdog broken?)" >> "$OUT"
+    return
+  fi
+  wait "$p"; RC=$?
+}
+
+# 8. half-open session: console open, no verdict, remote process GONE →
+#    explicit STALLED/DIED, exit 1, within the watchdog window, machine stopped
+#    (its evidence was collected + verified) — and NOT a hang
+new_case c8; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
+touch "$FAKE_DIR/hang-mA"
+printf 'HEAD: %s selfcheck\ncut off mid-line inside the size-budget output, no verdict\n' "$FAKE_SHORT" > "$FAKE_DIR/runlog-mA"
+run_cluster_bounded $'go|mA|gofmt\nxplat|mB|cli-verb-guard'
+[ "$RC" -eq 1 ] || fail "(8) expected STALLED exit 1 within the cap, got $RC"
+grep -q 'STALLED/DIED' "$OUT" || fail "(8) no STALLED/DIED verdict"
+grep -q 'FAIL:stalled' "$OUT" || fail "(8) summary did not classify the verdict as FAIL:stalled"
+grep -q 'gate gofmt on machine mA' "$OUT" || fail "(8) the verdict does not name the gate and machine"
+grep -q 'tier go job exited 1' "$OUT" || fail "(8) the stalled tier did not report a non-zero job exit"
+grep -q 'STOP mA' "$FAKE_DIR/stops.log" || fail "(8) the stalled machine's evidence was not collected and it was not stopped"
+[ -s "$FAKE_DIR/logs/worker/go-gofmt.log" ] || fail "(8) no worker copy of the stalled gate's run log"
+[ "$FAIL" -eq 0 ] && ok "(8) half-open hang ends in STALLED/DIED (exit 1), evidence collected, machine stopped"
+
+# 9. transport-only drop: console dropped but the remote RUNLOG holds the
+#    verdict → RECOVERED, the gate PASSes, exit 0
+new_case c9; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
+touch "$FAKE_DIR/hang-mA"
+printf 'HEAD: %s selfcheck\nALL GATES GREEN\n' "$FAKE_SHORT" > "$FAKE_DIR/runlog-mA"
+run_cluster_bounded $'go|mA|gofmt\nxplat|mB|cli-verb-guard'
+[ "$RC" -eq 0 ] || fail "(9) expected recovered verdict exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
+grep -q 'verdict recovered from' "$OUT" || fail "(9) the recovery was not reported"
+grep -q 'OVERALL: PASS' "$OUT" || fail "(9) a recovered complete run did not PASS"
+[ "$FAIL" -eq 0 ] && ok "(9) transport-only drop recovers the verdict from the remote RUNLOG"
+
+# 10. healthy slow gate: console open ~3s (longer than 2 probes), remote process
+#    ALIVE → survives the watchdog and PASSes (liveness, not a timer)
+new_case c10; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
+touch "$FAKE_DIR/slow-mA" "$FAKE_DIR/busy-mA"
+run_cluster_bounded $'go|mA|gofmt\nxplat|mB|cli-verb-guard'
+[ "$RC" -eq 0 ] || fail "(10) expected the healthy slow gate to PASS, got $RC: $(grep -m1 'ERROR\|STALLED' "$OUT")"
+grep -q 'OVERALL: PASS' "$OUT" || fail "(10) the healthy slow gate did not PASS"
+grep -q 'STOP mA' "$FAKE_DIR/stops.log" || fail "(10) control: the slow machine was not stopped"
+[ "$FAIL" -eq 0 ] && ok "(10) healthy slow gate survives the liveness watchdog"
+
+# 11. runci.sh died on a signal and wrote its trailer → FAIL:killed-by-signal,
+#     and the STALLED/DIED stamp is NOT written over the trailer
+new_case c11; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
+touch "$FAKE_DIR/killed-mA"
+printf 'HEAD: %s selfcheck\nno verdict — the run died on a signal\n' "$FAKE_SHORT" > "$FAKE_DIR/runlog-mA"
+run_cluster $'go|mA|gofmt\nxplat|mB|cli-verb-guard'
+[ "$RC" -eq 1 ] || fail "(11) expected FAIL exit 1, got $RC"
+grep -q 'FAIL:killed-by-signal' "$OUT" || fail "(11) summary did not classify the verdict as FAIL:killed-by-signal"
+grep -q 'KILLED by a signal' "$OUT" || fail "(11) the dispatcher did not say the gate was killed by a signal"
+grep -q 'CI-CLUSTER: STALLED/DIED' "$FAKE_DIR/logs/go-gofmt.log" && fail "(11) a STALLED/DIED stamp was written over the KILLED trailer"
+[ "$FAIL" -eq 0 ] && ok "(11) signal death classified as FAIL:killed-by-signal, trailer preserved"
+
 if [ "$FAIL" -ne 0 ]; then echo "selfcheck: ci-cluster.sh does not behave - see above" >&2; exit 1; fi
-echo "selfcheck: OK (ci-cluster.sh never stops a machine it did not start, refuses unreadable states, fails a tier whose machine dies)"
+echo "selfcheck: OK (never stops a machine it did not start; refuses unreadable states; a dead session ends in STALLED/DIED or a RECOVERED verdict — never a silent hang; healthy slow gates survive; signal deaths keep their trailer)"
 exit 0
