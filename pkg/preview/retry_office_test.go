@@ -29,9 +29,9 @@ import (
 // same process had primed the sandbox). The publication-before-entry oracle
 // moves to the parent, which reads the record while the fake is held at a
 // work-folder barrier (officeRetryRunWithOwnerBarriers): the record must then
-// name THIS start's launcher — exactly what the child's entry-time snapshot
-// proved, from a vantage D1 allows. The fake carries the rest itself: its
-// own launcher identity, profile, and input.
+// name THIS start's launcher. The gateway reads the actual kernel start times
+// independently of that record: Linux also denies the fake's /proc reads. The
+// fake carries its own PID/launcher PID, environment, profile, and input.
 type officeRetryReceipt struct {
 	fakeOfficeReceipt
 	Start         string `json:"start"`
@@ -42,6 +42,13 @@ type officeRetryReceipt struct {
 }
 
 func officeRetryProcess(behavior string) int {
+	return officeRetryProcessWithStartReader(behavior, processStart)
+}
+
+// The reader is a regression tripwire: this confined fake must never call the
+// OS process-metadata edge. Linux /proc is outside its allowed folders. The
+// gateway-side barrier reads the real kernel identities while the target waits.
+func officeRetryProcessWithStartReader(behavior string, _ func(int) (string, error)) int {
 	starts, err := filepath.Glob("retry-start-*.json")
 	if err != nil {
 		return 70
@@ -55,19 +62,11 @@ func officeRetryProcess(behavior string) int {
 	if err != nil {
 		return 74
 	}
-	start, err := processStart(os.Getpid())
-	if err != nil {
-		return 75
-	}
 	launcherPID := os.Getpid()
 	if runtime.GOOS == "windows" {
 		launcherPID = os.Getppid() // Windows relays through the job-owning parent.
 	}
-	launcherStart, err := processStart(launcherPID)
-	if err != nil {
-		return 75
-	}
-	receipt := officeRetryReceipt{fakeOfficeReceipt: fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}, Start: start, LauncherPID: launcherPID, LauncherStart: launcherStart, Profile: string(profile), Input: string(input)}
+	receipt := officeRetryReceipt{fakeOfficeReceipt: fakeOfficeReceipt{Args: os.Args[1:], Env: os.Environ(), PID: os.Getpid()}, LauncherPID: launcherPID, Profile: string(profile), Input: string(input)}
 	if n == 2 && strings.HasSuffix(behavior, "_block") {
 		self, executableErr := os.Executable()
 		if executableErr != nil {
@@ -202,10 +201,10 @@ func officeRetryReceipts(t *testing.T, c *call) []officeRetryReceipt {
 	return receipts
 }
 
-// assertOfficeRetryRecord checks what the fake itself observed (child-side
-// identity, seeded input, AD-7 profile). The owner-record checks live in
-// assertOfficeOwnerRecord, read by the parent from the trusted record while
-// the fake is held at its barrier.
+// assertOfficeRetryRecord checks the fake's PID/input/profile and the kernel
+// start times independently observed by the gateway. The owner-record checks
+// live in assertOfficeOwnerRecord, read by the parent from the trusted record
+// while the fake is held at its barrier.
 func assertOfficeRetryRecord(t *testing.T, r officeRetryReceipt) {
 	t.Helper()
 	if runtime.GOOS != "windows" {
@@ -239,10 +238,10 @@ func assertOfficeRetryRecord(t *testing.T, r officeRetryReceipt) {
 // assertOfficeOwnerRecord is T-78's publication-before-entry oracle, read
 // from the parent — the vantage §3.4 D1 allows. While the start is held at
 // the fake's work-folder barrier, the trusted record must already name THIS
-// start's launcher: state running, launcher PID and start equal to the fake's
-// own observations, executable recorded. This is what the converter's own
-// entry-time snapshot used to prove, before D1/D8c rightly made the record
-// unreachable to it.
+// start's launcher: state running, launcher PID equal to the fake's own PID
+// observation, start equal to the gateway's independent kernel query, and
+// executable recorded. Neither the owner record nor Linux /proc is read by
+// the confined converter.
 func assertOfficeOwnerRecord(t *testing.T, c *call, receipt officeRetryReceipt, executable string) {
 	t.Helper()
 	owner := readPreviewOwner(t, c)
@@ -268,6 +267,18 @@ func officeRetryWaitForStart(t *testing.T, c *call, n int, finished <-chan struc
 		raw, readErr := os.ReadFile(path)
 		var receipt officeRetryReceipt
 		if readErr == nil && json.Unmarshal(raw, &receipt) == nil {
+			// The target can report its PID without /proc, but Linux denies its
+			// start-time lookup. Observe both real kernel identities here in the
+			// gateway, NOT from owner.json, while the target waits for release.
+			require.Empty(t, receipt.Start, "instrument: the confined fake did not read process metadata")
+			require.Empty(t, receipt.LauncherStart)
+			receipt.Start, readErr = processStart(receipt.PID)
+			require.NoError(t, readErr, "instrument: the live target's kernel identity is readable by the gateway")
+			receipt.LauncherStart, readErr = processStart(receipt.LauncherPID)
+			require.NoError(t, readErr, "instrument: the live launcher's kernel identity is readable by the gateway")
+			updated, encodeErr := json.Marshal(receipt)
+			require.NoError(t, encodeErr)
+			require.NoError(t, os.WriteFile(path, updated, 0600), "instrument: retain gateway-observed identities with the target receipt")
 			return receipt, true
 		}
 		select {

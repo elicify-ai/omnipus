@@ -41,6 +41,26 @@ func spawnGroupedSleep(t *testing.T, seconds string) (pid int, start string, cle
 	}
 }
 
+// The owner record must name the executable's real path, not an invocation
+// spelling through a symlink. Linux compares /proc/<pid>/exe exactly.
+func recoveryRecordedSleepExecutable(t *testing.T, command string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(command)
+	require.NoError(t, err, "instrument: resolve the executable before writing a live recovery identity")
+	return resolved
+}
+
+// A portable fixture control for merged-/usr Linux: make the alias explicit,
+// rather than assuming this Mac's /bin has the CI runner's symlink layout.
+func TestPreviewRecovery_SleeperRecordUsesResolvedExecutable(t *testing.T) {
+	target, err := filepath.EvalSymlinks("/bin/sleep")
+	require.NoError(t, err)
+	alias := filepath.Join(t.TempDir(), "sleep-alias")
+	require.NoError(t, os.Symlink(target, alias))
+	require.Equal(t, target, recoveryRecordedSleepExecutable(t, alias),
+		"the recovery fixture must record the known symlink target, not its invocation spelling")
+}
+
 // T-94 / §3.4 D4 (FR-051): recovery derives the stopped group from the
 // VERIFIED launcher's PID, never from a stored number. A live launcher-like
 // process holds a grandchild in its group; an unrelated harmless process lives
@@ -49,6 +69,7 @@ func spawnGroupedSleep(t *testing.T, seconds string) (pid int, start string, cle
 // unrelated process lives. The grandchild is required so that deleting group
 // termination altogether cannot pass. Unix only — Windows is T-99.
 func TestPreviewRecovery_StopsOnlyTheVerifiedProcessGroup(t *testing.T) {
+	executable := recoveryRecordedSleepExecutable(t, "/bin/sleep")
 	launcherPID, launcherStart, closeLauncher := spawnGroupedSleep(t, "60")
 	defer closeLauncher()
 	// Grandchild: a child of the test started DIRECTLY into the launcher-like
@@ -80,16 +101,22 @@ func TestPreviewRecovery_StopsOnlyTheVerifiedProcessGroup(t *testing.T) {
 		"gateway_pid":   os.Getpid(),
 		"gateway_start": "not-current-start",
 		"launcher": map[string]any{
-			"pid": launcherPID, "start": launcherStart, "executable": "/bin/sleep",
+			"pid": launcherPID, "start": launcherStart, "executable": executable,
 		},
 		"pgid":        unrelatedPID,
-		"executables": []string{"/bin/sleep"},
+		"executables": []string{executable},
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ownerFile), record, 0o600))
 
+	liveExecutable, err := processExecutable(launcherPID)
+	require.NoError(t, err, "instrument: the live launcher's executable is readable")
+	require.True(t, identityMatches(procIdentity{PID: launcherPID, Start: launcherStart, Executable: executable}, []string{executable}),
+		"T-94 fixture must match before recovery; recorded=%q live=%q", executable, liveExecutable)
+	t.Logf("T-94 verified fixture: recorded executable=%q live executable=%q", executable, liveExecutable)
 	var report RecoveryReport
 	recoverOne(dir, os.Getpid(), mustProcessStart(t, os.Getpid()), &report)
+	t.Logf("T-94 recovery report before death assertions: %+v", report)
 
 	require.Eventually(t, func() bool { return !processAlive(launcherPID) },
 		5*time.Second, 20*time.Millisecond, "T-94: the verified launcher is stopped")

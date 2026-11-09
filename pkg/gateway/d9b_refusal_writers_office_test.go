@@ -283,13 +283,16 @@ func d9bWriterRows() []d9bWriterRow {
 			vendor := httptest.NewServer(deviceCodeVendorMux(t, &state))
 			t.Cleanup(vendor.Close)
 			withDeviceCodeVendor(t, vendor)
-			startW := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in", nil)
+			// newProbeAPI pins hosted mode: both requests need the signed-in
+			// operator, even before onboarding completes (release fbaad673f).
+			const operator = "operator@example.com"
+			startW := doJSONWithUser(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in", nil, operator)
 			require.Equal(t, http.StatusOK, startW.Code, startW.Body.String())
 			var startResp gen.SignInStartResponse
 			require.NoError(t, json.Unmarshal(startW.Body.Bytes(), &startResp))
 			refusal, before := d9SeedOverlap(t, api)
-			w := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll",
-				gen.SignInPollRequest{DeviceAuthId: startResp.DeviceAuthId})
+			w := doJSONWithUser(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll",
+				gen.SignInPollRequest{DeviceAuthId: startResp.DeviceAuthId}, operator)
 			return d9Outcome{w.Code, w.Body.Bytes(), api.configPath(), before}, d9bSignInPrefix + refusal
 		}},
 		{"34_channel_outbound", func(t *testing.T) (d9Outcome, string) {
