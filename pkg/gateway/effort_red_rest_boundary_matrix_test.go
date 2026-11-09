@@ -5,6 +5,7 @@ package gateway
 // Real handlers and durable files; no callback stands in for persistence.
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -33,7 +34,7 @@ func effortRESTSnapshot(t *testing.T, home string) map[string]string {
 	out := map[string]string{}
 	for _, root := range []string{filepath.Join(home, "config.json"), filepath.Join(home, "entities", "agents")} {
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}
 			if err != nil {

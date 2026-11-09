@@ -181,6 +181,25 @@ type restAPIRunProviderDelete struct {
 	oauthRef       string
 }
 
+// checkNewDefault is runProviderDelete's guard for a provider that backs the
+// default model: new_default is required and valid, and its effort is
+// resolved (S-62) into rd.newEffort. A non-zero status is the refusal.
+func (rd *restAPIRunProviderDelete) checkNewDefault(cfg *config.Config) (status int, errMsg, errField string) {
+	if rd.newDefault == nil {
+		return http.StatusConflict, "provider backs the default model; supply new_default", ""
+	}
+	if st, msg, field := rd.a.validateProviderDeleteNewDefault(cfg, rd.providerID, rd.newDefault); st != 0 {
+		return st, msg, field
+	}
+	effort, refusal := rd.a.defaultModelEffort(cfg.Agents.Defaults.DefaultModel,
+		strings.TrimSpace(rd.newDefault.Provider), strings.TrimSpace(rd.newDefault.Model), rd.newDefault.ReasoningEffort)
+	if refusal != "" {
+		return http.StatusBadRequest, refusal, "new_default.reasoning_effort"
+	}
+	rd.newEffort = effort
+	return 0, "", ""
+}
+
 // runProviderDelete recomputes the deletion facts and runs steps 0-4 under
 // a.configMu. Returns exactly one of:
 //   - resp non-nil, status 200: all steps completed (caller runs step 5);
@@ -206,19 +225,9 @@ func (a *restAPI) runProviderDelete(
 	backsDefault := providerBacksDefault(cfg, rd.providerID)
 
 	if backsDefault {
-		if rd.newDefault == nil {
-			return nil, http.StatusConflict,
-				"provider backs the default model; supply new_default", ""
-		}
-		if st, msg, field := rd.a.validateProviderDeleteNewDefault(cfg, rd.providerID, rd.newDefault); st != 0 {
+		if st, msg, field := rd.checkNewDefault(cfg); st != 0 {
 			return nil, st, msg, field
 		}
-		effort, refusal := rd.a.defaultModelEffort(cfg.Agents.Defaults.DefaultModel,
-			strings.TrimSpace(rd.newDefault.Provider), strings.TrimSpace(rd.newDefault.Model), rd.newDefault.ReasoningEffort)
-		if refusal != "" {
-			return nil, http.StatusBadRequest, refusal, "new_default.reasoning_effort"
-		}
-		rd.newEffort = effort
 	}
 
 	rd.oldPair = cfg.Agents.Defaults.DefaultModel

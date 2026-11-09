@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,15 @@ func (s *bootDownloadStream) bodyClosedStamp() bootEventStamp {
 // pending: one chunk is on disk and the second read is blocked.
 func bootDownloadInFlight(t *testing.T) (*runContextWithOptions, *bootDownloadStream, string) {
 	t.Helper()
+	// Precondition, not a tolerance: on Linux the managed Chrome download
+	// exists only for amd64. On any other Linux architecture production
+	// refuses before a single byte is requested
+	// (pkg/tools/browser/installer.go::cftPlatform: "chrome-for-testing has
+	// no linux/<arch> build"), so there is no in-flight download for a boot
+	// drain to join; the Cross-Platform ubuntu-24.04-arm leg proved it.
+	if runtime.GOOS == "linux" && runtime.GOARCH != "amd64" {
+		t.Skipf("no managed Chrome download exists on linux/%s (installer.go::cftPlatform refuses), so this instrument cannot hold one open", runtime.GOARCH)
+	}
 	home, _ := bootFixture(t)
 	bootEditedPlan(t, home)
 	t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "1")

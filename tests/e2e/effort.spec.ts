@@ -40,6 +40,14 @@ const test=base.extend<{effort:Environment}>({
    gateway=await GatewayProcess.start({apiBase:`http://127.0.0.1:${address.port}`,model:MODEL})
    dev=await historyDevOrigin(gateway.baseURL,info)
    const ids=await createTerminalSession(gateway)
+   // createTerminalSession pins the shared fallback pair (ec6b9cf0d); this spec's
+   // chip oracles are about MODEL, the only model the peer and catalog serve.
+   const current=await gateway.apiFetch('GET',`/api/v1/agents/${ids.agent.id}`)
+   expect(current.ok,current.raw).toBe(true)
+   const revision=(current.body as {revision?:string}).revision
+   expect(revision,'fixture: the agent exposes its ADR-090 revision').toBeTruthy()
+   const pinned=await gateway.apiFetch('PUT',`/api/v1/agents/${ids.agent.id}`,{provider:'openrouter',model:MODEL,revision})
+   expect(pinned.ok,pinned.raw).toBe(true)
    await page.context().addCookies((await gateway.browserStorageState()).cookies)
    await page.route('**/api/v1/providers/catalog*',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(CATALOG)}))
    await use({origin:dev.origin,sessionId:ids.session.id,otherId:ids.otherSession.id,agentId:ids.agent.id,gateway})

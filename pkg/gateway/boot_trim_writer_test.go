@@ -60,7 +60,7 @@ func firstProfileTouch(t *testing.T, profileRoot string, plantedDirs []string) {
 			return
 		}
 		for _, dir := range plantedDirs {
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
+			if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 				return
 			}
 		}
@@ -185,7 +185,7 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 func plantedCachesRemaining(plantedDirs []string) []string {
 	var remaining []string
 	for _, dir := range plantedDirs {
-		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 			remaining = append(remaining, dir)
 		}
 	}
