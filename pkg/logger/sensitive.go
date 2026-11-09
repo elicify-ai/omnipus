@@ -13,8 +13,10 @@ import (
 // plaintexts this process has registered. pkg/config publishes it from
 // Config.RegisterSensitiveValues — boot step 6 of the credential boot contract
 // (ADR-004) and every re-registration after it (config reload, REST config
-// writes, provider sign-in) — so it always carries the most recently registered
-// complete set. It lives in this package because pkg/logger is the lowest
+// writes, provider sign-in) — and again from EnsureSensitiveValues and
+// RefreshAgentEnvSensitiveValues. Each publication carries the registered
+// values plus the external-worker env values, and the most recent one is the
+// set in force. It lives in this package because pkg/logger is the lowest
 // package both the registrar (pkg/config) and every consumer import: one value
 // set, one replacer, applied at two choke points — this package's own log
 // output (logMessage) and ScrubSensitiveValues, which the agent applies to the
@@ -31,8 +33,9 @@ var sensitiveValueReplacer atomic.Pointer[strings.Replacer]
 
 // SetSensitiveValueReplacer installs r as the process-wide credential replacer
 // (nil removes it) and returns a func that restores the previous one.
-// Production installs it only through config.Config.RegisterSensitiveValues;
-// tests use the restore func to leave the process as they found it.
+// Production installs it from pkg/config (RegisterSensitiveValues,
+// EnsureSensitiveValues and RefreshAgentEnvSensitiveValues); tests use the
+// restore func to leave the process as they found it.
 func SetSensitiveValueReplacer(r *strings.Replacer) (restore func()) {
 	prev := sensitiveValueReplacer.Swap(r)
 	return func() { sensitiveValueReplacer.Store(prev) }
@@ -69,25 +72,26 @@ func scrubFields(r *strings.Replacer, fields map[string]any) map[string]any {
 // replaced whole (see scrubString).
 const maxScrubDecodeDepth = 8
 
-// scrubFailClosedText is logged in place of a field whose registered
-// credential could not be removed any other way. It is the mask
+// scrubFailClosedText is logged in place of a field that could not be shown
+// free of a registered credential. It is the mask
 // pkg/config/security.go::sensitiveReplacementPairs uses.
 const scrubFailClosedText = "[FILTERED]"
 
 // scrubString replaces registered credentials in one string field. Its aim is
 // that a credential r replaces reaches the log sink neither as written nor
 // in a form that the decodings of decodeScan turn back into it, within
-// maxScrubDecodeDepth layers. It runs at the scrub choke point every log call
-// site passes through, so call sites need no masking of their own.
+// maxScrubDecodeDepth layers. logMessage calls it, through scrubFields and
+// scrubFieldValue, for string and error field values and for the strings
+// inside the containers scrubFieldValue walks, before both sinks.
 //
 //   - A field with no credential, as written or decoded, is returned byte for
 //     byte, so log lines can be compared with real files.
 //   - When the plain replacement leaves nothing that decodes to a
 //     credential, that replacement is returned.
 //   - Otherwise the field is decoded layer by layer, masked at every layer,
-//     and logged quoted once, so the record holds no control characters. If a
-//     credential can still be decoded from that result, the field is replaced
-//     whole by scrubFailClosedText.
+//     and logged quoted once, so the record holds no control characters. If
+//     scanning that result again does not come back clean, the field is
+//     replaced whole by scrubFailClosedText.
 //   - A field that can still be decoded at maxScrubDecodeDepth, or whose
 //     code-point reading (codePointReading) holds a credential, is replaced
 //     whole as well.
@@ -349,7 +353,7 @@ func unescapeGo(s string) (string, bool) {
 // as strings, numbers and booleans pass through, the containers log call sites
 // actually pass are walked, and anything else is scrubbed in the JSON form
 // zerolog would have written for it — kept as JSON when the scrubbed text still
-// parses, otherwise written as a string, so the scrub is never dropped.
+// parses, otherwise written as the scrubbed string.
 func scrubFieldValue(r *strings.Replacer, v any) any {
 	switch val := v.(type) {
 	case nil:

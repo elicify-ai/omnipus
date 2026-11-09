@@ -23,13 +23,14 @@ import (
 //     LLM responses and logs (used throughout the agent loop)
 //   - SecureString: typed wrapper for credential values that is redacted on
 //     JSON serialization
+//   - RegisterSensitiveValues and EnsureSensitiveValues: the registered
+//     credential set and its publication as the process-wide replacer
+//     (pkg/logger)
 //
-// The old PicoClaw ".security.yml" credential-separation mechanism has been
-// removed. Credential separation is now handled exclusively by the Omnipus
-// encrypted credentials.json store (pkg/credentials) referenced via
-// ModelConfig.APIKeyRef — see pkg/gateway/rest.go and pkg/sysagent/tools/deps.go
-// for the resolution path. The credentials.json store uses AES-256-GCM +
-// Argon2id per CLAUDE.md and BRD SEC-23.
+// Credential values are held by the encrypted credentials.json store
+// (pkg/credentials: AES-256-GCM, Argon2id) and referenced from config by name
+// (for example APIKeyRef); pkg/credentials/inject.go::InjectFromConfig
+// resolves those names.
 
 // SensitiveDataCache holds the compiled strings.Replacer for filtering
 // sensitive data out of LLM responses and logs.
@@ -146,8 +147,9 @@ func (sec *Config) EnsureSensitiveValues(values []string) {
 // the one rule for both this config's own replacer and the published
 // process-wide one: every value longer than 3 bytes is replaced by
 // "[FILTERED]", and a value that latin1EscapedSpelling changes is replaced in
-// that spelling as well. Each such value adds one pair; how that changes the
-// cost of replacing a logged field has not been measured.
+// that spelling as well. A value longer than 3 bytes adds one pair, or two
+// when latin1EscapedSpelling changes it; how that changes the cost of
+// replacing a logged field has not been measured.
 func sensitiveReplacementPairs(values []string) []string {
 	var pairs []string
 	for _, v := range values {
@@ -194,11 +196,13 @@ func newSensitiveReplacer(values []string) *strings.Replacer {
 func (sec *Config) buildAndPopulateSensitiveCache() {
 	cache := &SensitiveDataCache{}
 
-	// (a) Reflection-walked SecureString fields (kept for backward compat).
+	// (a) Reflection-walked SecureString fields.
 	values := sec.collectSensitiveValues()
 	// (b) Runtime-registered plaintexts — read under the already-held write lock.
 	values = unique(append(values, sec.registeredSensitive...))
-	// (c) Every external worker's stored env value in this roster.
+	// (c) The external workers' env values: the last read of the stored
+	// records plus the env overrides in this config's agent list
+	// (agentEnvSensitiveValues).
 	values = unique(append(values, sec.agentEnvSensitiveValues()...))
 
 	if len(values) == 0 {
