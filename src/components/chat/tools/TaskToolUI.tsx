@@ -25,7 +25,7 @@ import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { CalendarBlank, Warning } from '@phosphor-icons/react'
 import type { MessagePartStatus } from '@assistant-ui/react'
-import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
+import { makeAssistantToolUI, resolvedToolPartError } from '@/lib/assistant-tool-status'
 import { Card } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/error-state'
 import type { TaskTrigger } from '@/lib/api'
@@ -243,8 +243,16 @@ function plainSchedule(trigger: TaskTrigger): string | null {
   // The end date too: the trigger's calendar date, not the viewer's.
   const end = endInTriggerZone(parsed.end, tz)
   if (!end) return null
-  const phrase = summarizeRecurrence({ kind: 'rrule', state: { ...parsed, end } }, anchor)
-  return `${phrase} at ${when.time} (${when.zoneLabel})`
+  // Team-lead decision D9 (2026-11-08): one sentence, the run time and zone
+  // first and the end clause last, with no clock time on the end date —
+  // "Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026."
+  // summarizeRecurrence is the frequency words followed by the end clause, so
+  // the same rule with no end gives the frequency words alone and the rest of
+  // the full summary is the end clause.
+  const repeats = summarizeRecurrence({ kind: 'rrule', state: { ...parsed, end: { kind: 'never' } } }, anchor)
+  const full = summarizeRecurrence({ kind: 'rrule', state: { ...parsed, end } }, anchor)
+  if (!full.startsWith(repeats)) return null
+  return `${repeats} at ${when.time} (${when.zoneLabel})${full.slice(repeats.length)}.`
 }
 
 function hasSyncWarning(result: unknown): boolean {
@@ -276,24 +284,35 @@ function headingFor(toolName: TaskToolName, scheduled: boolean, result: unknown)
   }
 }
 
+function nonBlank(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
 /**
- * The reason a failed call came with: its error text, else a text result (live)
- * or the persisted `{ text }` envelope's text (saved history). Null when the
- * call came back with none.
+ * The reason a failed call came with (team-lead decision D5): its error text,
+ * else a text result (live), the persisted `{ text }` envelope's text (saved
+ * history), or the `reason` of a structured tool failure such as
+ * delegation_denied (pkg/tools/result.go::DelegationDeniedResult, the
+ * generated DelegationFailure type). Null when the call came back with none.
  */
 function failureReason(result: unknown, error?: string): string | null {
-  if (typeof error === 'string' && error.trim() !== '') return error
-  if (typeof result === 'string' && result.trim() !== '') return result
-  if (isRecord(result) && typeof result.text === 'string' && result.text.trim() !== '') return result.text
+  if (nonBlank(error)) return error
+  if (nonBlank(result)) return result
+  if (isRecord(result) && nonBlank(result.text)) return result.text
+  if (isRecord(result) && nonBlank(result.reason)) return result.reason
   return null
 }
 
-/** A real reason is shown as it came; with none, the sentence says so and names the action (D5). */
+/**
+ * The failure sentence, naming the action (D5 / D8). A known reason follows
+ * it unchanged: "I couldn't <verb> the task. <reason>" (D8). With none, the
+ * sentence says so (D5).
+ */
 function failureMessage(toolName: TaskToolName, result: unknown, error?: string): string {
-  return (
-    failureReason(result, error) ??
-    `I couldn't ${FAILED_ACTION[toolName]} the task, and no reason was given. Try again.`
-  )
+  const action = FAILED_ACTION[toolName]
+  const reason = failureReason(result, error)
+  if (reason !== null) return `I couldn't ${action} the task. ${reason}`
+  return `I couldn't ${action} the task, and no reason was given. Try again.`
 }
 
 function toMessagePartStatus(status: PartStatus): MessagePartStatus {
@@ -333,38 +352,67 @@ function TaskToolFallback(props: TaskToolCardBlockProps & { status: PartStatus }
   )
 }
 
+const LINK_CLASS =
+  'inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-accent)] hover:underline'
+
+/**
+ * "Open tasks" (team-lead decision Q2 C, 2026-11-09): the workspace's tasks
+ * panel when the call names `workspace_id`, else the top-level /tasks route —
+ * never the route's current workspace.
+ */
+function OpenTasksLink({ workspaceId }: { workspaceId: string }) {
+  if (workspaceId === '') {
+    return (
+      <Link to="/tasks" data-testid="task-tool-link-open" className={LINK_CLASS}>
+        Open tasks
+      </Link>
+    )
+  }
+  return (
+    <Link
+      to="/workspaces/$workspaceId/chat"
+      params={{ workspaceId }}
+      search={{ panel: 'tasks' }}
+      data-testid="task-tool-link-open"
+      className={LINK_CLASS}
+    >
+      Open tasks
+    </Link>
+  )
+}
+
+/** "Open calendar" exists only for a call that names its workspace (Q2 C). */
+function TaskToolLinks({ workspaceId, calendar }: { workspaceId: string; calendar: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-[var(--space-3)]">
+      <OpenTasksLink workspaceId={workspaceId} />
+      {calendar && workspaceId !== '' && (
+        <Link
+          to="/workspaces/$workspaceId/calendar"
+          params={{ workspaceId }}
+          data-testid="task-tool-link-calendar"
+          className={LINK_CLASS}
+        >
+          <CalendarBlank size={12} aria-hidden="true" />
+          Open calendar
+        </Link>
+      )}
+    </div>
+  )
+}
+
 /**
  * The catalogued error presentation (role="alert", forced-colours text), with
  * the same inline layout the saved-history outcome lines use
- * (historyEntryOutcome.tsx): left-aligned, tight vertical padding.
+ * (historyEntryOutcome.tsx): left-aligned, tight vertical padding. The
+ * "Open tasks" link sits beside the alert as the way forward, with or without
+ * a reason (decisions D8 and Q1 A); the alert's text is the sentence alone.
  */
-function TaskToolFailure({ message }: { message: string }) {
-  return <ErrorState message={message} className="mt-[var(--space-2)] items-start py-[var(--space-1)]" />
-}
-
-function TaskToolLinks({ workspaceId }: { workspaceId: string }) {
-  const className =
-    'inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-accent)] hover:underline'
+function TaskToolFailure({ message, workspaceId }: { message: string; workspaceId: string }) {
   return (
-    <div className="flex flex-wrap gap-[var(--space-3)]">
-      <Link
-        to="/workspaces/$workspaceId/chat"
-        params={{ workspaceId }}
-        search={{ panel: 'tasks' }}
-        data-testid="task-tool-link-open"
-        className={className}
-      >
-        Open tasks
-      </Link>
-      <Link
-        to="/workspaces/$workspaceId/calendar"
-        params={{ workspaceId }}
-        data-testid="task-tool-link-calendar"
-        className={className}
-      >
-        <CalendarBlank size={12} aria-hidden="true" />
-        Open calendar
-      </Link>
+    <div className="mt-[var(--space-2)] flex flex-col items-start gap-[var(--space-1)]">
+      <ErrorState message={message} className="items-start py-[var(--space-1)]" />
+      <TaskToolLinks workspaceId={workspaceId} calendar={false} />
     </div>
   )
 }
@@ -391,8 +439,9 @@ export function TaskToolCardBlock({
       error={error}
     />
   )
+  const workspaceId = readString(args, 'workspace_id')
   if (callFailed(part, isError)) {
-    return <TaskToolFailure message={failureMessage(toolName, result, error)} />
+    return <TaskToolFailure message={failureMessage(toolName, result, error)} workspaceId={workspaceId} />
   }
   if (running || part.type === 'incomplete') return fallback
 
@@ -401,7 +450,6 @@ export function TaskToolCardBlock({
 
   const schedule = trigger.kind === 'ok' ? plainSchedule(trigger.trigger) : null
   const title = readString(args, 'title')
-  const workspaceId = readString(args, 'workspace_id')
   const warning = hasSyncWarning(result)
 
   return (
@@ -429,7 +477,7 @@ export function TaskToolCardBlock({
           <span>{SCHEDULE_NOT_ACTIVE}</span>
         </p>
       )}
-      {workspaceId !== '' && <TaskToolLinks workspaceId={workspaceId} />}
+      <TaskToolLinks workspaceId={workspaceId} calendar />
     </Card>
   )
 }
@@ -437,8 +485,18 @@ export function TaskToolCardBlock({
 function makeTaskToolUI(toolName: TaskToolName) {
   return makeAssistantToolUI<Record<string, unknown>, unknown>({
     toolName,
-    render: ({ args, result, status, isError }) => (
-      <TaskToolCardBlock toolName={toolName} args={args} result={result} status={status} isError={isError} />
+    // The live adapter carries the call's recorded error beside its status
+    // (omnipus-runtime.ts::buildContentParts), so a live failure shows the
+    // same reason the saved row does.
+    render: ({ args, result, status, isError, artifact }) => (
+      <TaskToolCardBlock
+        toolName={toolName}
+        args={args}
+        result={result}
+        status={status}
+        isError={isError}
+        error={resolvedToolPartError(artifact)}
+      />
     ),
   })
 }

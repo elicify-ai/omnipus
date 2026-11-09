@@ -506,6 +506,7 @@ interface RawToolCall { // not-wire-format: adapter alias over the generated Too
   duration_ms?: number
   parameters?: Record<string, unknown>
   result?: unknown
+  error?: WireToolCall['error']
   parent_tool_call_id?: string
 }
 
@@ -646,7 +647,7 @@ function rawToToolCall(raw: RawToolCall): ToolCall {
     params: raw.parameters ?? {},
     result: raw.result,
     duration_ms: raw.duration_ms,
-    error: undefined,
+    error: raw.error,
   }
 }
 

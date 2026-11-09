@@ -104,7 +104,7 @@ function pushHistoryParts(
       // Cancellation is a per-call fact, independent of the enclosing answer.
       // The native UI adapter reads it from AssistantUI's UI-only artifact.
       isError: resolved.status === "error",
-      artifact: { omnipusToolStatus: resolved.status },
+      artifact: { omnipusToolStatus: resolved.status, omnipusToolError: resolved.error },
     });
   }
   if (prevTextEnd < text.length) {
@@ -186,7 +186,7 @@ function buildContentParts(
         result: tc.result,
         // Issue #617 — same derivation as pushHistoryParts above.
         isError: tc.status === "error",
-        artifact: { omnipusToolStatus: tc.status },
+        artifact: { omnipusToolStatus: tc.status, omnipusToolError: tc.error },
       });
     }
 
