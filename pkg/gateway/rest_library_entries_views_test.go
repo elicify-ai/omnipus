@@ -1142,8 +1142,14 @@ func TestLibraryKnowledgeViewsEndpointFollowsTheListingRules(t *testing.T) {
 	writeNote(t, vault, ".omnipus-vault/views/nested-target/payload.yaml",
 		limitVaultViewFile(t, "limits--alias", 120))
 	require.NoError(t, os.Symlink(
-		filepath.Join(viewsDir, "nested-target", "payload.yaml"),
+		"nested-target/payload.yaml",
 		filepath.Join(viewsDir, "limits--alias.yaml")))
+	root, err := os.OpenRoot(vault)
+	require.NoError(t, err)
+	linked, err := root.Open(".omnipus-vault/views/limits--alias.yaml")
+	require.NoError(t, err, "instrument: the relative link resolves within the knowledge base")
+	require.NoError(t, linked.Close())
+	require.NoError(t, root.Close())
 	writeNote(t, vault, ".omnipus-vault/views/limits--oversize.yaml",
 		limitVaultViewFile(t, "limits--oversize", contractLimitFileBytes+1))
 	// Bytes outside the knowledge base: the payload lives in an ordinary
