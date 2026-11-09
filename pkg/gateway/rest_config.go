@@ -359,6 +359,20 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 // that split to log a write failure's real cause without ever logging
 // credential-derived text. Called while a.configMu is held.
 func (a *restAPI) writeConfigJSONLocked(mutate func(m map[string]any) error) ([]byte, error) {
+	return a.writeRefusableConfigJSONLocked(a.refuseNewProgramAccess, mutate)
+}
+
+// writeConfigJSONInMutationLocked is writeConfigJSONLocked for a caller inside
+// AgentLoop.MutateConfig. published is the configuration that call handed its
+// callback: it stands in for GetConfig, which would wait forever on the lock
+// MutateConfig holds. The office preview check still runs.
+func (a *restAPI) writeConfigJSONInMutationLocked(published *config.Config, mutate func(m map[string]any) error) ([]byte, error) {
+	return a.writeRefusableConfigJSONLocked(func(candidate *config.Config) error {
+		return a.refuseProgramAccessAgainst(published, candidate)
+	}, mutate)
+}
+
+func (a *restAPI) writeRefusableConfigJSONLocked(refuse func(*config.Config) error, mutate func(m map[string]any) error) ([]byte, error) {
 	raw, err := os.ReadFile(a.configPath())
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -383,6 +397,13 @@ func (a *restAPI) writeConfigJSONLocked(mutate func(m map[string]any) error) ([]
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("serialize config: %w", err)
+	}
+	var candidate config.Config
+	if parseErr := json.Unmarshal(out, &candidate); parseErr != nil {
+		return nil, fmt.Errorf("parse candidate config: %w", parseErr)
+	}
+	if refused := refuse(&candidate); refused != nil {
+		return nil, refused
 	}
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
 		return nil, writeErr
@@ -785,6 +806,9 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for token rotation", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}

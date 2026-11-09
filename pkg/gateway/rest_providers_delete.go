@@ -37,6 +37,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -170,6 +171,7 @@ type restAPIRunProviderDelete struct {
 	dependents     []gen.ProviderDependent
 	oldPair        config.DefaultModel
 	defaultChanged bool
+	agentsChanged  bool
 	credRef        string
 	oauthRef       string
 }
@@ -231,7 +233,7 @@ func (a *restAPI) runProviderDelete(
 		}); err != nil {
 			slog.Error("rest: provider delete: new_default write failed",
 				"provider_id", rd.providerID, "error", err)
-			return failed()
+			return rd.writeFailed(err, failed)
 		}
 		rd.defaultChanged = true
 	}
@@ -266,6 +268,7 @@ func (a *restAPI) runProviderDelete(
 				"provider_id", rd.providerID, "agent_id", dep.Id, "error", err)
 			return failed()
 		}
+		rd.agentsChanged = true
 	}
 
 	// Step 2 (+2b) — remove the provider row and prune the settings
@@ -333,7 +336,7 @@ func (a *restAPI) runProviderDelete(
 	}); err != nil {
 		slog.Error("rest: provider delete: config write failed",
 			"provider_id", rd.providerID, "error", err)
-		return failed()
+		return rd.writeFailed(err, failed)
 	}
 
 	// Step 3b — evict the provider's entitlement-cache entries (ADR-067
@@ -595,4 +598,28 @@ func pruneFallbackEntries(m map[string]any, key, providerID string, drop func(st
 		return
 	}
 	m[key] = kept
+}
+
+// refusalBeforeCommit reports a refused config write (office preview spec
+// §3.2) while this delete has committed nothing yet: §3.4 D9b row 31 answers it
+// 400 with the refusal text. Once the new default or an agent was changed, the
+// step failure stays 500 {deleted:false}.
+func (rd *restAPIRunProviderDelete) refusalBeforeCommit(err error) (string, bool) {
+	var refusal *requestRefusalError
+	if rd.defaultChanged || rd.agentsChanged || !errors.As(err, &refusal) {
+		return "", false
+	}
+	return refusal.Error(), true
+}
+
+// writeFailed answers a failed config write of this delete: a refusal while
+// nothing is committed yet is 400 with the refusal text (refusalBeforeCommit);
+// anything else is failed's retryable 500 {deleted:false}.
+func (rd *restAPIRunProviderDelete) writeFailed(
+	err error, failed func() (*gen.ProviderDeleteResponse, int, string, string),
+) (*gen.ProviderDeleteResponse, int, string, string) {
+	if msg, refused := rd.refusalBeforeCommit(err); refused {
+		return nil, http.StatusBadRequest, msg, ""
+	}
+	return failed()
 }

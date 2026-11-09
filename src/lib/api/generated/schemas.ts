@@ -4585,6 +4585,7 @@ export const SessionHistoryResponse: z.ZodType<SessionHistoryResponse> =
       .optional(),
     page_info: page_info,
   });
+export const PreviewRetryResponse = z.object({ status: z.literal("started") });
 export const ConfigurationRevision = z.string();
 export const ConfigurationPersistenceStatus = z.enum([
   "complete",
@@ -5511,6 +5512,7 @@ export const ChannelOutboundRejection = z.object({
     "connect_first",
     "lookup_unavailable",
     "saved_live_mismatch",
+    "program_access_refused",
   ]),
   target_errors: z
     .array(
@@ -9359,6 +9361,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: MailboxRemovalResult,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -9727,6 +9734,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     requestFormat: "json",
     response: z.void(),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -10183,6 +10195,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -10491,6 +10508,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     requestFormat: "json",
     response: RotateTokenResponse,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -12752,6 +12774,11 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     ],
     response: z.void(),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -15397,6 +15424,63 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 500,
         description: `The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot;; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/sessions/:session_id/previews/:tool_call_id/retry",
+    alias: "retrySessionPreview",
+    description: `Re-renders the page thumbnails of one earlier preview_document call (office-preview spec §5.2, §5.3; FQ2 r2 A) when its thumbnail outcome was unavailable or partial. Same limits and admission as the tool; authorization is the requesting person&#x27;s access to the session and to the preview&#x27;s source as a file of the session workspace&#x27;s Library (work folder and mounts, under the Library&#x27;s own protected-file rules); a source outside that Library cannot be retried. The source must be unchanged: its current SHA-256 (first 12 hex) must equal the recorded MediaPreview.source_version. Returns 202 once the retry is admitted and started; the result arrives asynchronously as a new MediaFrame (presentation &quot;page_thumbnails&quot;) with the same tool_call_id, never in this response. No request body.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "session_id",
+        type: "Path",
+        schema: z.string().min(1).max(255),
+      },
+      {
+        name: "tool_call_id",
+        type: "Path",
+        schema: z.string().min(1).max(255),
+      },
+    ],
+    response: PreviewRetryResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The preview&#x27;s source is not a file of the session workspace&#x27;s Library, or the Library refuses it. ErrorResponse.code is exactly &#x60;preview_source_not_in_library&#x60;; the source path is never echoed.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown session, no access to the session (indistinguishable, as on every session route), or no preview_document call with this id in the session.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The source file changed since the preview: ErrorResponse.code is exactly &quot;preview_source_changed&quot; (current digest differs from source_version).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `The PDF renderer is not installed, damaged or disabled: ErrorResponse.code is exactly &quot;preview_renderer_unavailable&quot;.
 `,
         schema: ErrorResponse,
       },
@@ -18758,6 +18842,19 @@ export const MediaPart = z
     filename: z.string().min(1),
     content_type: z.string().min(1),
     caption: z.string().optional(),
+    page_number: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const MediaPreview = z
+  .object({
+    source_name: z.string().min(1),
+    source_version: z.string().regex(/^[0-9a-f]{12}$/),
+    page_count: z.number().int().min(1),
+    first_page: z.number().int().min(1),
+    last_page: z.number().int().min(1),
+    outcome: z.enum(["complete", "partial", "unavailable"]),
+    unavailable_reason: z.enum(["renderer_missing", "renderer_damaged", "renderer_failed", "storage_failed"]).optional(),
   })
   .strict();
 
@@ -19453,7 +19550,10 @@ export const MediaFrame = z
     history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("media"),
     session_id: z.string().min(1),
-    parts: z.array(MediaPart).min(1).max(32),
+    parts: z.array(MediaPart).min(0).max(32),
+    tool_call_id: z.string().min(1).optional(),
+    presentation: z.enum(["inline", "page_thumbnails"]).optional(),
+    preview: MediaPreview.optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();

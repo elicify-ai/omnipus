@@ -139,7 +139,7 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 		t.Fatal(removeErr)
 	}
 	store := agentstore.New(f.Home)
-	agentCfg := config.AgentConfig{ID: "self", Home: f.AgentHome, Skills: []string{"elicify-docx"}, Tools: &config.AgentToolsCfg{}}
+	agentCfg := config.AgentConfig{ID: "self", Home: f.AgentHome, Skills: []string{"elicify-office"}, Tools: &config.AgentToolsCfg{}}
 	agentCfg.Tools.Builtin.Policies = map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow, "edit_skill": config.ToolPolicyDeny}
 	if err := store.Create(agentCfg.ID, &agentCfg); err != nil {
 		t.Fatal(err)
@@ -148,8 +148,8 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stamp, err := os.ReadFile(filepath.Join(registryRoot, "elicify-docx", ".omnipus-identity"))
-	if err != nil || strings.TrimSpace(string(stamp)) == "" || persisted.SkillGrants["elicify-docx"] != strings.TrimSpace(string(stamp)) {
+	stamp, err := os.ReadFile(filepath.Join(registryRoot, "elicify-office", ".omnipus-identity"))
+	if err != nil || strings.TrimSpace(string(stamp)) == "" || persisted.SkillGrants["elicify-office"] != strings.TrimSpace(string(stamp)) {
 		t.Fatalf("document inspector needs a real bound registry grant: err=%v", err)
 	}
 	cfg := config.DefaultConfig()
@@ -168,7 +168,7 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	wu23R1OwnerWritable(t, filepath.Join(layout.Bin, "python"))
 	input := filepath.Join(f.Work, "input.docx")
 	original := wu23R1DocumentArtifact(t, input)
-	inspector := filepath.Join(registryRoot, "elicify-docx", "scripts", "inspect_docx.py")
+	inspector := filepath.Join(registryRoot, "elicify-office", "scripts", "inspect_docx.py")
 	want := map[string]any{"paragraphs": float64(2), "tables": float64(1), "revision_marks": float64(0), "field_instructions": float64(0), "external_relationships": []any{}, "media_parts": []any{}}
 	t.Run("real_unsandboxed_inspector_control", func(t *testing.T) {
 		cmd := exec.Command(python, "-I", inspector, input)

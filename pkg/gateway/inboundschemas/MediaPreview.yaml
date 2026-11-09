@@ -1,0 +1,67 @@
+title: MediaPreview
+description: >
+  Document-preview record carried on a MediaFrame whose presentation is
+  "page_thumbnails" (office-preview spec §5.2). Describes the previewed source
+  and the thumbnail outcome for the person, independently of what the model
+  received. outcome "complete" = every page in first_page..last_page has a
+  stored thumbnail; "partial" = only some were stored (the parts list the
+  stored ones, the result text states "thumbnails stored: k of N");
+  "unavailable" = no thumbnail could be made or stored — parts may then be
+  empty and unavailable_reason is present. A client never infers that pages
+  were rendered from outcome "unavailable".
+type: object
+required:
+  - source_name
+  - source_version
+  - page_count
+  - first_page
+  - last_page
+  - outcome
+additionalProperties: false
+properties:
+  source_name:
+    type: string
+    minLength: 1
+    description: Display name of the previewed file (base name, e.g. "report.docx").
+  source_version:
+    type: string
+    pattern: '^[0-9a-f]{12}$'
+    description: >
+      First 12 lowercase hex characters of the source file's SHA-256 at preview
+      time. A Retry whose current file digest differs is refused with 409
+      preview_source_changed.
+  page_count:
+    type: integer
+    minimum: 1
+    description: Total number of pages in the (converted) document.
+  first_page:
+    type: integer
+    minimum: 1
+    description: First page of this preview batch (1-based, inclusive).
+  last_page:
+    type: integer
+    minimum: 1
+    description: >
+      Last page of this preview batch (1-based, inclusive). The server
+      guarantees first_page <= last_page <= page_count and
+      last_page - first_page < 20.
+  outcome:
+    type: string
+    enum:
+      - complete
+      - partial
+      - unavailable
+    description: Thumbnail outcome for the person (spec §4.3), not the model's delivery.
+  unavailable_reason:
+    type: string
+    enum:
+      - renderer_missing
+      - renderer_damaged
+      - renderer_failed
+      - storage_failed
+    description: >
+      Present iff outcome is "unavailable". renderer_missing: the PDF renderer
+      component is not installed (no Retry; the card explains how to install).
+      renderer_damaged: the installed renderer failed its integrity check.
+      renderer_failed: the renderer ran and failed (crash, limit, protocol
+      error). storage_failed: pages rendered but no thumbnail could be stored.

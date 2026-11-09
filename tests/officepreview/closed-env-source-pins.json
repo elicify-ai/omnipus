@@ -1,0 +1,190 @@
+{
+  "algorithm": "office-preview-env-pins/go-tokens-v1",
+  "reviewed_source": "11ffc42044434d8b5e9cd2c60f0deeb37d314e55",
+  "files": {
+    "cmd/omnipus/main.go": {
+      "declarations": {
+        "main": "6bf6ff0e42a7cd8bbfab15bda18b4298a5021b3e935a1e8506bfa276b1fe024d"
+      }
+    },
+    "pkg/app/app.go": {
+      "declarations": {
+        "Main": "b236d033f3acfc4b3d4999a8a836f9e74ffca7dc316162658cd08cb17ec40093",
+        "runHiddenMode": "20c779ce66fb82468e32fc519c629e9dac1f85d7d780231d72b5c2cf402e73d6"
+      }
+    },
+    "pkg/preview/confine.go": {
+      "declarations": {
+        "confinement": "47ccd9134876ec17e9ea582f496e8c23fcc6a88415f7fd2cb9eda0a1cbdff12c",
+        "converterStart": "02bbe97de42cd53b18c1388aa1691d34fa8ab7ea4bfe549a631571c28afabd7c",
+        "foldersAbove": "1ccc2937140b6ed12aa69f1bc82f61b32610f1ce8ea5fb512faa24fb9649e510",
+        "realRulePath": "5f22b617b72c8b5cadb9457d0ba14fad186df702aa4db0996c85516ca5babcb4",
+        "spawnHooks": "3f35229a40c2851c2f00b8ce6f732d45b508388683548f10395f86efa4ea4f50",
+        "spawnHooks.observedBy": "9c4dc211a63713e8453890522ea7a05f78c2203732beebbcf378c09bf621ea26",
+        "testHookConverterStart": "98ec2993e7625450f1b23a73a096c526afd82b6175cce895eb474b1123c8dc52"
+      }
+    },
+    "pkg/preview/confine_darwin.go": {
+      "declarations": {
+        "hooksFor": "a590985b96e5793bbf26d56906aa0b49d2dcd5c64770ebe7ddae49819f03531f",
+        "officeFontFolders": "926cf0cf7817dc1c779a00f06d152216002487a0864629d3cb12ba4c406e7edb"
+      }
+    },
+    "pkg/preview/confine_linux.go": {
+      "declarations": {
+        "hooksFor": "04913335c46f742bc6a00cfc061e7fc938bed812b9f2b9665c472282b137fda4",
+        "linuxSystemReadExec": "0292fc215193a2aab5288b9ad5faf2717d2d14137aa92b856540a97939d21863",
+        "officeFontFolders": "6b46d94c7fdaa611fcee82582de8159d200e2d84ec36447d7ce8523bf535a637"
+      }
+    },
+    "pkg/preview/confine_unix.go": {
+      "declarations": {
+        "confinement.policy": "9e37de583cf9eabc9df93d1f785674154a476fb6c8c6ac717b48c2444bb40f0b"
+      }
+    },
+    "pkg/preview/confine_windows.go": {
+      "declarations": {
+        "hooksFor": "567e5c8c8ed12afebd5ae0a630480e7728bee2bcbc6781912e3640bfab562b90",
+        "officeFontFolders": "7d89b7049ade549d97d658118c2e4f4cd8f09f7fc24caf08c0b70cbe0b500f42"
+      }
+    },
+    "pkg/preview/launcher/child_darwin.go": {
+      "whole_file": "842ff92a5d3933b5613990a5cf0f57289cb457d976b8460c4753b2ef938818b6",
+      "declarations": {
+        "applyLimits": "38f6e6f2731aaea59b5176990e09c8895ef3a2ab61db9dbb4a58350aa0104c3f",
+        "armParentDeath": "a9604448b2da53263051c922704e4398676ec619fa67aefe95e373af60952d3f"
+      }
+    },
+    "pkg/preview/launcher/child_linux.go": {
+      "whole_file": "cc54316f2810cb0917e9e96f63b669b431f9c66cb8ff83fb8d4d6ce20da85a08",
+      "declarations": {
+        "applyLimits": "54251c9566b41f99b9f0ae37bca9cdc65d734dc2e906649c0ba38d872c2ee318",
+        "armParentDeath": "66b87d6ebf4601de0cb2402488634b47a4bdfaaba92afc9b446309733cbbe476",
+        "launcherStackBytes": "1ad5dda2ee09e85897dbaca6f1cb5056afad75a88dba3633562032cefb241351",
+        "setStackLimit": "a256bee81df4ddad0eb70e75eacd631f66986c4adf31928a908c49b0631e83b0"
+      }
+    },
+    "pkg/preview/launcher/child_unix.go": {
+      "whole_file": "a183cce49a0a536ddf5b7f9706fcc482aaea041899a31239688f237d4bcaf5a3",
+      "declarations": {
+        "Main": "a475b0fd64d550fcb1f33c11f77bd2f188f9ccbe4da8a0588041c6879efde7f5",
+        "applyCommonLimits": "ea2c64635ce6b9f5392d9c078b88e6305483bfc674e8f1c7042ab1d723d80d13",
+        "readGoByte": "5b2bd6e90f77486a2bf9f3a3d7c9c21a2ad37d47111ecd7892e15302b707703f",
+        "setRlimit": "d7788d7f7125a37a77aed3cd4a212f0a5c2d28f1756ecc0064788d2577902a11"
+      }
+    },
+    "pkg/preview/launcher/child_windows.go": {
+      "whole_file": "4c60f7418f7138569f54d96dad227ba0579dc812782cb17e35213a8cc922ef35",
+      "declarations": {
+        "Main": "d6387557f80cbf374cdadb34c4b04afbbc35abedc9019b0e1ef36c6e90ba150f",
+        "enterJob": "bfa21749b1860d775ecc8d3c093db60dc9082fce179af6687e595a1262c18aec",
+        "readGoByte": "5b2bd6e90f77486a2bf9f3a3d7c9c21a2ad37d47111ecd7892e15302b707703f"
+      }
+    },
+    "pkg/preview/launcher/launcher.go": {
+      "whole_file": "049b7b43e5c6a4051a66b60c67f82f4d2fbff217d735b235ce2e4dca9a7f3bf3",
+      "declarations": {
+        "Command": "c9306497b973d86d5c7d2de9607e0595da40aa7b45d85e14f02a4eebfd364974",
+        "DefaultStderrLimit": "27f2faaa7db02f8529569d1a23092be8a0247cd99334c4269b5fa30f086e2e1e",
+        "ExitLimitFailed": "1c84ee73d14a61fd6616fc4f659f02240f16d6e9d81ae6744035af003992bf44",
+        "ExitNoGoByte": "28c1d9c0622a0920d170b49e749f35808714c2a1ec9c3f5e12e76c098eb8626d",
+        "ExitParentIsGone": "18c3ba4189de0e96add074e5e6c0c40720356c5ef2198dc143b3f79235c0be31",
+        "ExitStartFailed": "bb7e9cc4f43f055fb4155289e044dd74bc5f16d267746e0691ff971b585b783d",
+        "ExitUsage": "954c09ba2e9ffbaef31512f6774d0c843943959603dc15cdc2d391fdca36a53e",
+        "Limits": "d6a9a562a4a6d885a1e6752ba5f5cd4ba558e8f7a67792822fad4791ece823a9",
+        "Limits.args": "c0ab32f09edc8dcbe6ff1a2d2265de1fa97fc206183fcbae5804f05be993a35a",
+        "ModeArg": "acf53a4bb136f2cad09f7c5cd3801b1b52ad3e7b2a748cbd7f099dc3747d7183",
+        "Process": "356d37f7ee702cd463a1288c7ad3881b692aaea5708436359b1ce0acec241dc1",
+        "Process.Done": "0685d06f4372852bf9c8432fb99c7ac586a2188e74d87826939cf53f73929c8f",
+        "Process.ExitCode": "b60ebfbb5b4c9978922f84336d275da0d22951b7cdedf39726eb456860993ece",
+        "Process.Go": "fd8e1b7712962f6cfcb0ec6c3ec31b3585500bc15ee9a92b6f2a41b0452e29cf",
+        "Process.Kill": "624901f850d4a169687c2aacf45aaf393ca60e56acc0aa1e228577f204b51f98",
+        "Process.KillCause": "1367e8a5306db3bac99c82cb39488506d9051a973aa717ca288c817b29fdb213",
+        "Process.Stderr": "133a3bf07cbc2a0650e0ba58570ab48205fc197834e99beada8824f1ca5e76a4",
+        "Process.Wait": "1fda04d35beb1596caa3b28f1b60118cc2c01161eb160230c1907232156dca56",
+        "Spec": "70eb224a81b9ee3452110f57679f8872d2d4734693f74840727489f5e6d611e8",
+        "Start": "a1d647a7616bc8a4328b5aff1243496b810c632ee7cdecfa655569effa846ead",
+        "parseArgs": "5d8450b659c089657a4d38593a98ee3285cb79ddcef3d4e9fde7b5f05e93b3dc",
+        "tailBuffer": "bad55bc7dfc98fd75ca4be8529efa70de0cb99dbd7124a93f04b15c510fb02cf",
+        "tailBuffer.String": "8ede897afca303869dbe89345ae843b37fda77eacaf582a04bc9906cf61edb15",
+        "tailBuffer.Write": "fb9e5c276e3c8dacfd6170789e39eb2c1ba05e05000dfc778dc109dfe9a3975e"
+      }
+    },
+    "pkg/preview/launcher/proc_darwin.go": {
+      "whole_file": "487f6fef034df4fd4eb63db17676a1f9f7eb027f2eecc1d971691a3a1e3aab4c",
+      "declarations": {
+        "setProcAttr": "43fd0cd5e588ddb3f5dce57e3ce4b98bff77b329ca463578a42b07f718e1d5de"
+      }
+    },
+    "pkg/preview/launcher/proc_linux.go": {
+      "whole_file": "8062188d1be0834ee81fed93ef12cf90311c4bb86311b9ad2d88d158b04342e0",
+      "declarations": {
+        "setProcAttr": "3786df7187245585d7d8a90afe5ebeb7e1104596f626e650baef0165d42a879a"
+      }
+    },
+    "pkg/preview/launcher/proc_unix.go": {
+      "whole_file": "74cc9acc01fceaade20aeeaabc17935965dbaa59f6c3cccdb55f4d3e4ffd655b",
+      "declarations": {
+        "killTree": "878396754ad70047ffbc66618af88be45a9ff65484415bd58db6824f172d23a9"
+      }
+    },
+    "pkg/preview/launcher/proc_windows.go": {
+      "whole_file": "2af5ff0419843026b5634eaf2ef468f67ab726de752730a119a3b76d3ff7e6f2",
+      "declarations": {
+        "killTree": "ed5e1ce58fd5ac3fdd63a3aaf3423a83b6ef8e52e25f434c631a924a37d9011c",
+        "setProcAttr": "1c464b43319b30f4a25969fb7eeb0b5126298286b7c6e661d917d6cd9f71063a"
+      }
+    },
+    "pkg/preview/launcher/watchdog_darwin.go": {
+      "whole_file": "1eb6e8bc177006df577ff3a2b463a142bd996408957e365a8de1973c5abded98",
+      "declarations": {
+        "MemoryKillCause": "620247c1455eef0ddfb939213d4cc214322e96fc1155adb7903d773188592379",
+        "ResidentBytes": "43fa6aa0d1c0f236b6cbc26ff02b8a1c49651320298f816b13ca7b6ed81b264a",
+        "WatchdogInterval": "7b7b62f42cf3e3cc038c777e0196001d862b803789fd7c9d259f7d1ca36229e9",
+        "libc_proc_pid_rusage_trampoline_addr": "b09fd0d673ca5e13c9c3ed53bef1e2834980a630b706c019288ec8acbcad7373",
+        "residentBytes": "c6f2dfa1307870d1b00ad6bdc5b5db5a1eb2f40ae228f306fcbd2f84cadcd5f6",
+        "riFootprintOffset": "66d7846ecca4135c931544cdf5aeb03b63a677960daa2c952401dfbf4b5b1cfc",
+        "riResidentOffset": "8a3d075c592f1be8aad1b3d8d6b336d672e0dfb650ab30df54758a76132c679d",
+        "startWatchdog": "f418a35f1e865a2110420081329b198ccf9498015431345c03ea4a0baefefb5c",
+        "syscall_syscall": "7ce56ffbe68b1e5421fd8f8e26135f823ae22fedf94d8552a5863a043263a403"
+      }
+    },
+    "pkg/preview/launcher/watchdog_other.go": {
+      "whole_file": "b2931c57671673901ef2ee118dc1e058acc8d853a6cf537f82503fe211891b47",
+      "declarations": {
+        "MemoryKillCause": "620247c1455eef0ddfb939213d4cc214322e96fc1155adb7903d773188592379",
+        "ResidentBytes": "499b3a009cf93dc35748f9ad7efd62e02ad4666d15a7eeb91136fd244a206610",
+        "startWatchdog": "0d256925d3ad6b3ef337bfc7d31b3de85a0f5e0197ecdc920cc7156951a68d1a"
+      }
+    },
+    "pkg/preview/programs.go": {
+      "declarations": {
+        "existingFolders": "1b0d170a646d96f98ad84dec1cb1a953cc595378bb85875d3c2957b51654d2ab",
+        "fileURL": "0805dedd244e34552ea2e190904e43a93ecfd152ea40c170409e490f38b3f416",
+        "officeConversion": "2a440324a3c417a113277e1743a5c37d77803975cb78021c2e7b6024eb7d53bf",
+        "officeConversion.run": "6f476af9554a9efdeee62bc696197a1084fd9eb64eeedeb43a9605cf6a91d6ad",
+        "officeConversion.startOnce": "6c2ed50cebc8971f240fb1b95582eb31602bed03e4e9544a94119a566d324074",
+        "officeStartHooks": "31ccca225a029c38719de1377ce7ffdf9ccb89388efd6bed16467355b5093844",
+        "protocolProgram": "1c576a59a35ea9cf9092e02bdab699d25d9f162309e91f91aa29e6a7a7cd3b4d",
+        "protocolProgram.publishAndGo": "eeaf4f2f6beb3597ea6444f04499fb4be22c264f36a60d9e3d528766ff94bbe8",
+        "protocolProgram.run": "01e20b5b3b818432931f8cb3ce81ec5448e6410a0ee524e05210547c7b5c632e"
+      }
+    },
+    "pkg/sandbox/backend_darwin_seatbelt.go": {
+      "declarations": {
+        "CurrentSeatbeltBackend": "93098af39ae7602b89173ecd70c7893d1fb5512f2634c95c9ff9d49f5fd79d6d",
+        "SeatbeltBackend.ApplyToCmd": "1bc4c20ed9d31ab4388ff96479ce8e212bc67545c7cf1825c69051bb70026a7b",
+        "SeatbeltBackend.Available": "12e83886e393fc7f83f7f8db30d0f3ef2b3a2fb7f4bf34688c9d97b31e20f73d",
+        "SeatbeltBackend.wrapUnderSandboxExec": "08d9427a3f1df6ba4ee92c3617c1c76adf510cf772112f5cc0a88d4f243c7f1e",
+        "currentSeatbeltBackend": "3c488c836845bf49e95c12029a2ef559af9c0f5439590598c0346b394de9d3c8",
+        "seatbeltDisableEnv": "d1b649aaf9083dbab8bad603e772444bbfc955c9a97bc85af0d5d667492e5bef",
+        "seatbeltExecPath": "b31a53d43018d56fbd3dc9ce7a647e85fbe95ca330054f750acfd9e9b34aa83e"
+      }
+    },
+    "pkg/sandbox/hardened_exec_held.go": {
+      "declarations": {
+        "StartLockedWithPolicyHeld": "7eaf85afb1578038ae2ec26eb8f1341f81ca2b191f09d69b33a0729b4e1243cd"
+      }
+    }
+  }
+}

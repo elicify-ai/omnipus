@@ -17,6 +17,9 @@ type wu19File struct {
 	identities     *types.Info
 	declarations   map[types.Object]ast.Node
 	identityErrors []error
+	// W3: retain original token offsets/bytes; boundary pins never use go/format.
+	source []byte
+	tokens *token.File
 }
 
 type wu19Function struct {
@@ -41,8 +44,11 @@ func wu19NewInventory() *wu19Inventory {
 	return &wu19Inventory{funcs: map[string][]*wu19Function{}, unresolved: map[string]bool{}, types: map[string]ast.Expr{}, typeOwners: map[ast.Expr]*wu19File{}, globals: map[string]wu19Reference{}, globalObjects: map[types.Object]bool{}}
 }
 
-func (p *wu19Inventory) addFile(name, pkg string, file *ast.File, fset *token.FileSet) {
-	s := &wu19File{path: name, pkg: pkg, ast: file, imports: map[string]string{}}
+func (p *wu19Inventory) addFile(name, pkg string, file *ast.File, fset *token.FileSet, source ...[]byte) {
+	s := &wu19File{path: name, pkg: pkg, ast: file, imports: map[string]string{}, tokens: fset.File(file.Pos())}
+	if len(source) == 1 {
+		s.source = append([]byte(nil), source[0]...)
+	}
 	s.resolveObjects(fset)
 	for _, imp := range file.Imports {
 		actual, err := strconv.Unquote(imp.Path.Value)
@@ -151,6 +157,11 @@ func (f *wu19Function) callIdentity(e ast.Expr) string {
 func (p *wu19Inventory) scan() (int, []wu19Finding) {
 	var count int
 	var findings []wu19Finding
+	if p.officePreviewRelevant() {
+		if reason := p.officePreviewClosedEnvironment(); reason != "" {
+			findings = append(findings, wu19Finding{"pkg/preview/launcher", "Q62.closed-environment", reason})
+		}
+	}
 	for _, list := range p.funcs {
 		for _, fn := range list {
 			ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
@@ -226,6 +237,9 @@ func wu19EnclosingBlock(body *ast.BlockStmt, node ast.Node) *ast.BlockStmt {
 }
 
 func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) string {
+	if candidate, reason := p.officePreviewConstructor(fn); candidate {
+		return reason
+	}
 	cmd := wu19AssignedObject(fn, call)
 	if cmd == nil {
 		return "exec constructor has no verifiable command identity/environment assignment"

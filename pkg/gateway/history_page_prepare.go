@@ -327,7 +327,7 @@ func validateHistorySourceFrame(raw []byte) error {
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return err
 		}
-		if f.HistoryOrigin == nil || len(f.Parts) == 0 {
+		if f.HistoryOrigin == nil || (len(f.Parts) == 0 && !emptyPartsAllowed(f)) {
 			return errors.New("invalid prepared media")
 		}
 		return nil
@@ -339,6 +339,13 @@ func validateHistorySourceFrame(raw []byte) error {
 		return historyFrameMarkerValid(raw)
 	}
 	return nil
+}
+
+// emptyPartsAllowed is the one legal empty MediaFrame (office-preview spec
+// §5.2): a page-thumbnail group whose preview outcome is unavailable.
+func emptyPartsAllowed(f generated.MediaFrame) bool {
+	return f.Presentation != nil && *f.Presentation == previewPresentationPageThumbnails &&
+		f.Preview != nil && f.Preview.Outcome == previewOutcomeUnavailable
 }
 
 // emitContentlessSource keeps an eligible source group that renders no chat

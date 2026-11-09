@@ -53,7 +53,7 @@ A PDF with no fillable form fields says so, and drawing a signature is still off
 4. Read the verdict shown before you commit:
    - **Scoped**, the normal case: this folder and what is inside it.
    - **Broad**: your home folder, the disk root, or `/tmp`; adding one takes a second, explicit **Add anyway** click.
-   - **Refused**: Omnipus's own data folder and system folders such as `/etc` and `/usr`.
+   - **Refused**: Omnipus's own data folder, system folders such as `/etc` and `/usr`, and any folder that is, lies inside or contains a [document preview program folder](documents.md#what-previews-need). That last rule also refuses a folder that would otherwise be Broad, such as the disk root, because a mount of it would let agents write into the program folder. The picker says `Contains or lies inside a document preview program folder — agents can never write there.`
 5. Click **Add folder**. The folder appears in the tree with the mount icon and its real path. The workspace's agents can now read and write it; everything else on your disk stays read-only to them.
 
 ```mermaid

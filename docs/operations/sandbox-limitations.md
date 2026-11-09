@@ -24,6 +24,70 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
+## Document preview programs
+
+The programs behind document previews (LibreOffice, the PDF renderer and the
+PDF text extractor; see [Documents in chat](../documents.md)) run as separate,
+resource-limited processes. Their memory limit differs by platform:
+
+| Platform | Memory limit |
+|---|---|
+| Linux 4.7 and later | Kernel-enforced data limit (`RLIMIT_DATA`): counts the private writable memory a program uses, not address space it only reserves; plus a stack limit of 8 MiB (never above the inherited one). Shared writable memory is not counted. |
+| Linux older than 4.7, or booted with `ignore_rlimit_data` | The limit is set but the kernel does not enforce it on `mmap`. Every preview result says `memory limit not enforced: <reason>`, and the gateway logs it at start. |
+| macOS | Best effort: a watchdog samples memory use and stops a program above its budget; use may briefly exceed it. |
+| Windows | Job Object memory limit; there is no file isolation. |
+
+When the kernel sandbox cannot be set up for these programs, they run with
+the limits only and the result says `converted without sandbox: <reason>`.
+
+When the kernel sandbox is active, LibreOffice can read only its own program
+files, the folder that holds the Omnipus program, the system libraries and
+fonts, and the temporary folder of the current preview. On macOS it can also
+read, but not change, the checked list of LibreOffice parts it may load, and
+it can check that the folders above these exist, without seeing what is in
+them. It cannot read your files, the agents' files, other previews or anything
+else Omnipus stores. Checking a folder shows when something in it was last
+added or removed, but not what. On Linux the kernel sandbox cannot stop any
+program from checking whether a file or folder exists; LibreOffice still
+cannot list folders or read files outside the folders named here.
+
+Agents can never get write access to these programs' folders: shell approvals
+(**Allow** and **Allow once**), mounts (including one that contains a program
+folder, such as `/`) and new or changed write allowances that would give it, or
+that Omnipus cannot reduce to a folder, are refused where they would be created
+(the texts are in [Documents in chat](../documents.md#what-previews-need)).
+Access already in force is not refused: before every preview Omnipus checks for
+it and turns the component off for everyone.
+
+Limits of this protection:
+
+- On Windows, and when these programs run without the sandbox, the kernel does
+  not stop an agent's `bash` from writing an install folder. The refusal covers
+  only the writes Omnipus can see in the command text.
+- The shell refusal is part of the Auto-approve check. In God Mode that check
+  does not run.
+- A command that is still running and was given write access to a folder before
+  that folder became a program folder keeps that access. So does a command
+  still running after its mount was removed.
+- A folder agents can already write that is redirected by a link into a program
+  folder while a preview runs is seen by the next preview, which refuses; the
+  running preview is not stopped.
+
+If Omnipus stops during a preview, its next start ends the preview programs
+that were left running and removes their temporary folders. It acts only on a
+record Omnipus wrote outside the programs' own folder, and it stops a program
+only when its process ID, start time and program file all match that record.
+Limits of this cleanup:
+
+- On Windows, and when the programs run without the sandbox, nothing keeps the
+  programs from changing that record. This gives them nothing they could not
+  already do: they then run with Omnipus's own account and could stop those
+  processes and delete those folders themselves.
+- A program that left its process group, or a group whose first process has
+  already ended, is not stopped. A process that no longer matches its record
+  (for example a reused process ID) is not stopped either: its folder is kept
+  and the gateway log reports it at start.
+
 ## Landlock rights are gated by kernel version
 
 Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.

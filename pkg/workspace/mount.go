@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/preview/component"
 )
 
 // Mount is the canonical on-disk representation of a workspace mount — a
@@ -455,6 +456,12 @@ func IsSystemMountTarget(resolved string) bool { return isSystemMountTarget(reso
 //     still be covered — and (UAT 2026-09-13 D-117) when the target IS the
 //     root of an operating-system tree (systemMountRoots: /etc, /usr,
 //     /System, …). / and $HOME stay warn-and-allow per the 2026-08-12 ruling.
+//   - REFUSES (*ProgramFolderError, wrapping ErrMountRefused) when the
+//     target is, lies inside or contains a preview program folder (office
+//     preview spec §3.2, founder 2026-11-05, superseding the 2026-08-12 ruling
+//     for this one case: a mount containing a program folder is refused even
+//     when nothing is installed there). Checked after the two refusals above,
+//     which keep their own texts.
 //   - Otherwise WARNS AND ALLOWS (FR-7.6/FR-7.4): a non-empty warning string
 //     is returned (nil error) when the target CONTAINS omnipusHome (mounting
 //     $HOME or / when $OMNIPUS_HOME lives underneath — FR-7.6) or is
@@ -494,6 +501,9 @@ func CheckMountTarget(rawHostPath, omnipusHome string) (resolved string, warning
 			ErrMountRefused, resolved,
 		)
 	}
+	if hit := component.FirstProtectedOverlap(component.ProtectedFolders(omnipusHome), resolved); hit != nil {
+		return "", "", &ProgramFolderError{Component: hit.Name, Folder: hit.Path}
+	}
 
 	var reasons []string
 	if isWithinOrEqualPath(resolvedHome, resolved) {
@@ -512,6 +522,24 @@ func CheckMountTarget(rawHostPath, omnipusHome string) (resolved string, warning
 	}
 	return resolved, fmt.Sprintf("mounting %q %s", resolved, strings.Join(reasons, "; and ")), nil
 }
+
+// ProgramFolderError is the refusal of a mount target that overlaps a preview
+// program folder (office preview spec §3.2). It wraps ErrMountRefused; Reason
+// is the one sentence the REST reason and the request_mount result share.
+type ProgramFolderError struct {
+	Component string
+	Folder    string
+}
+
+// Reason is the fixed person-facing sentence.
+func (e *ProgramFolderError) Reason() string {
+	return fmt.Sprintf("that folder cannot be mounted: it is, contains or lies inside the %s program folder (%s), "+
+		"and agents can never get write access there. Mount a folder that does not include it.", e.Component, e.Folder)
+}
+
+func (e *ProgramFolderError) Error() string { return ErrMountRefused.Error() + ": " + e.Reason() }
+
+func (e *ProgramFolderError) Unwrap() error { return ErrMountRefused }
 
 // MountStatus reports whether m's target currently resolves on THIS machine
 // (FR-8.2/FR-8.5): "ok" when m.HostPath still exists and is a directory,

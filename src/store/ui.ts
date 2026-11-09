@@ -157,6 +157,34 @@ interface UiStore {
 export type MediaLightboxContent =
   | { kind: 'image'; src: string; alt?: string; filename?: string }
   | { kind: 'svg'; svg: string; title?: string; filename?: string }
+  | PreviewPagesLightboxContent
+
+/** One page of an office-preview thumbnail group in the enlarged viewer. */
+export interface PreviewViewerPage {
+  src: string
+  /** Display caption, e.g. "report.docx · page 3 of 12" — also the alt text. */
+  caption: string
+  pageNumber: number
+  filename: string
+}
+
+/**
+ * Office-preview spec §5.3/§5.4: the enlarged page viewer for one thumbnail
+ * group. Keyed by `groupKey` (the tool call id), never by page URL, so
+ * Left/Right page changes do not remount the viewer. `openerPage` is the page
+ * whose thumbnail opened it — focus returns there on close (else to the
+ * group, else to the chat input).
+ */
+export interface PreviewPagesLightboxContent {
+  kind: 'pages'
+  groupKey: string
+  pages: PreviewViewerPage[]
+  /** Index into `pages` of the page shown first. */
+  index: number
+  /** Total pages of the source document (MediaPreview.page_count). */
+  pageCount: number
+  openerPage: number
+}
 
 // Tracks auto-dismiss timers outside state so they can be cleared on manual dismiss
 const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()

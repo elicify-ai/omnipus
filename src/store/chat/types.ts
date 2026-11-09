@@ -15,6 +15,8 @@ import type {
   ServerFrame,
   LLMError as GeneratedLLMError,
   WorkflowStart,
+  MediaFrame,
+  MediaPreview,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
@@ -39,6 +41,27 @@ export interface MediaAttachment {
   filename: string
   contentType: string
   caption?: string
+  /**
+   * Office-preview spec §5.2: the tool call whose result produced this media
+   * (MediaFrame.tool_call_id). Absent for screenshots and uploads. Together
+   * with `presentation: 'page_thumbnails'` it is the group key: one thumbnail
+   * group per (message, tool call); the reducer dedupes on (toolCallId, url).
+   */
+  toolCallId?: string
+  /** MediaFrame.presentation; absent means `inline` (screenshots, uploads). */
+  presentation?: NonNullable<MediaFrame['presentation']>
+  /** MediaPart.page_number — 1-based page of the source document. */
+  pageNumber?: number
+  /** MediaFrame.preview as delivered with the frame that carried this item. */
+  preview?: MediaPreview
+  /**
+   * Set only on a group's state marker: a `page_thumbnails` frame whose
+   * outcome is `unavailable` carries no parts, so the reducer stores one
+   * marker entry (no image, `url` empty) that the chat renders as the
+   * persistent "Page previews unavailable" card. `null` when the server sent
+   * `outcome: unavailable` without a reason.
+   */
+  unavailableReason?: MediaPreview['unavailable_reason'] | null
 }
 
 // FR-H-008/FR-H-009: a subagent span brackets one sub-turn.

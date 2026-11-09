@@ -52,6 +52,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/policy"
+	"github.com/elicify-ai/omnipus/pkg/preview"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -442,6 +443,12 @@ func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
 // The task trigger scheduler is not created here: prepareTaskTrigger must have run first.
 func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error) {
 	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
+
+	// Document preview (office-preview spec AD-8): the gateway's one preview
+	// service, after startup recovery of a previous gateway's preview
+	// scratch. A service that cannot start leaves preview_document refusing
+	// as unavailable; it never blocks boot.
+	startDocumentPreview(stg.homePath, stg.agentLoop)
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
 	// the header notification center.
@@ -2250,4 +2257,28 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 		"remote_channels", channels,
 		"flagged_agents", flagged,
 	)
+}
+
+// startDocumentPreview installs the preview service and reports startup
+// recovery: every folder recovery could not resolve is a warning.
+//
+// The writer exclusion reads the agent loop's current configuration (so a
+// reload applies) and every session's approved write grants at each check.
+func startDocumentPreview(homePath string, al *agent.AgentLoop) {
+	_, rep, err := preview.StartGateway(homePath, preview.WriteAuthority{
+		Config:     al.GetConfig,
+		PathGrants: al.ApprovalGrants().AllPathGrants,
+	})
+	if err != nil {
+		logger.ErrorCF("preview", "document preview unavailable: the preview service did not start",
+			map[string]any{"error": err.Error()})
+		return
+	}
+	if rep.Removed > 0 || rep.Killed > 0 {
+		logger.InfoCF("preview", "document preview startup recovery",
+			map[string]any{"removed": rep.Removed, "killed": rep.Killed})
+	}
+	for _, w := range rep.Warnings {
+		logger.WarnCF("preview", "document preview startup recovery: "+w, nil)
+	}
 }

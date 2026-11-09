@@ -1,0 +1,6 @@
+# Python packages for the Office inspector tests in pkg/skills. The versions
+# match pkg/documentruntime/provision.go::PythonRequirements, the ones the
+# product's own document runtime installs.
+openpyxl==3.1.5
+python-pptx==1.0.2
+pypdf==6.19.0

@@ -411,7 +411,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: add mcp server", "error", err)
-		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
+		writeMCPConfigSaveFailure(w, err)
 		return
 	}
 	// Config write succeeded — reconcile the live manager so the server actually
@@ -520,6 +520,9 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		return nil
 	}); err != nil {
 		slog.Error("rest: delete mcp server", "id", id, "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
@@ -857,7 +860,7 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 		slog.Error("rest: patch mcp server", "id", id, "error", err)
-		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
+		writeMCPConfigSaveFailure(w, err)
 		return
 	}
 	// Config write succeeded — reconcile the live manager so an edited server
@@ -889,4 +892,14 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		Enabled:      &enabled,
 	}
 	jsonOK(w, resp)
+}
+
+// writeMCPConfigSaveFailure answers a failed config save of an MCP server
+// add or patch: the program-folder refusal as 400 with its text (office
+// preview spec §3.4 D9), anything else as 500 "could not save config".
+func writeMCPConfigSaveFailure(w http.ResponseWriter, err error) {
+	if writeRequestRefusal(w, err) {
+		return
+	}
+	jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 }

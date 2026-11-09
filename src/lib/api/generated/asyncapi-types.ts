@@ -196,6 +196,17 @@ export interface MediaPart {
   filename: string;
   content_type: string;
   caption?: string;
+  page_number?: number;
+}
+
+export interface MediaPreview {
+  source_name: string;
+  source_version: string;
+  page_count: number;
+  first_page: number;
+  last_page: number;
+  outcome: "complete" | "partial" | "unavailable";
+  unavailable_reason?: "renderer_missing" | "renderer_damaged" | "renderer_failed" | "storage_failed";
 }
 
 export interface RoomEntry {
@@ -757,6 +768,9 @@ export interface MediaFrame {
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
+  tool_call_id?: string;
+  presentation?: "inline" | "page_thumbnails";
+  preview?: MediaPreview;
   seq?: number;
 }
 

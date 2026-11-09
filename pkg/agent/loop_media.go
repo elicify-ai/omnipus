@@ -68,6 +68,7 @@ func resolveMediaRefsWithOffload(
 
 	result := make([]providers.Message, len(messages))
 	copy(result, messages)
+	var nativePDFs []nativePDFPart
 
 	for i, m := range result {
 		if len(m.Media) == 0 {
@@ -183,35 +184,45 @@ func resolveMediaRefsWithOffload(
 				continue
 			}
 
-			// PDF: route to native document blocks for capable models, else
-			// extract text. When the capability catalog says the model lacks
-			// the pdf modality (step-1 gate), skip native send and route to
-			// step-5 offload with document-class guidance, falling back to
-			// step-6 text extraction (FR-022) and step-7 honest marker.
+			// PDF: the model catalog alone decides (office-preview spec AD-11,
+			// FR-018). A model whose catalog entry lists the pdf modality gets
+			// the native document; otherwise (step-1 gate) skip native send and
+			// route to step-5 offload with document-class guidance, falling
+			// back to step-6 text extraction (FR-022) and step-7 honest marker.
 			if isPDF(mime, meta.Filename) {
-				if modelSupportsPDF(cat, provider, model) && pdfCapableModel(model) {
-					dataURL := encodePDFToDataURL(localPath, info, maxSize)
+				if modelSupportsPDF(cat, provider, model) {
+					// The provider's documented PDF size limit tightens the
+					// agent media limit (catalog pdf_limits, D2 A).
+					pdfLimit, _ := nativePDFLimits(cat, provider, model, maxSize)
+					dataURL := encodePDFToDataURL(localPath, info, pdfLimit)
 					if dataURL != "" {
 						resolved = append(resolved, dataURL)
+						nativePDFs = append(nativePDFs, nativePDFPart{
+							msg: i, part: len(resolved) - 1, path: localPath,
+							mime: mime, name: meta.Filename, size: info.Size(),
+						})
 					} else {
 						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
 						contentInjections = append(contentInjections, inj)
 					}
-				} else if !modelSupportsPDF(cat, provider, model) {
-					// Step-1 gate: text-only model + PDF → offload with
-					// document-class guidance + text extraction (step 5 + 6).
-					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					if offInj, ok := sink.offload(localPath, mime, meta.Filename, model); ok {
-						contentInjections = append(contentInjections, offInj+textInj)
-					} else {
-						contentInjections = append(contentInjections, textInj)
-					}
 				} else {
-					// Model not in the PDF-capable allow-list but capability
-					// gate passed (or catalog is nil/text-only model wasn't
-					// recognized) — extract text (step 6).
-					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
-					contentInjections = append(contentInjections, inj)
+					// Step-1 gate: model without the pdf modality + PDF →
+					// offload with document-class guidance + text extraction
+					// (step 5 + 6); a model that sees images also gets pages
+					// 1–10 as images and a note naming the workspace copy
+					// for later pages (office-preview spec §4.1, FR-044).
+					textInj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+					dest, offErr := sink.offloadPath(localPath, meta.Filename)
+					offInj := ""
+					if offErr == nil {
+						offInj = buildOffloadInjection(dest, detectFileClass(mime, meta.Filename), model)
+					}
+					if modelSupportsImage(cat, provider, model) {
+						pages := uploadPDFPageImages(localPath, meta.Filename, resizeBudgetForModel(cat, provider, model, maxSize))
+						resolved = append(resolved, pages.images...)
+						textInj = pages.note(dest, offErr) + textInj
+					}
+					contentInjections = append(contentInjections, offInj+textInj)
 				}
 				continue
 			}
@@ -227,6 +238,8 @@ func resolveMediaRefsWithOffload(
 		}
 	}
 
+	_, maxDocs := nativePDFLimits(cat, provider, model, maxSize)
+	capNativePDFParts(result, nativePDFs, maxDocs)
 	return result
 }
 
@@ -329,70 +342,6 @@ func buildUploadAnnouncement(ref string, meta media.MediaMeta) string {
 		return ""
 	}
 	return "\n\n[user uploaded: " + workPath + "]"
-}
-
-// pdfCapableModel returns true for models known to support native PDF document
-// blocks (base64 application/pdf content). Any model that returns false gets the
-// text-extraction fallback, which works for every model.
-//
-// The allow-list is deliberately CONSERVATIVE. The failure modes are asymmetric:
-// a false negative merely sends extracted text (slightly less rich, but always
-// works), whereas a false positive sends a native PDF block to a model whose
-// upstream provider rejects it with a hard HTTP 400 — which aborts the whole
-// turn with an empty reply. When in doubt, prefer text.
-//
-// Known exclusions (matched first, before the allow-list):
-//
-//   - Claude *Haiku* — OpenRouter routes Haiku via Amazon Bedrock, which returns
-//     "'claude-3-5-haiku-...' does not support PDF input." (verified 2026-06-01).
-//     Only Claude Sonnet/Opus (3.5+) and Claude 4 reliably accept PDF.
-//
-// Allow-list substrings (case-insensitive, matched against the full model id):
-//
-//	Anthropic: claude-3.5-sonnet / claude-3-7-sonnet / sonnet-4 / opus-4 / claude-4
-//	OpenAI:    gpt-4o, gpt-4.1, o1-, o3-
-//	Google:    gemini-1.5, gemini-2
-func pdfCapableModel(model string) bool {
-	lower := strings.ToLower(model)
-
-	// Exclusions take precedence: these match an allow-list substring but their
-	// upstream provider rejects PDF input, so they MUST fall back to text.
-	for _, deny := range []string{"haiku"} {
-		if strings.Contains(lower, deny) {
-			return false
-		}
-	}
-
-	capableSubstrings := []string{
-		// Anthropic — only Sonnet/Opus 3.5+ and Claude 4 accept PDF. Bare
-		// "claude-3" is intentionally NOT listed (it matched Haiku and the
-		// original Claude 3 models that lack PDF support).
-		"claude-3.5-sonnet", "claude-3-5-sonnet",
-		"claude-3.7-sonnet", "claude-3-7-sonnet",
-		"claude-sonnet-4", "claude-opus-4", "claude-4",
-		"sonnet-4", "opus-4",
-		// OpenAI GPT-4o and 4.1 family
-		"gpt-4o",
-		"gpt-4.1",
-		"openai/gpt-4o",
-		"openai/gpt-4.1",
-		// OpenAI o1/o3 reasoning models
-		"o1-",
-		"o3-",
-		"openai/o1",
-		"openai/o3",
-		// Google Gemini 1.5+
-		"gemini-1.5",
-		"gemini-2",
-		"google/gemini-1.5",
-		"google/gemini-2",
-	}
-	for _, sub := range capableSubstrings {
-		if strings.Contains(lower, sub) {
-			return true
-		}
-	}
-	return false
 }
 
 // downgradePDFMediaToText converts any native PDF data URL in each message's
@@ -1358,8 +1307,18 @@ type offloadSink struct {
 // the caller then produces the step-7 honest marker (edge case: "step-5 offload
 // cannot copy the file → step 7 honest marker with reason offload-failed").
 func (s *offloadSink) offload(localPath, mime, filename, model string) (string, bool) {
-	if s == nil {
+	dest, err := s.offloadPath(localPath, filename)
+	if err != nil {
 		return "", false
+	}
+	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+}
+
+// offloadPath copies localPath into the turn's work/ dir (step-5 offload)
+// and returns the copy's path; a failure is logged and returned.
+func (s *offloadSink) offloadPath(localPath, filename string) (string, error) {
+	if s == nil {
+		return "", errNoOffloadSink
 	}
 	safeName, err := deriveSafeOffloadName(localPath, filename)
 	if err != nil {
@@ -1367,7 +1326,7 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"path":  localPath,
 			"error": err.Error(),
 		})
-		return "", false
+		return "", err
 	}
 	dest, err := copyToWorkDir(localPath, s.workDir, safeName)
 	if err != nil {
@@ -1376,9 +1335,9 @@ func (s *offloadSink) offload(localPath, mime, filename, model string) (string, 
 			"work_dir": s.workDir,
 			"error":    err.Error(),
 		})
-		return "", false
+		return "", err
 	}
-	return buildOffloadInjection(dest, detectFileClass(mime, filename), model), true
+	return dest, nil
 }
 
 // sha256PrefixBytes is the number of sha256 digest bytes (16 hex chars) used

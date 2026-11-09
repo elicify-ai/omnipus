@@ -181,6 +181,9 @@ func (a *restAPI) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 		defaults["default_model"] = map[string]any{"provider": providerID, "model": model}
 		return nil
 	}); err != nil {
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonServerFailure(w, http.StatusInternalServerError, "could not persist default model", err)
 		return
 	}

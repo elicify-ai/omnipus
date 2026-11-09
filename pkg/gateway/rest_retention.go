@@ -116,6 +116,9 @@ func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: update retention config", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return
 	}

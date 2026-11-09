@@ -2289,6 +2289,7 @@ const (
 	ChannelOutboundRejectionCodeLookupUnavailable           ChannelOutboundRejectionCode = "lookup_unavailable"
 	ChannelOutboundRejectionCodePlatformCannotMessagePeople ChannelOutboundRejectionCode = "platform_cannot_message_people"
 	ChannelOutboundRejectionCodePlatformCannotStart         ChannelOutboundRejectionCode = "platform_cannot_start"
+	ChannelOutboundRejectionCodeProgramAccessRefused        ChannelOutboundRejectionCode = "program_access_refused"
 	ChannelOutboundRejectionCodeSavedLiveMismatch           ChannelOutboundRejectionCode = "saved_live_mismatch"
 	ChannelOutboundRejectionCodeStaleRevision               ChannelOutboundRejectionCode = "stale_revision"
 	ChannelOutboundRejectionCodeTooManyTargets              ChannelOutboundRejectionCode = "too_many_targets"
@@ -2306,6 +2307,8 @@ func (e ChannelOutboundRejectionCode) Valid() bool {
 	case ChannelOutboundRejectionCodePlatformCannotMessagePeople:
 		return true
 	case ChannelOutboundRejectionCodePlatformCannotStart:
+		return true
+	case ChannelOutboundRejectionCodeProgramAccessRefused:
 		return true
 	case ChannelOutboundRejectionCodeSavedLiveMismatch:
 		return true
@@ -8705,6 +8708,21 @@ func (e PlatformAuthStartRequestMethod) Valid() bool {
 	case PlatformAuthStartRequestMethodEmail:
 		return true
 	case PlatformAuthStartRequestMethodGoogle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PreviewRetryResponseStatus.
+const (
+	PreviewRetryResponseStatusStarted PreviewRetryResponseStatus = "started"
+)
+
+// Valid indicates whether the value is a known member of the PreviewRetryResponseStatus enum.
+func (e PreviewRetryResponseStatus) Valid() bool {
+	switch e {
+	case PreviewRetryResponseStatusStarted:
 		return true
 	default:
 		return false
@@ -16511,7 +16529,7 @@ type ChannelOutboundReadOutboundPolicy string
 // ChannelOutboundRejection Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
 // Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
 type ChannelOutboundRejection struct {
-	// Code Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+	// Code Machine-readable reason. 400: invalid_targets, too_many_targets, program_access_refused (config.json holds a write entry that would give agents write access to a document preview program folder; office preview spec §3.4 D9b row 34). 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
 	Code ChannelOutboundRejectionCode `json:"code"`
 
 	// Error Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
@@ -16536,7 +16554,7 @@ type ChannelOutboundRejection struct {
 	} `json:"target_errors,omitempty"`
 }
 
-// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets, program_access_refused (config.json holds a write entry that would give agents write access to a document preview program folder; office preview spec §3.4 D9b row 34). 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
 type ChannelOutboundRejectionCode string
 
 // ChannelOutboundRejectionTargetErrorsCode Why this entry was refused.
@@ -23582,6 +23600,15 @@ type PlatformAuthStartResponse struct {
 	// State The single-use, 10-minute anti-forgery value the platform will echo back to /auth/callback. Keep it in memory for as long as the sign-in is in progress: for the 60 seconds after a successful callback it is also what POST /auth/platform/claim accepts to hand the resulting session to the application, so during that window it IS a credential. Do not store it, log it or show it.
 	State string `json:"state"`
 }
+
+// PreviewRetryResponse 202 body of POST /sessions/{session_id}/previews/{tool_call_id}/retry (office-preview spec §5.2). The retry was admitted and started; its result arrives asynchronously as a new MediaFrame (presentation "page_thumbnails") carrying the same tool_call_id, never in this response.
+type PreviewRetryResponse struct {
+	// Status Always "started" for an admitted retry.
+	Status PreviewRetryResponseStatus `json:"status"`
+}
+
+// PreviewRetryResponseStatus Always "started" for an admitted retry.
+type PreviewRetryResponseStatus string
 
 // ProbeProviderRequest Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked).
 type ProbeProviderRequest struct {

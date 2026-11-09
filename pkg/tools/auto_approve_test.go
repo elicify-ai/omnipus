@@ -185,9 +185,17 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	// secret tools, answer_request, update_plan, read_conversation and the
 	// three new reads). Skills r15 §10 then removes create_skill and
 	// remove_skill and adds get_skill (121 - 2 + 1 = 120). Channels FR-032
-	// adds set_channel_outbound (+1, AutoAsks): 120 + 1 = 121.
-	if len(table) != 121 {
-		t.Errorf("table has %d entries, want 121 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13; r17 and r15 §10 changes as above; +1 set_channel_outbound, channels FR-032)", len(table))
+	// adds set_channel_outbound (+1, AutoAsks): 120 + 1 = 121. Read-only
+	// preview_document (office-preview AD-13; founder confirmation,
+	// 2026-10-30 07:50Z) joins as class runs: total 122.
+	if len(table) != 122 {
+		t.Errorf("table has %d entries, want 122 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13; r17 and r15 §10 changes as above; +1 set_channel_outbound, channels FR-032; +1 preview_document, office-preview AD-13)", len(table))
+	}
+	if got := table["preview_document"]; got != AutoRuns {
+		t.Errorf("preview_document class = %s, want runs (read-only; founder confirmation 2026-10-30)", got)
+	}
+	if got, peer := AutoApproveClassOf("preview_document"), AutoApproveClassOf("read_file"); got != AutoRuns || got != peer {
+		t.Errorf("preview_document class = %s, read_file class = %s; both must run without asking", got, peer)
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

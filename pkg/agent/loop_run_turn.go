@@ -1686,6 +1686,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					if err != nil {
 						return nil, err
 					}
+					m, err = attachTurnDocumentPreviews(ctx, m, rt.documentPreviews, rt.previewForms(cat, provider, model, budget))
+					if err != nil {
+						return nil, err
+					}
 					// Issue #1435 R1: this candidate's own budget applies to
 					// ordinary inline image media too — a tighter fallback
 					// candidate must not receive the looser primary's image

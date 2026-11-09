@@ -49,7 +49,8 @@ func TestBuildParams_ToolMediaOmissionIsVisible(t *testing.T) {
 		ToolCallID: "call-warning",
 		Content:    "inspection completed",
 		Media: []string{
-			"data:application/pdf;base64,JVBERi0xLjQ=",
+			// §4.2/T-44 makes PDFs native document blocks; audio remains unsupported.
+			"data:audio/ogg;base64,T2dnUw==",
 			"data:image/png;base64-without-comma",
 		},
 	}}, nil, "model", nil)

@@ -54,6 +54,12 @@ func writeConfigureFailure(w http.ResponseWriter, channelID string, code gen.Cha
 		text = configureSavedNotRefreshedText
 	case gen.ChannelConfigureErrorCodeCredentialSavedNotSaved:
 		text = configureCredentialSavedNotText
+		// §3.4 D9 route 7: the credential is stored, so the coded 500 stays;
+		// a refusal's text follows the existing sentence.
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			text += " " + refusal.Error()
+		}
 	}
 	body := gen.ChannelConfigureError{Code: code, Error: text}
 	if detail != "" {

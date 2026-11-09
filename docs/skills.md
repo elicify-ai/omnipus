@@ -24,7 +24,7 @@ Skills reach your agents from four places.
 | Source | What it is | How it gets there |
 |---|---|---|
 | Your skills folder | Skills you install or write, grantable to any agent | Lives at `~/.omnipus/skills` in your data folder, one folder per skill |
-| Built-in skills | Playbooks that come with Omnipus, including the four document skills (`elicify-docx`, `elicify-xlsx`, `elicify-pptx`, `elicify-pdf`) | Installed into your skills folder at every start. They are read-only |
+| Built-in skills | Playbooks that come with Omnipus, including the document skill `elicify-office` | Installed into your skills folder at every start. They are read-only |
 | A mounted folder | Skills that belong to a repository and travel with it | Put them in `.omnipus/skills` or `.claude/skills` at the root, then [mount the folder](library.md) |
 | The ClawHub registry | Community-published skills | Search and install from the Skills & Tools screen |
 

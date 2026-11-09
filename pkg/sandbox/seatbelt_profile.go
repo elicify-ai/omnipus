@@ -257,13 +257,11 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		}
 	}
 
-	for _, rule := range rs.policy.UnixSocketRules {
-		if err := validateSeatbeltPath(rule.Path); err != nil {
-			return "", fmt.Errorf("seatbelt: unix socket rule path %q: %w", rule.Path, err)
-		}
-		if !rule.Bind && !rule.Connect {
-			return "", fmt.Errorf("seatbelt: unix socket rule for %q has no operation", rule.Path)
-		}
+	if err := rs.renderLookupOnly(); err != nil {
+		return "", err
+	}
+	if err := rs.checkUnixSocketRules(); err != nil {
+		return "", err
 	}
 	rs.renderNetwork()
 
@@ -698,6 +696,43 @@ func ancestorPaths(p string) []string {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// renderLookupOnly emits SandboxPolicy.LookupOnlyPaths, each as exactly one
+// (allow file-read-metadata (literal "<folder>")) line: the child may look the
+// folder up, never list or read it, and literal reaches nothing below it
+// (office-preview spec §3.4 D8d). The entry is rendered as given, never
+// resolved: the caller computes it from real paths. A relative or uncleaned
+// entry aborts the render (fail closed).
+func (rs *renderSeatbeltProfileState) renderLookupOnly() error {
+	if len(rs.policy.LookupOnlyPaths) == 0 {
+		return nil
+	}
+	rs.b.WriteString("\n;; --- Look-up only (from SandboxPolicy.LookupOnlyPaths) ---\n")
+	for _, p := range rs.policy.LookupOnlyPaths {
+		if err := validateSeatbeltPath(p); err != nil {
+			return fmt.Errorf("seatbelt: look-up-only path %q: %w", p, err)
+		}
+		if filepath.Clean(p) != p {
+			return fmt.Errorf("seatbelt: look-up-only path %q is not a cleaned path (want %q)", p, filepath.Clean(p))
+		}
+		fmt.Fprintf(&rs.b, "(allow file-read-metadata (literal %q))\n", p)
+	}
+	return nil
+}
+
+// checkUnixSocketRules validates the socket rules before renderNetwork emits
+// them: an injectable path or a rule with no operation aborts the render.
+func (rs *renderSeatbeltProfileState) checkUnixSocketRules() error {
+	for _, rule := range rs.policy.UnixSocketRules {
+		if err := validateSeatbeltPath(rule.Path); err != nil {
+			return fmt.Errorf("seatbelt: unix socket rule path %q: %w", rule.Path, err)
+		}
+		if !rule.Bind && !rule.Connect {
+			return fmt.Errorf("seatbelt: unix socket rule for %q has no operation", rule.Path)
+		}
+	}
+	return nil
 }
 
 // validateSeatbeltPath enforces that a path is safe to embed in a Seatbelt

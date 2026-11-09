@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// SPEC.md Founder exclusion: the three system identities keep exactly their
-// c90310f1f stored role policies. This is a baseline-preservation oracle,
-// derived from that frozen commit's literals, not from running the new seed.
-// Global ceiling changes are intentionally NOT frozen by this assertion.
+// SPEC.md Founder exclusion preserves the three system identities' c90310f1f
+// role policies, with the explicit preview_document: deny addition required
+// by office-preview AD-13/T-20. The fixture is literal spec data, never copied
+// from the running seed. Global ceiling changes are not frozen here.
 func defaultToolsAssertSystemBaseline(t *testing.T) {
 	t.Helper()
 	path := filepath.Join("..", "..", "tests", "default-tools", "system-policy-baseline-c90310f1f.json")
@@ -41,7 +41,7 @@ func defaultToolsAssertSystemBaseline(t *testing.T) {
 			require.NotNil(t, actual.Tools)
 			want, ok := expected[id]
 			require.True(t, ok, "frozen baseline must cover every excluded identity")
-			assert.Equal(t, want, actual.Tools.Builtin.Policies, "SPEC.md Founder exclusion: %s policy must equal c90310f1f", id)
+			assert.Equal(t, want, actual.Tools.Builtin.Policies, "SPEC.md Founder exclusion plus office-preview AD-13/T-20: %s policy must equal the literal baseline", id)
 		})
 	}
 }

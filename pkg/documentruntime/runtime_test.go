@@ -131,6 +131,7 @@ func TestProvisionFirstPartyIsProbeableBeforeDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertOfficePackageInventory(t, manifest) // AD-14 replaces the four-package count.
 	// r15 §11 removes the copied document packages and their old asset-count
 	// prerequisite; the retained probe inventory must still be nonempty.
 	if len(manifest.Assets) == 0 {

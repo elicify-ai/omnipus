@@ -141,6 +141,17 @@ func historyToolCallMedia(tc session.ToolCall) (any, bool) {
 	return raw, ok
 }
 
+// historyToolCallPreviewGroup is the "presentation" and "preview" members the
+// thumbnail-group projection consumes: from the full value when the page shows
+// a preview, else from the result.
+func historyToolCallPreviewGroup(tc session.ToolCall) (string, any) {
+	if d, ok := tc.HistoryDisplayPreview(); ok {
+		return d.Presentation, d.PreviewGroup
+	}
+	presentation, _ := tc.Result["presentation"].(string)
+	return presentation, tc.Result["preview"]
+}
+
 // historyToolCallChildSessionID is the full value's top-level "session_id"
 // string, from the preserved fact when the page shows a preview.
 func historyToolCallChildSessionID(tc session.ToolCall) string {

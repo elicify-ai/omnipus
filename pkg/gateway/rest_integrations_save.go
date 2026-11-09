@@ -32,6 +32,9 @@ func (a *restAPI) persistIntegrationProviderUpdate(w http.ResponseWriter, def in
 		return applyIntegrationRoles(raw, def, write)
 	}); err != nil {
 		slog.Error("integrations: config update failed", "provider", def.id, "error", err)
+		if writeRequestRefusal(w, err) {
+			return false
+		}
 		jsonErr(w, http.StatusInternalServerError, "failed to save integration config")
 		return false
 	}

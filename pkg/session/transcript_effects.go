@@ -375,6 +375,33 @@ func (us *UnifiedStore) InterruptRunningToolCalls(sessionID string) (int, error)
 	return settled, nil
 }
 
+// LocateChatToolCall returns the address of the chat record carrying tool
+// call id and that call as currently merged (every settle and projection
+// applied), for a later SettleToolCall against it. found is false when no
+// chat record carries the id; the physically last carrier wins.
+func (us *UnifiedStore) LocateChatToolCall(sessionID string, id ToolCallID) (addr ArchiveAddress, call ToolCall, found bool, err error) {
+	if err = validateSessionID(sessionID); err != nil {
+		return ArchiveAddress{}, ToolCall{}, false, err
+	}
+	entries, index, err := us.readTranscriptEffective(sessionID)
+	if err != nil {
+		return ArchiveAddress{}, ToolCall{}, false, err
+	}
+	best := -1
+	for a, i := range index {
+		if i <= best {
+			continue
+		}
+		for _, tc := range entries[i].ToolCalls {
+			if tc.ID == id {
+				best, addr, call, found = i, a, tc, true
+				break
+			}
+		}
+	}
+	return addr, call, found, nil
+}
+
 // applyToolCallEffects merges the effects into entries (last writer wins per
 // target call, in physical order).
 func applyToolCallEffects(entries []TranscriptEntry, index map[ArchiveAddress]int, effects []pendingEffect, parts []partitionRef) error {

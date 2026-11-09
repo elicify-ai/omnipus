@@ -64,6 +64,10 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 		a.HandleToolResults(w, r)
 		return
 	}
+	if toolCallID, ok := previewRetryToolCallID(subPath); ok && sessionID != "" {
+		a.handlePreviewRetry(w, r, sessionID, toolCallID)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:

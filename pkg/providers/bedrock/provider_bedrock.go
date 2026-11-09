@@ -273,6 +273,7 @@ type systemContentBlock struct {
 type contentBlock struct {
 	Text       *string          `json:"text,omitempty"`
 	Image      *imageBlock      `json:"image,omitempty"`
+	Document   *documentBlock   `json:"document,omitempty"`
 	ToolUse    *toolUseBlock    `json:"toolUse,omitempty"`
 	ToolResult *toolResultBlock `json:"toolResult,omitempty"`
 }
@@ -283,6 +284,17 @@ type imageBlock struct {
 }
 
 type imageSource struct {
+	Bytes []byte `json:"bytes"`
+}
+
+// documentBlock is the Converse DocumentBlock (format, name, source bytes).
+type documentBlock struct {
+	Format string         `json:"format"`
+	Name   string         `json:"name"`
+	Source documentSource `json:"source"`
+}
+
+type documentSource struct {
 	Bytes []byte `json:"bytes"`
 }
 
@@ -382,7 +394,21 @@ func isToolResult(msg Message) bool {
 func makeToolResultBlock(msg Message) contentBlock {
 	content := []contentBlock{{Text: stringPointer(msg.Content)}}
 	rejected := map[string]int{}
+	documents := 0
 	for _, mediaURL := range msg.Media {
+		// A native PDF stays inside the tool result: Converse documents a
+		// document member in ToolResultContentBlock (office-preview spec
+		// §4.2, S-2).
+		if strings.HasPrefix(mediaURL, pdfDataURLPrefix) {
+			documents++
+			doc, reason := bedrockPDFBlock(mediaURL, bedrockDocumentName("tool result "+msg.ToolCallID, documents))
+			if reason != "" {
+				rejected[reason]++
+				continue
+			}
+			content = append(content, contentBlock{Document: &doc})
+			continue
+		}
 		if image, reason := bedrockImageBlock(mediaURL); reason == "" {
 			content = append(content, contentBlock{Image: &image})
 		} else {
@@ -397,6 +423,7 @@ func makeToolResultBlock(msg Message) contentBlock {
 			"malformed_image_data_count":     rejected["malformed image data"],
 			"image_oversize_count":           rejected["image exceeds 10 MiB"],
 			"unsupported_media_type_count":   rejected["unsupported media type"],
+			"malformed_pdf_data_count":       rejected["malformed PDF data"],
 		})
 	}
 	return contentBlock{ToolResult: &toolResultBlock{ToolUseID: msg.ToolCallID, Content: content}}
@@ -404,7 +431,7 @@ func makeToolResultBlock(msg Message) contentBlock {
 
 func toolMediaWarning(rejected map[string]int) string {
 	parts := make([]string, 0, 4)
-	for _, reason := range []string{"unsupported image format", "malformed image data", "image exceeds 10 MiB", "unsupported media type"} {
+	for _, reason := range []string{"unsupported image format", "malformed image data", "image exceeds 10 MiB", "unsupported media type", "malformed PDF data"} {
 		if count := rejected[reason]; count > 0 {
 			parts = append(parts, fmt.Sprintf("%s (%d)", reason, count))
 		}
@@ -442,18 +469,75 @@ func bedrockImageBlock(mediaURL string) (imageBlock, string) {
 	return imageBlock{Format: format, Source: imageSource{Bytes: data}}, ""
 }
 
+// pdfDataURLPrefix marks a native PDF in a message's media list.
+const pdfDataURLPrefix = "data:application/pdf;base64,"
+
+// bedrockPDFBlock decodes a PDF data URL into a Converse document block. No
+// size limit is applied here: per-provider document limits come from the
+// model catalog (office-preview founder decision O2), not from the adapter.
+func bedrockPDFBlock(mediaURL, name string) (documentBlock, string) {
+	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(mediaURL, pdfDataURLPrefix))
+	if err != nil || len(data) == 0 {
+		return documentBlock{}, "malformed PDF data"
+	}
+	return documentBlock{Format: "pdf", Name: name, Source: documentSource{Bytes: data}}, ""
+}
+
+// bedrockDocumentName builds a DocumentBlock name from the characters
+// Converse allows (alphanumerics, single spaces, hyphens, parentheses, square
+// brackets; at most 200 characters). Anything else becomes a hyphen.
+func bedrockDocumentName(base string, n int) string {
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range fmt.Sprintf("%s %d", base, n) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '(', r == ')', r == '[', r == ']':
+			b.WriteRune(r)
+			lastSpace = false
+		case r == ' ':
+			if !lastSpace {
+				b.WriteRune(r)
+			}
+			lastSpace = true
+		default:
+			b.WriteRune('-')
+			lastSpace = false
+		}
+	}
+	name := strings.TrimSpace(b.String())
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	return name
+}
+
 func buildUserContent(msg Message) []contentBlock {
 	content := make([]contentBlock, 0, 1+len(msg.Media))
 	if msg.Content != "" {
 		content = append(content, contentBlock{Text: stringPointer(msg.Content)})
 	}
+	documents := 0
 	for _, mediaURL := range msg.Media {
+		if strings.HasPrefix(mediaURL, pdfDataURLPrefix) {
+			documents++
+			doc, reason := bedrockPDFBlock(mediaURL, bedrockDocumentName("attachment", documents))
+			if reason != "" {
+				logger.WarnCF("bedrock", "skipping user document", map[string]any{"reason": reason})
+				continue
+			}
+			content = append(content, contentBlock{Document: &doc})
+			continue
+		}
 		image, reason := bedrockImageBlock(mediaURL)
 		if reason != "" {
 			logger.WarnCF("bedrock", "skipping user image", map[string]any{"reason": reason})
 			continue
 		}
 		content = append(content, contentBlock{Image: &image})
+	}
+	// Converse requires a text block beside any document block.
+	if documents > 0 && msg.Content == "" {
+		content = append([]contentBlock{{Text: stringPointer("Attached document.")}}, content...)
 	}
 	if len(content) == 0 {
 		content = append(content, contentBlock{Text: stringPointer("")})

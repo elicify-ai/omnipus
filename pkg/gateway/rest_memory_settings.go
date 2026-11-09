@@ -159,6 +159,9 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: PUT /settings/memory: failed", "error", err)
+		if writeRequestRefusal(w, err) {
+			return
+		}
 		jsonErr(w, http.StatusInternalServerError, "failed to update memory settings")
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -223,7 +224,8 @@ func mediaRefURL(ref string) string {
 // treats an error as fatal and would otherwise discard toolResult.Media, so
 // the attachment would be lost from the transcript too.
 func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessage) error {
-	if len(msg.Parts) == 0 {
+	group := msg.Presentation == previewPresentationPageThumbnails
+	if len(msg.Parts) == 0 && !group {
 		slog.Warn("webchat: SendMedia called with empty parts — skipping", "chat_id", msg.ChatID)
 		return nil
 	}
@@ -247,7 +249,14 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 			caption := p.Caption
 			part.Caption = &caption
 		}
+		if p.PageNumber > 0 {
+			page := p.PageNumber
+			part.PageNumber = &page
+		}
 		parts = append(parts, part)
+	}
+	if group {
+		return c.sendPreviewGroup(msg, parts)
 	}
 	if len(parts) == 0 {
 		return fmt.Errorf(
@@ -277,6 +286,37 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	// connection is not a failure — the media refs stay durable.
 	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), hubFrameMeta{
 		kind: hubKindItem, key: "media:" + parts[0].Url + ":" + strconv.Itoa(len(parts)),
+	}, frame)
+	return nil
+}
+
+// sendPreviewGroup publishes one preview_document thumbnail group
+// (office-preview spec §5.2), the same projection replay builds
+// (replay.go::buildMediaFrame): empty parts only for an unavailable
+// preview.
+func (c *webchatChannel) sendPreviewGroup(msg bus.OutboundMediaMessage, parts []generated.MediaPart) error {
+	if len(parts) == 0 && (msg.Preview == nil || msg.Preview.Outcome != previewOutcomeUnavailable) {
+		return fmt.Errorf("webchat: preview group for tool call %s has no stored thumbnails and is not marked unavailable", msg.ToolCallID)
+	}
+	sid, origin := c.resolveOutbound(msg.ChatID, msg.SessionID)
+	id := msg.ToolCallID
+	presentation := previewPresentationPageThumbnails
+	frame := generated.MediaFrame{
+		Type:         string(generated.WsFrameTypeMedia),
+		SessionId:    sid,
+		Parts:        parts,
+		ToolCallId:   &id,
+		Presentation: &presentation,
+		Preview:      msg.Preview,
+	}
+	if sid == "" {
+		if origin != nil {
+			sendConnGenFrame(origin, string(generated.WsFrameTypeMedia), frame)
+		}
+		return nil
+	}
+	c.wsHandler.hubPublishFrameMeta(sid, string(generated.WsFrameTypeMedia), hubFrameMeta{
+		kind: hubKindItem, key: "media:preview:" + id + ":" + strconv.FormatInt(time.Now().UnixNano(), 10), // a Retry result is a new item
 	}, frame)
 	return nil
 }
