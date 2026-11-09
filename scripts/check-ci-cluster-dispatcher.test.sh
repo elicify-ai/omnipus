@@ -72,6 +72,55 @@ echo "Test 3: a tree without the selfcheck exits 2 (never a silent green)"
 mkdir -p "$TMP_DIR/empty"
 REPO_ROOT="$TMP_DIR/empty" bash "$GUARD" >/dev/null 2>&1; check "missing-selfcheck" 2 $?
 
+echo "Test 4: a dispatcher whose watchdog never probes is caught by selfcheck case 8, for the intended reason"
+# The 2026-10-18 hang: with no probing the dead-but-open console is never ended. The selfcheck's
+# fake console never ends by itself, so the mutant must fail on the case's own 40s cap
+# assertion, not on a setup/syntax error.
+MUT4_DIR="$TMP_DIR/mutant4/deploy/ci-worker"
+mkdir -p "$MUT4_DIR"
+cp "$REPO/deploy/ci-worker/runci.sh" "$MUT4_DIR/runci.sh"
+# shellcheck disable=SC2016 # literal sed pattern, not a shell expansion
+sed 's|\[ "\$watched" -lt "\$WATCH_INTERVAL" \] && continue|continue|' \
+  "$REPO/deploy/ci-worker/ci-cluster.sh" > "$MUT4_DIR/ci-cluster.sh"
+if cmp -s "$REPO/deploy/ci-worker/ci-cluster.sh" "$MUT4_DIR/ci-cluster.sh"; then
+  echo "  FAIL [mutant4-built]: the mutation did not change ci-cluster.sh, so this test proves nothing"
+  FAIL=$((FAIL + 1))
+else
+  SELFCHECK_HANG_CAP=20 GIT_DIR="$GIT_DIR_ABS" CI_CLUSTER_UNDER_TEST="$MUT4_DIR/ci-cluster.sh" \
+    bash "$GUARD" >"$TMP_DIR/mutant4.out" 2>&1; rc=$?
+  check "mutant4-no-watchdog" 1 "$rc"
+  if grep -q 'selfcheck FAIL: (8) expected STALLED exit 1 within the cap, got 143' "$TMP_DIR/mutant4.out" \
+    && ! grep -q -e 'missing' -e 'cannot resolve ref' -e 'syntax error' "$TMP_DIR/mutant4.out"; then
+    echo "  PASS [mutant4-reason]: failed on case 8's hang assertion, as intended"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL [mutant4-reason]: the mutant failed for some other reason:"; sed 's/^/    | /' "$TMP_DIR/mutant4.out" | tail -20
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
+echo "Test 5: a runci.sh without its HUP/INT/TERM traps is caught by selfcheck case 11, for the intended reason"
+# The selfcheck takes the trap statements from runci.sh itself and runs them in a child, so a
+# runner whose traps were deleted must fail the case's named assertions (not a setup error).
+MUT5_DIR="$TMP_DIR/mutant5/deploy/ci-worker"
+mkdir -p "$MUT5_DIR"
+cp "$REPO/deploy/ci-worker/ci-cluster.sh" "$REPO/deploy/ci-worker/ci-cluster-selfcheck.sh" "$MUT5_DIR/"
+sed -E "/^trap '.*' (HUP|INT|TERM)\$/d" "$REPO/deploy/ci-worker/runci.sh" > "$MUT5_DIR/runci.sh"
+if cmp -s "$REPO/deploy/ci-worker/runci.sh" "$MUT5_DIR/runci.sh"; then
+  echo "  FAIL [mutant5-built]: the mutation did not change runci.sh, so this test proves nothing"
+  FAIL=$((FAIL + 1))
+else
+  GIT_DIR="$GIT_DIR_ABS" REPO_ROOT="$TMP_DIR/mutant5" bash "$GUARD" >"$TMP_DIR/mutant5.out" 2>&1; rc=$?
+  check "mutant5-no-traps" 1 "$rc"
+  if grep -q 'selfcheck FAIL: (11) runci.sh does not carry exactly the three HUP/INT/TERM trap statements' "$TMP_DIR/mutant5.out" \
+    && grep -q 'selfcheck FAIL: (11) the real runci.sh wrote no KILLED trailer for SIGHUP' "$TMP_DIR/mutant5.out" \
+    && ! grep -q -e 'missing' -e 'cannot resolve ref' -e 'syntax error' "$TMP_DIR/mutant5.out"; then
+    echo "  PASS [mutant5-reason]: failed on case 11's trap assertions, as intended"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL [mutant5-reason]: the mutant failed for some other reason:"; sed 's/^/    | /' "$TMP_DIR/mutant5.out" | tail -20
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ] || exit 1

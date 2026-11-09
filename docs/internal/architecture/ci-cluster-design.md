@@ -116,13 +116,23 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    **Gate watchdog (2026-10-19, `ci-cluster.sh::dispatch_tier`).** While a gate's console
    runs, the tier re-checks it every second (verdict-in-log first, then the console
    process) and probes the REMOTE liveness of *this* gate's runci.sh
-   (`pgrep -f "/cache/[r]unci.sh <ref> <gate>"`, ref- and gate-specific so a co-tenant's
-   run can never make a dead gate look alive) once per `CI_CLUSTER_WATCH_INTERVAL`
-   (default 30s). After `CI_CLUSTER_DEAD_STRIKES` (default 3) consecutive not-alive
-   probes, the console is killed and `handle_incomplete_gate` decides: if the remote
-   RUNLOG (`/cache/logs/<gate>@…`, which runci.sh tee's from its first output line) holds
-   a verdict — the transport died but the run finished — the verdict is RECOVERED and the
-   gate counts as completed; otherwise the tier ends with an explicit, non-zero
+   (`sh -c "pgrep -f '/cache/[r]unci[.]sh <ref> <gate> <attempt>'; echo PGREP_RC=$?"` — one
+   quoted pattern, bound to a per-invocation **attempt id** that the dispatcher passes to
+   runci.sh as its third argument, so a co-tenant's run of even the same gate and ref can
+   never make a dead gate look alive; the `PGREP_RC` sentinel separates a clean no-match
+   from a failed probe) once per `CI_CLUSTER_WATCH_INTERVAL` (default 30s). The watchdog's
+   own I/O is bounded separately from healthy gate runtime: a probe or recovery transfer
+   may take `CI_CLUSTER_CONTROL_TIMEOUT` (default 20s), a killed console gets
+   `CI_CLUSTER_REAP_GRACE` (default 5s) before KILL. After `CI_CLUSTER_DEAD_STRIKES`
+   (default 3) consecutive not-alive probes (`gone`, `unreachable` or `timeout`), the
+   console is terminated and `handle_incomplete_gate` decides: if the remote RUNLOG THIS
+   attempt announced in its own console capture (`/cache/logs/<gate>@…`, which runci.sh
+   tee's from its first output line, followed by an `ATTEMPT: <id>` line) can be fetched
+   within the bound and carries this attempt's id, this run's HEAD and a verdict — the
+   transport died but the run finished — the verdict is RECOVERED and the gate counts as
+   completed. There is no "newest log of this gate" fallback: an older green run of the
+   same gate and commit is never adopted, and collected evidence must carry the attempt
+   id too. Otherwise the tier ends with an explicit, non-zero
    **STALLED/DIED** verdict naming the gate, the machine and the last log line. Liveness,
    never a timer: a healthy go-race (~25 min) probes `alive` on every cycle and is never
    killed. `runci.sh` complements this with HUP/INT/TERM traps that write a

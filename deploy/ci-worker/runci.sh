@@ -34,6 +34,11 @@ trap 'echo "RUNCI: KILLED by signal TERM — no verdict written; gate state at d
 
 REF="${1:-HEAD}"
 GATE="${2:-all}"
+# Dispatcher-assigned attempt identity (ci-cluster.sh passes a unique id per
+# dispatched invocation). Echoed into the run log so evidence recovered or
+# collected later can be bound to THIS invocation, never to an older run of the
+# same gate and commit. Empty when run by hand.
+ATTEMPT="${3:-}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
 
 # --- per-run log on the persistent volume ---------------------------------
@@ -66,6 +71,7 @@ RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
 ( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
 exec > >(tee -a "$RUNLOG") 2>&1
 echo "RUNLOG: $RUNLOG"
+echo "ATTEMPT: ${ATTEMPT:-none}"
 fi
 
 # --- whole-run mutex ------------------------------------------------------
@@ -289,7 +295,7 @@ if [ -z "${RUNCI_AS_CI:-}" ]; then
       if [ "$(id -u)" = 0 ]; then
         ci_prepare || { echo "cannot prepare the non-root test user '$CI_USER'"; exit 2; }
         echo "re-exec as non-root user '$CI_USER' (uid $(id -u "$CI_USER"))"
-        exec runuser -u "$CI_USER" -- env RUNCI_AS_CI=1 HOME="/home/$CI_USER" "PATH=$PATH" bash "$0" "$REF" "$GATE"
+        exec runuser -u "$CI_USER" -- env RUNCI_AS_CI=1 HOME="/home/$CI_USER" "PATH=$PATH" bash "$0" "$REF" "$GATE" "$ATTEMPT"
       fi
       ;;
   esac
