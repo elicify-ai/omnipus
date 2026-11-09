@@ -69,6 +69,12 @@ type WhatsAppNativeChannel struct {
 	runCancel    context.CancelFunc
 	reconnectMu  sync.Mutex
 	reconnecting bool
+	// loggingOut marks that a LoggedOut event is being handled, and logoutWake
+	// is closed when one arrives while reconnectWithBackoff owns reconnecting
+	// (#1687 A2): the loop then stops dialling and hands reconnecting to the
+	// logout handling. Both are guarded by reconnectMu.
+	loggingOut bool
+	logoutWake chan struct{}
 	// keepAliveFailedSince is the LastSuccess of the keepalive failure that last
 	// claimed a reconnect, guarded by reconnectMu (native_keepalive.go).
 	keepAliveFailedSince time.Time
@@ -631,7 +637,16 @@ func (c *WhatsAppNativeChannel) eventHandler(evt any) {
 			"on_connect": ev.OnConnect,
 		})
 		c.reconnectMu.Lock()
-		if c.stopping.Load() || c.reconnecting {
+		if c.stopping.Load() || c.loggingOut {
+			c.reconnectMu.Unlock()
+			return
+		}
+		c.loggingOut = true
+		if c.reconnecting {
+			// The reconnect loop owns reconnecting (#1687 A2): wake it so it
+			// stops dialling; on its way out it runs this logout's handling,
+			// so the end state is the one an idle logout leaves.
+			close(c.logoutWakeLocked())
 			c.reconnectMu.Unlock()
 			return
 		}
@@ -640,12 +655,7 @@ func (c *WhatsAppNativeChannel) eventHandler(evt any) {
 		c.reconnectMu.Unlock()
 		go func() {
 			defer c.wg.Done()
-			defer func() {
-				c.reconnectMu.Lock()
-				c.reconnecting = false
-				c.reconnectMu.Unlock()
-			}()
-			c.handleLoggedOut()
+			c.runLoggedOut()
 		}()
 	case *events.Disconnected:
 		logger.InfoCF("whatsapp", "WhatsApp disconnected, will attempt reconnection", nil)
@@ -674,16 +684,17 @@ func (c *WhatsAppNativeChannel) eventHandler(evt any) {
 }
 
 func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
-	defer func() {
-		c.reconnectMu.Lock()
-		c.reconnecting = false
-		c.reconnectMu.Unlock()
-	}()
+	c.reconnectMu.Lock()
+	loggedOut := c.logoutWakeLocked()
+	c.reconnectMu.Unlock()
+	defer c.endReconnect()
 
 	backoff := reconnectInitial
 	for {
 		select {
 		case <-c.runCtx.Done():
+			return
+		case <-loggedOut:
 			return
 		default:
 		}
@@ -696,7 +707,10 @@ func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
 		}
 
 		logger.InfoCF("whatsapp", "WhatsApp reconnecting", map[string]any{"backoff": backoff.String()})
-		err := c.connectNative(client)
+		err := c.connectNativeUnlessLoggedOut(client, loggedOut)
+		if errors.Is(err, errLoggedOutDuringReconnect) {
+			return
+		}
 		if err == nil {
 			// Clears a failure markReconnectFailed showed on an earlier attempt.
 			c.publishNativeRunning(client)
@@ -710,6 +724,8 @@ func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
 		select {
 		case <-c.runCtx.Done():
 			return
+		case <-loggedOut:
+			return
 		case <-time.After(backoff):
 			if backoff < reconnectMax {
 				next := time.Duration(float64(backoff) * reconnectMultiplier)
@@ -720,6 +736,61 @@ func (c *WhatsAppNativeChannel) reconnectWithBackoff() {
 			}
 		}
 	}
+}
+
+// logoutWakeLocked returns the channel eventHandler closes when a logout
+// arrives during a reconnect, creating it when none is open. Caller holds
+// reconnectMu.
+func (c *WhatsAppNativeChannel) logoutWakeLocked() chan struct{} {
+	if c.logoutWake == nil {
+		c.logoutWake = make(chan struct{})
+	}
+	return c.logoutWake
+}
+
+// endReconnect releases reconnecting when reconnectWithBackoff returns. If a
+// logout arrived while the loop ran (#1687 A2), the loop's goroutine keeps
+// reconnecting and handles that logout itself, exactly as eventHandler does
+// for a logout with no reconnect running.
+func (c *WhatsAppNativeChannel) endReconnect() {
+	c.reconnectMu.Lock()
+	takeOver := c.loggingOut && !c.stopping.Load()
+	if !takeOver {
+		c.reconnecting = false
+		c.loggingOut = false
+		c.logoutWake = nil
+	}
+	c.reconnectMu.Unlock()
+	if takeOver {
+		c.runLoggedOut()
+	}
+}
+
+// runLoggedOut handles one logout and then releases reconnecting. A logout
+// ends any reconnect: the status stops saying the connection is being
+// re-established, and the running flag returns to what it was before the
+// reconnect failed, so a logout during a reconnect ends in the same state as
+// a logout with none running. Must run on a goroutine tracked by c.wg, with
+// reconnecting and loggingOut set.
+func (c *WhatsAppNativeChannel) runLoggedOut() {
+	defer func() {
+		c.reconnectMu.Lock()
+		c.reconnecting = false
+		c.loggingOut = false
+		c.logoutWake = nil
+		c.reconnectMu.Unlock()
+	}()
+	if c.reconnectFailing.Load() {
+		c.mu.Lock()
+		client := c.client
+		c.mu.Unlock()
+		// Writes nothing for a superseded client or a channel that is stopping;
+		// disposal then clears the flag itself.
+		if client != nil {
+			c.publishNativeRunning(client)
+		}
+	}
+	c.handleLoggedOut()
 }
 
 func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {

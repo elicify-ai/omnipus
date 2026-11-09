@@ -60,6 +60,8 @@ func (c *WhatsAppNativeChannel) beginNativeStart(ctx context.Context) (*nativeLi
 	c.lifecycle, c.runCtx, c.runCancel = resource, runCtx, cancel
 	c.stopping.Store(false)
 	c.reconnecting = false
+	c.loggingOut = false
+	c.logoutWake = nil
 	c.wg.Add(1) // Start, including initialization and its first connect, joins before final disposal
 	return resource, nil
 }
@@ -207,7 +209,25 @@ func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *
 // connectNative is shared by initial pairing, linked starts, reconnect and
 // repair. The library receives the lifecycle context, never BackgroundEventCtx.
 func (c *WhatsAppNativeChannel) connectNative(client *whatsmeow.Client) error {
+	return c.connectNativeUnlessLoggedOut(client, nil)
+}
+
+// errLoggedOutDuringReconnect refuses a reconnect dial once a logout has
+// reached the channel (#1687 A2).
+var errLoggedOutDuringReconnect = errors.New("the WhatsApp device was logged out during a reconnect")
+
+// connectNativeUnlessLoggedOut is connectNative for the reconnect loop: it
+// refuses to dial once loggedOut is closed. The check runs under reconnectMu,
+// where eventHandler closes loggedOut, so a logout either precedes this dial
+// (refused) or arrives while the dial is already in flight.
+func (c *WhatsAppNativeChannel) connectNativeUnlessLoggedOut(client *whatsmeow.Client, loggedOut <-chan struct{}) error {
 	c.reconnectMu.Lock()
+	select {
+	case <-loggedOut: // a nil channel never fires
+		c.reconnectMu.Unlock()
+		return errLoggedOutDuringReconnect
+	default:
+	}
 	c.mu.Lock()
 	if !c.nativeClientCurrentLocked(client) {
 		c.mu.Unlock()
