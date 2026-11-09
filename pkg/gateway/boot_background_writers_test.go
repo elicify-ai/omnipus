@@ -133,13 +133,51 @@ func watchHomeQuiescent(t *testing.T, root string, before map[string]int64) {
 // context, or the drain returns while the writers are still live. The
 // budget value is the same bootBackgroundStopTimeout every drain uses —
 // deliberately not enlarged.
+//
+// A drain that runs out of that budget returns by design and logs; in a test
+// that return used to lead straight into the TempDir removal while a writer
+// was still live — the unnamed "directory not empty" flake (#1730, F2). So
+// after the drain this helper requires the writers to have actually joined,
+// failing the test with a named assertion if they did not, and then keeps
+// the home alive until they finish (bounded by the test deadline) so the
+// removal never races them.
 func stopBootWritersOnCleanup(t *testing.T, rc *runContextWithOptions) {
 	t.Helper()
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), bootBackgroundStopTimeout)
 		defer stopCancel()
 		rc.stopBootBackgroundWriters(stopCtx)
+		requireBootWritersJoined(t, rc.bootBackgroundDone)
 	})
+}
+
+// requireBootWritersJoined fails the test if the boot-stage writers are still
+// running after the teardown drain returned, then waits for them so the
+// test's home is not removed under a live writer. The wait is bounded only by
+// the go test deadline (minus a margin to report before the harness kills the
+// binary); it can only fail the test, never pass it.
+func requireBootWritersJoined(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	if done == nil {
+		return // initializeAgentLoop never started the writers
+	}
+	select {
+	case <-done:
+		return
+	default:
+	}
+	t.Errorf("boot background writers still running after the %s teardown drain budget (#1730): a writer ignored the cancel, and removing the test home now would race it", bootBackgroundStopTimeout)
+	var guard <-chan time.Time
+	if deadline, ok := t.Deadline(); ok {
+		timer := time.NewTimer(max(time.Until(deadline)-30*time.Second, time.Second))
+		defer timer.Stop()
+		guard = timer.C
+	}
+	select {
+	case <-done:
+	case <-guard:
+		t.Errorf("boot background writers never finished before the test deadline (#1730): the test home is removed under a live writer")
+	}
 }
 
 // TestBootBackgroundWriters_JoinedBeforeHomeRemoval drives the
