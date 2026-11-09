@@ -139,8 +139,9 @@ func watchHomeQuiescent(t *testing.T, root string, before map[string]int64) {
 // was still live — the unnamed "directory not empty" flake (#1730, F2). So
 // after the drain this helper requires the writers to have actually joined,
 // failing the test with a named assertion if they did not, and then keeps
-// the home alive until they finish (bounded by the test deadline) so the
-// removal never races them.
+// the home until they finish or the test deadline (minus a margin) passes.
+// Past that guard it reports a second named failure and lets the removal go
+// ahead; with no test deadline it waits for the writers indefinitely.
 func stopBootWritersOnCleanup(t *testing.T, rc *runContextWithOptions) {
 	t.Helper()
 	t.Cleanup(func() {

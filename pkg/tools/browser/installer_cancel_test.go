@@ -6,72 +6,94 @@ package browser
 // budget must observe the cancellation itself; otherwise the drain gives up,
 // the caller removes or reuses the home, and the installer keeps writing into
 // it. These tests pin each such step: waiting for the process-wide install
-// lock, extracting the archive, and (trim_cancel_test.go) the cache sweep.
+// lock, extracting the archive (installer_extract_cancel_test.go), and the
+// cache sweep (trim_cancel_test.go).
 
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
-	"sync"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
 
 // installCancelAckBound is a liveness bound, not a tolerance: a waiter that
 // observes cancellation returns within microseconds, while a waiter that
-// ignores it stays blocked until the lock holder is released — which this
-// test does only AFTER the bound, so a cancellation-blind waiter can never
-// pass by being lucky with timing.
+// ignores it stays blocked until the slot holder releases — which this test
+// does only AFTER the bound, so a cancellation-blind waiter can never pass by
+// being lucky with timing.
 const installCancelAckBound = 5 * time.Second
 
-// TestEnsureChromiumBuild_CancelledWhileWaitingForInstallLock holds the
-// install lock with a real first install whose manifest fetch is parked on a
-// local server, then starts and cancels a second install. The second must
-// return the cancellation while the first still holds the lock, and must not
-// write anything into its install root.
-func TestEnsureChromiumBuild_CancelledWhileWaitingForInstallLock(t *testing.T) {
-	if _, err := cftPlatform(); err != nil {
-		t.Skipf("no managed Chrome build for this platform, so there is no install to hold the lock: %v", err)
-	}
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var enteredOnce, releaseOnce sync.Once
-	releaseHolder := func() { releaseOnce.Do(func() { close(release) }) }
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		enteredOnce.Do(func() { close(entered) })
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-		http.Error(w, "held by the install-lock test", http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(srv.Close)
-	t.Cleanup(releaseHolder) // runs before srv.Close (LIFO), so the handler never pins Close
-	oldURL := globalManifestURLForTesting
-	globalManifestURLForTesting = srv.URL
-	t.Cleanup(func() { globalManifestURLForTesting = oldURL })
+// installWaiterCreator is the frame Go's goroutine dump prints under
+// "created by" for the waiter goroutine this test starts, so the queued
+// witness below can only ever match THIS test's waiter.
+const installWaiterCreator = "created by github.com/elicify-ai/omnipus/pkg/tools/browser.TestEnsureChromiumBuild_CancelledWhileWaitingForInstallLock"
 
-	holderRoot := t.TempDir()
-	holderDone := make(chan error, 1)
-	go func() {
-		_, err := EnsureChromiumBuild(context.Background(), holderRoot, headlessShellBuild())
-		holderDone <- err
-	}()
-	select {
-	case <-entered:
-	case <-time.After(installCancelAckBound):
-		t.Fatal("instrument: the lock-holding install never reached its manifest fetch")
+// installWaiterQueued reports whether this test's waiter goroutine is parked
+// inside acquireInstallSlot on a channel operation — that is, it is really
+// queued behind the held slot, not merely started.
+func installWaiterQueued() bool {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
 	}
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		header, _, _ := strings.Cut(g, "\n")
+		parked := strings.Contains(header, "[select") || strings.Contains(header, "[chan send")
+		if parked && strings.Contains(g, "browser.acquireInstallSlot(") && strings.Contains(g, installWaiterCreator) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestEnsureChromiumBuild_CancelledWhileWaitingForInstallLock holds the
+// process-wide install slot itself (the slot is taken before any platform,
+// manifest or network step, so this needs no managed-Chrome platform), starts
+// an install, waits until that install is provably queued on the slot, and
+// only THEN cancels it. The install must return the cancellation while the
+// slot is still held, and must write nothing into its install root.
+func TestEnsureChromiumBuild_CancelledWhileWaitingForInstallLock(t *testing.T) {
+	installSlot <- struct{}{} // the "other install" holding the lock
+	held := true
+	releaseHolder := func() {
+		if held {
+			held = false
+			<-installSlot
+		}
+	}
+	t.Cleanup(releaseHolder)
 
 	waiterRoot := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	waiterDone := make(chan error, 1)
 	go func() {
 		_, err := EnsureChromiumBuild(ctx, waiterRoot, headlessShellBuild())
 		waiterDone <- err
 	}()
+
+	// In-flight witness: the cancel must arrive AFTER the waiter is parked on
+	// the slot. The loop ends on that observed state; the deadline only fails.
+	queuedBy := time.Now().Add(installCancelAckBound)
+	for !installWaiterQueued() {
+		select {
+		case err := <-waiterDone:
+			t.Fatalf("instrument: the install returned (%v) before it ever queued on the held slot", err)
+		default:
+		}
+		if time.Now().After(queuedBy) {
+			t.Fatal("instrument: the install never queued on the held install slot")
+		}
+		runtime.Gosched()
+	}
 	cancel()
 
 	select {
@@ -82,11 +104,9 @@ func TestEnsureChromiumBuild_CancelledWhileWaitingForInstallLock(t *testing.T) {
 	case <-time.After(installCancelAckBound):
 		releaseHolder()
 		<-waiterDone
-		<-holderDone
 		t.Fatal("EnsureChromiumBuild ignored cancellation while waiting for the install lock (#1730): a cancelled preprovision blocks the boot drain until another install finishes")
 	}
 	releaseHolder()
-	<-holderDone
 
 	entries, err := os.ReadDir(waiterRoot)
 	if err != nil {

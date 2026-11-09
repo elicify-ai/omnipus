@@ -83,3 +83,33 @@ func TestExtractZip_PositiveControl(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractZip_CancelledBetweenFilesLeavesLaterFilesUnwritten is the
+// in-flight witness: the cancel arrives only after the first file is fully on
+// disk, the moment extraction asks its context before the second file. The
+// second and third files must never be written. An extraction that checks its
+// context once, before the loop, sees a live context there and writes them.
+func TestExtractZip_CancelledBetweenFilesLeavesLaterFilesUnwritten(t *testing.T) {
+	names := []string{"build/one.txt", "build/two.txt", "build/three.txt"}
+	zipPath := writeTestZip(t, names...)
+	dest := t.TempDir()
+	first := filepath.Join(dest, names[0])
+	ctx := newProgressCancelCtx(t, func() bool {
+		got, err := os.ReadFile(first)
+		return err == nil && string(got) == names[0]
+	})
+
+	err := extractZip(ctx, zipPath, dest)
+
+	if !ctx.fired.Load() {
+		t.Error("extractZip never consulted its context after the first file was on disk (#1730): no cancellation point between files, so the cancel was never delivered")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("extractZip cancelled between files returned %v, want context.Canceled", err)
+	}
+	for _, name := range names[1:] {
+		if _, statErr := os.Stat(filepath.Join(dest, name)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("extractZip kept writing after a cancel between files (#1730): %s exists (stat err %v)", name, statErr)
+		}
+	}
+}
