@@ -606,9 +606,14 @@ func applyAgentOverrides(ag *gen.Agent, defaults *config.AgentDefaults, ac *conf
 	if len(ac.FallbackModels) > 0 {
 		fm := make([]gen.FallbackModel, len(ac.FallbackModels))
 		for i, m := range ac.FallbackModels {
-			fm[i] = gen.FallbackModel{Model: m.Model, Provider: &m.Provider}
+			fm[i] = gen.FallbackModel{Model: m.Model, Provider: &m.Provider, ReasoningEffort: wireEffort(m.ReasoningEffort)}
 		}
 		ag.FallbackModels = &fm
+	}
+	// reasoning_effort: the primary model's stored effort (FR-029), absent
+	// when Not set and for an external-CLI worker (S-77).
+	if !ac.IsExternalCLIWorker() {
+		ag.ReasoningEffort = wireEffort(ac.ReasoningEffort)
 	}
 	// model_params: echo the persisted per-agent sampling-parameter override
 	// (Q1 fix). Previously config.AgentConfig had no ModelParams field at

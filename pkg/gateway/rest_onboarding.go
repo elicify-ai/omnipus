@@ -127,6 +127,10 @@ type onboardingProviderChoice struct {
 	APIKey   string
 	Model    string
 	Endpoint string
+	// ReasoningEffort is the effort for the chosen model (FR-067), stored
+	// on agents.defaults.default_model in the completion's single write,
+	// never on the provider row. "" = absent key (Provider default).
+	ReasoningEffort string
 	// Region is issue #800's own field (Bedrock region contract): the
 	// selected region for a provider whose catalog entry carries `regions`
 	// (catalog.Provider.Regions). Only the api_key variant carries it on
@@ -181,6 +185,11 @@ func decodeOnboardingCompleteBody(
 	}
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(w, http.StatusBadRequest, "request body is required")
+		return body, choice, false
+	}
+	// Effort values (null, type, length) are refused before anything of the
+	// completion commits, in both validation modes (FR-067, S-94).
+	if refuseInvalidEffortBody(w, raw) {
 		return body, choice, false
 	}
 
@@ -303,6 +312,9 @@ func decodeOnboardingCompleteBody(
 		if variant.Endpoint != nil {
 			choice.Endpoint = *variant.Endpoint
 		}
+		if variant.ReasoningEffort != nil {
+			choice.ReasoningEffort = *variant.ReasoningEffort
+		}
 		return body, choice, true
 	}
 
@@ -314,6 +326,9 @@ func decodeOnboardingCompleteBody(
 	choice.APIKey = variant.ApiKey
 	if variant.Model != nil {
 		choice.Model = *variant.Model
+	}
+	if variant.ReasoningEffort != nil {
+		choice.ReasoningEffort = *variant.ReasoningEffort
 	}
 	if variant.Endpoint != nil {
 		choice.Endpoint = strings.TrimSpace(*variant.Endpoint)
@@ -1199,10 +1214,14 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 		defaultsMap = map[string]any{}
 	}
 	delete(defaultsMap, "model_name")
-	defaultsMap["default_model"] = map[string]any{
+	defaultModel := map[string]any{
 		"provider": ro.provider.ID,
 		"model":    ro.providerModel,
 	}
+	if ro.provider.ReasoningEffort != "" {
+		defaultModel["reasoning_effort"] = ro.provider.ReasoningEffort
+	}
+	defaultsMap["default_model"] = defaultModel
 	agentsMap["defaults"] = defaultsMap
 	m["agents"] = agentsMap
 

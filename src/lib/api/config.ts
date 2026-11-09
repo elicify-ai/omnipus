@@ -100,7 +100,8 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
       // persisted at agents.defaults.default_model (agents.defaults.model_name
       // no longer exists). Threaded through rawToFrontendConfig so it survives
       // a settings round-trip.
-      default_model?: { provider?: string; model?: string }
+      // effort-levels FR-067: the default model's stored effort rides along.
+      default_model?: { provider?: string; model?: string; reasoning_effort?: string }
     }
   }
 }
@@ -266,7 +267,7 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     agents: {
       defaults: {
         default_agent_id: agentDefaults.default_agent_id as string | undefined,
-        default_model: agentDefaults.default_model as { provider?: string; model?: string } | undefined,
+        default_model: agentDefaults.default_model as { provider?: string; model?: string; reasoning_effort?: string } | undefined,
       },
     },
   }

@@ -288,6 +288,8 @@ type openaiMessage struct {
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	// ReasoningDetails is set only by SerializeOpenRouterMessages (FR-013).
+	ReasoningDetails []ReasoningDetail `json:"reasoning_details,omitempty"`
 }
 
 // SerializeMessages converts internal Message structs to the OpenAI wire format.
@@ -295,6 +297,18 @@ type openaiMessage struct {
 //   - Converts messages with Media to multipart content format (text + image_url parts)
 //   - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func SerializeMessages(messages []Message) []any {
+	return serializeMessages(messages, false)
+}
+
+// SerializeOpenRouterMessages is SerializeMessages plus each assistant
+// message's private reasoning_details carrier, unchanged (effort-levels spec
+// FR-013, S-30..S-32). Only the OpenRouter route calls it; every other route
+// uses SerializeMessages, which never emits the carrier (S-33).
+func SerializeOpenRouterMessages(messages []Message) []any {
+	return serializeMessages(messages, true)
+}
+
+func serializeMessages(messages []Message, withDetails bool) []any {
 	out := make([]any, 0, len(messages))
 	var pendingToolImages []any
 	for _, m := range messages {
@@ -315,6 +329,10 @@ func SerializeMessages(messages []Message) []any {
 			}
 			continue
 		}
+		var details []ReasoningDetail
+		if withDetails && m.Role == "assistant" {
+			details = m.ReasoningDetails
+		}
 		if len(m.Media) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
@@ -322,6 +340,7 @@ func SerializeMessages(messages []Message) []any {
 				ReasoningContent: m.ReasoningContent,
 				ToolCalls:        m.ToolCalls,
 				ToolCallID:       m.ToolCallID,
+				ReasoningDetails: details,
 			})
 			continue
 		}
@@ -383,6 +402,9 @@ func SerializeMessages(messages []Message) []any {
 		}
 		if m.ReasoningContent != "" {
 			msg["reasoning_content"] = m.ReasoningContent
+		}
+		if len(details) > 0 {
+			msg["reasoning_details"] = details
 		}
 		out = append(out, msg)
 	}

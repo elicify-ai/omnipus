@@ -69,7 +69,6 @@ func (c *attemptChannel) Stop(context.Context) error                      { c.se
 func (c *attemptChannel) Send(context.Context, bus.OutboundMessage) error { return nil }
 func (c *attemptChannel) IsAllowed(string) bool                           { return true }
 func (c *attemptChannel) IsAllowedSender(bus.SenderInfo) bool             { return true }
-func (c *attemptChannel) ReasoningChannelID() string                      { return "" }
 func (c *attemptChannel) IsRunning() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

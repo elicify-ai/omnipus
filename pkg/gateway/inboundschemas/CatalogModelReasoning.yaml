@@ -1,0 +1,28 @@
+title: CatalogModelReasoning
+description: >
+  Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's
+  served reasoning capability. Presence of the object means "this model
+  reasons"; an object with no levels and no switch means "reasons, but
+  nothing Omnipus can send" (the UI shows a muted chip). The gateway filters
+  the object by its encoder table for the serving route before it is served,
+  so a level or switch the route cannot encode never appears here.
+type: object
+required:
+  - levels
+  - switch
+additionalProperties: false
+properties:
+  levels:
+    type: array
+    items:
+      type: string
+      minLength: 1
+      maxLength: 32
+    description: >
+      Effort level names, ascending, as published by the provider (may include
+      "none"). Empty when the model offers no sendable levels; never null.
+    example: ["low", "medium", "high"]
+  switch:
+    type: boolean
+    description: True when reasoning can be turned on and off as a switch.
+    example: false

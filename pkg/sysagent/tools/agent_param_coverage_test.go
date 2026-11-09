@@ -45,7 +45,8 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"color": true, "agent_type": true, "cli": true,
 		"env_overrides": true, "cli_args": true,
 		"provider": true, "fallback_models": true, "max_tool_iterations": true,
-		"figure": true, "role": true,
+		"reasoning_effort": true, // effort-levels spec FR-064
+		"figure":           true, "role": true,
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
 		"memory_enabled": true, "voice": true,
 		"context_window_override": true, "model_params": true,
@@ -84,7 +85,8 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 	contractFields := map[string]bool{
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "fallback_models": true, "provider": true,
-		"color": true, "skills": true, "figure": true, "role": true,
+		"reasoning_effort": true, // effort-levels spec FR-064
+		"color":            true, "skills": true, "figure": true, "role": true,
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,

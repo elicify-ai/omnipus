@@ -6662,6 +6662,36 @@ func (e MessageContextWindowNoticeKind) Valid() bool {
 	}
 }
 
+// Defines values for MessageEffortReason.
+const (
+	MessageEffortReasonContinuation    MessageEffortReason = "continuation"
+	MessageEffortReasonExtraBody       MessageEffortReason = "extra_body"
+	MessageEffortReasonMapped          MessageEffortReason = "mapped"
+	MessageEffortReasonNotSupported    MessageEffortReason = "not_supported"
+	MessageEffortReasonRejected        MessageEffortReason = "rejected"
+	MessageEffortReasonRejectedEarlier MessageEffortReason = "rejected_earlier"
+)
+
+// Valid indicates whether the value is a known member of the MessageEffortReason enum.
+func (e MessageEffortReason) Valid() bool {
+	switch e {
+	case MessageEffortReasonContinuation:
+		return true
+	case MessageEffortReasonExtraBody:
+		return true
+	case MessageEffortReasonMapped:
+		return true
+	case MessageEffortReasonNotSupported:
+		return true
+	case MessageEffortReasonRejected:
+		return true
+	case MessageEffortReasonRejectedEarlier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageGoalOutcomeEnding.
 const (
 	MessageGoalOutcomeEndingMet             MessageGoalOutcomeEnding = "met"
@@ -14654,6 +14684,9 @@ type Agent struct {
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
@@ -14840,6 +14873,9 @@ type AgentCreateRequestMain struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role *AgentRole `json:"role,omitempty"`
 
@@ -14930,6 +14966,9 @@ type AgentCreateRequestSubagent struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Role *AgentRole `json:"role,omitempty"`
@@ -15053,7 +15092,7 @@ type AgentDependencyList struct {
 // AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
 type AgentDependencyListDependenciesKind string
 
-// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
 type AgentDetail struct {
 	// AbsentFields Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none.
 	AbsentFields *[]string `json:"absent_fields,omitempty"`
@@ -15135,6 +15174,9 @@ type AgentDetail struct {
 		// AcceptsImages The resolved model's image-input capability; null when not known.
 		AcceptsImages *bool `json:"accepts_images"`
 
+		// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+		EffortOptions *[]string `json:"effort_options"`
+
 		// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
 		Model string `json:"model"`
 
@@ -15169,6 +15211,9 @@ type AgentDetail struct {
 
 	// Provider The stored primary provider key ("" when not pinned).
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -15289,6 +15334,9 @@ type AgentMCPBinding struct {
 type AgentModelChainEntry struct {
 	// AcceptsImages The resolved model's image-input capability; null when not known.
 	AcceptsImages *bool `json:"accepts_images"`
+
+	// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+	EffortOptions *[]string `json:"effort_options"`
 
 	// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
 	Model string `json:"model"`
@@ -15416,6 +15464,9 @@ type AgentTokenEntry struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -15685,6 +15736,9 @@ type AgentUpdateRequest struct {
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -16081,6 +16135,15 @@ type CatalogModel struct {
 	// Name Display name (Unicode preserved).
 	Name string `json:"name"`
 
+	// Reasoning Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+	Reasoning *struct {
+		// Levels Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+		Levels []string `json:"levels"`
+
+		// Switch True when reasoning can be turned on and off as a switch.
+		Switch bool `json:"switch"`
+	} `json:"reasoning,omitempty"`
+
 	// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
 	ReleaseDate *string `json:"release_date,omitempty"`
 
@@ -16108,6 +16171,15 @@ type CatalogModelStatus string
 
 // CatalogModelWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type CatalogModelWindowSource string
+
+// CatalogModelReasoning Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+type CatalogModelReasoning struct {
+	// Levels Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+	Levels []string `json:"levels"`
+
+	// Switch True when reasoning can be turned on and off as a switch.
+	Switch bool `json:"switch"`
+}
 
 // CatalogProtocol One wire protocol a catalog provider offers, with the base URL to use for it. When a provider lists protocols[], the list MUST include the primary protocol with the same api URL; entries are unique (ADR-067 FR-002, F-19).
 type CatalogProtocol struct {
@@ -17015,6 +17087,9 @@ type DefaultModel struct {
 	// Provider Catalog provider id or operator-named custom row id. Empty when unset.
 	Provider string `json:"provider"`
 
+	// ReasoningEffort Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
 
@@ -17029,6 +17104,9 @@ type DefaultModelWindowSource string
 type DefaultModelUpdateRequest struct {
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+
+	// ReasoningEffort Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment).
@@ -18427,15 +18505,18 @@ type ExecutorSmokeTestResponse struct {
 type ExternalCliTool string
 
 // FallbackModel One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
-// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>", "reasoning_effort": "<effort>" }` (reasoning_effort optional).
 // Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
-// `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+// `additionalProperties: false` — the wire type has exactly these fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
 type FallbackModel struct {
 	// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
 	Model string `json:"model"`
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // FallbackModelPair One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected.
@@ -18445,6 +18526,9 @@ type FallbackModelPair struct {
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
 	Provider string `json:"provider"`
+
+	// ReasoningEffort Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
@@ -21611,17 +21695,53 @@ type MemorySettings struct {
 	// BootstrapRecapMaxPerMinute Maximum number of bootstrap recap operations to run per minute (rate-limit / throttle). This is the only bound on a boot sweep. Maps to agents.defaults.bootstrap_recap_max_per_minute.
 	BootstrapRecapMaxPerMinute *int `json:"bootstrap_recap_max_per_minute,omitempty"`
 
+	// BootstrapRecapMinSpacingSeconds Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use. Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+	BootstrapRecapMinSpacingSeconds *int `json:"bootstrap_recap_min_spacing_seconds,omitempty"`
+
 	// IdleTimeoutMinutes Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
 	IdleTimeoutMinutes *int `json:"idle_timeout_minutes,omitempty"`
 
 	// MemoryRetrosDays Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
 	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
 
+	// RecapCharsPerToken Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
+	RecapCharsPerToken *int `json:"recap_chars_per_token,omitempty"`
+
+	// RecapFallbackContextChars Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_fallback_context_chars.
+	RecapFallbackContextChars *int `json:"recap_fallback_context_chars,omitempty"`
+
 	// RecapFallbackModels Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models.
 	RecapFallbackModels *[]FallbackModel `json:"recap_fallback_models,omitempty"`
 
+	// RecapInputTokens Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_input_tokens.
+	RecapInputTokens *int `json:"recap_input_tokens,omitempty"`
+
+	// RecapListItems Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_list_items.
+	RecapListItems *int `json:"recap_list_items,omitempty"`
+
+	// RecapMaxOutputTokens Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_max_output_tokens.
+	RecapMaxOutputTokens *int `json:"recap_max_output_tokens,omitempty"`
+
 	// RecapModel Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
 	RecapModel *string `json:"recap_model,omitempty"`
+
+	// RecapProvider Provider of the recap model (#1291), stored with recap_model so the recap routes through it. Maps to agents.defaults.recap_provider.
+	RecapProvider *string `json:"recap_provider,omitempty"`
+
+	// RecapReasoningEffort Effort for the recap model (effort-levels spec FR-072): absent or "" means Off (the recap default); "provider_default", a catalog level name or "on" turn reasoning on. null is refused.
+	RecapReasoningEffort *string `json:"recap_reasoning_effort,omitempty"`
+
+	// RecapRetryPauseMs Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_retry_pause_ms.
+	RecapRetryPauseMs *int `json:"recap_retry_pause_ms,omitempty"`
+
+	// RecapStreamRetries Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_stream_retries.
+	RecapStreamRetries *int `json:"recap_stream_retries,omitempty"`
+
+	// RecapSummaryWords Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_summary_words.
+	RecapSummaryWords *int `json:"recap_summary_words,omitempty"`
+
+	// RecapTimeoutSeconds Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
+	RecapTimeoutSeconds *int `json:"recap_timeout_seconds,omitempty"`
 
 	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
 	SessionDays *int `json:"session_days,omitempty"`
@@ -21676,6 +21796,24 @@ type Message struct {
 
 	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
+
+	// Effort Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort record of the answering candidate: what was chosen, what the final request body actually carried, and why the two differ. One record per answering candidate, on the live done frame and on the answering transcript entry; both history transports project the stored record unchanged. A note is shown only when `sent` differs from `chosen`. Never carries reasoning text or signature material (FR-043).
+	Effort *struct {
+		// Chosen The resolved setting for the answering candidate, as stored (for example "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+		Chosen *string `json:"chosen,omitempty"`
+
+		// Model The answering candidate's model id.
+		Model *string `json:"model,omitempty"`
+
+		// Provider The answering candidate's provider id.
+		Provider *string `json:"provider,omitempty"`
+
+		// Reason Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+		Reason *MessageEffortReason `json:"reason,omitempty"`
+
+		// Sent The effort value actually present in the final serialised request body, after mapping, guards and extra_body. Absent when nothing was sent.
+		Sent *string `json:"sent,omitempty"`
+	} `json:"effort,omitempty"`
 
 	// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
 	GoalId *string `json:"goal_id,omitempty"`
@@ -22033,6 +22171,9 @@ type Message struct {
 	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
+	// TurnReasoningTokens Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+	TurnReasoningTokens *int `json:"turn_reasoning_tokens,omitempty"`
+
 	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 	Type *MessageType `json:"type,omitempty"`
 
@@ -22123,6 +22264,9 @@ type MessageCancelMethod string
 
 // MessageContextWindowNoticeKind defines model for Message.ContextWindowNotice.Kind.
 type MessageContextWindowNoticeKind string
+
+// MessageEffortReason Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+type MessageEffortReason string
 
 // MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
@@ -22362,6 +22506,9 @@ type ModelTokens struct {
 	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
 
+	// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+	Reasoning *int `json:"reasoning,omitempty"`
+
 	// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 	Total int `json:"total"`
 }
@@ -22525,6 +22672,9 @@ type OnboardingProviderApiKey struct {
 	// Protocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
 	Protocol *OnboardingProviderApiKeyProtocol `json:"protocol,omitempty"`
 
+	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
 	Region *string `json:"region,omitempty"`
 }
@@ -22548,6 +22698,9 @@ type OnboardingProviderSignIn struct {
 
 	// Model The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // OnboardingProviderSignInAuthMethod Discriminator — this variant uses the vendor CLI's saved login.
@@ -25439,6 +25592,9 @@ type Session struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
@@ -25459,6 +25615,9 @@ type Session struct {
 
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
+
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
 
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
@@ -25662,6 +25821,9 @@ type SessionDetail struct {
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
+				// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+				Reasoning *int `json:"reasoning,omitempty"`
+
 				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
@@ -25682,6 +25844,9 @@ type SessionDetail struct {
 
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
+
+				// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+				Reasoning *int `json:"reasoning,omitempty"`
 
 				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
@@ -26394,6 +26559,9 @@ type SessionStats struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
@@ -26414,6 +26582,9 @@ type SessionStats struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -28037,6 +28208,9 @@ type TokenUsageSummary struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
@@ -28071,6 +28245,9 @@ type TokenUsageSummary struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
@@ -28091,6 +28268,9 @@ type TokenUsageSummary struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
