@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -78,6 +79,7 @@ func stop1534Connect(t *testing.T, h *historyD16Harness) (*websocket.Conn, *stop
 // The older #1534 providers emit their unwanted suffix only AFTER ctx.Done().
 type stop1534TransitProvider struct {
 	stop   bool
+	prefix string
 	next   chan struct{}
 	finish chan struct{}
 	calls  atomic.Int32
@@ -97,21 +99,25 @@ func (*stop1534TransitProvider) Chat(_ context.Context, _ []providers.Message, _
 
 func (p *stop1534TransitProvider) ChatStream(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any, onChunk func(string), _ providers.OnToolCallProgress) (*providers.LLMResponse, error) {
 	p.calls.Add(1)
-	onChunk(stop1534Prefix)
+	prefix := p.prefix
+	if prefix == "" {
+		prefix = stop1534Prefix
+	}
+	onChunk(prefix)
 	select {
 	case <-p.next:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	onChunk(stop1534Prefix + stop1534InFlight)
+	onChunk(prefix + stop1534InFlight)
 	if p.stop {
 		<-ctx.Done()
-		onChunk(stop1534Prefix + stop1534InFlight + stop1534AfterClaim)
+		onChunk(prefix + stop1534InFlight + stop1534AfterClaim)
 		return nil, ctx.Err()
 	}
 	select {
 	case <-p.finish:
-		return &providers.LLMResponse{Content: stop1534Prefix + stop1534InFlight, FinishReason: "stop"}, nil
+		return &providers.LLMResponse{Content: prefix + stop1534InFlight, FinishReason: "stop"}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -153,14 +159,21 @@ func Test1534BrowserStop_InFlightTextMustNotGrowOnRESTOrReplay(t *testing.T) {
 			require.Equal(t, stop1534Prefix, want, "fixture must deliver a real nonempty prefix before Stop")
 			require.NotEmpty(t, shown.liveMessageID)
 
+			// The shared parser reads turn_id only from done. The checkpoint must
+			// instead name the turn in tokens RECEIVED before the Stop write.
+			var token generated.TokenFrame
+			require.NoError(t, json.Unmarshal(before[len(before)-1], &token))
+			require.NotNil(t, token.TurnId)
+			require.NotEmpty(t, *token.TurnId)
+			cancelJSON := stop1534CancelFromTokens(t, sid, before)
 			var sent chan error
 			if stopped {
-				// Like cancelStream, freeze want FIRST, then send exactly the SPA's
-				// generated session-scoped cancel. Hold only this outbound TCP write;
-				// the gateway cannot see/claim Stop until gate.open below.
+				// Freeze want FIRST, then send the architect's real shown payload.
+				// Raw JSON retains the not-yet-generated field on today's code;
+				// only this outbound TCP write is held, never a server method.
 				gate.armed.Store(true)
 				sent = make(chan error, 1)
-				go func() { sent <- peer.WriteJSON(generated.CancelFrame{Type: "cancel", SessionId: sid}) }()
+				go func() { sent <- peer.WriteMessage(websocket.TextMessage, cancelJSON) }()
 				select {
 				case <-gate.held:
 				case <-time.After(30 * time.Second):
@@ -192,6 +205,7 @@ func Test1534BrowserStop_InFlightTextMustNotGrowOnRESTOrReplay(t *testing.T) {
 			terminal := stopBodyParityReadToDone(t, h, peer)
 			live := stopBodyParityParseLive(t, terminal)
 			require.NotEmpty(t, live.turnID, "a genuine terminal frame must precede reload")
+			require.Equal(t, *token.TurnId, live.turnID, "the checkpoint named this turn before Stop, not after done")
 			if stopped {
 				claimed := h.event(func(event agent.Event) bool {
 					payload, ok := event.Payload.(agent.InterruptReceivedPayload)
