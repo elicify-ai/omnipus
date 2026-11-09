@@ -15,7 +15,7 @@ import { classifyEffortPresentation, type EffortPresentation } from './capabilit
 import { effortLabel, PROVIDER_DEFAULT, type EffortTarget } from './mapEffort'
 
 /** The catalog row of one (provider, model) pair: absent (no row) or its served reasoning (null = does not reason). */
-export interface ServedRow {
+export interface ServedRow { // not-wire-format: client-side catalog lookup result (found flag plus the generated reasoning object); never serialised
   found: boolean
   reasoning: ServedReasoning | null
 }
@@ -55,7 +55,7 @@ export function effortTargetOf(row: ServedRow): EffortTarget {
   }
 }
 
-export interface EffortItem {
+export interface EffortItem { // not-wire-format: radio item view model (stored value plus visible label) for the effort picker; UI only
   /** The stored value this item writes. */
   value: string
   /** The radio's visible text. */

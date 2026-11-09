@@ -19,7 +19,7 @@
 //     the mapping explanation. A non-Off value never maps into `none`.
 // "Nearest" ties go to the lower level.
 
-export interface EffortTarget {
+export interface EffortTarget { // not-wire-format: derived mapping input built in the browser from the served CatalogModelReasoning; never serialised
   /** Served level names (already filtered by the encoder table); may include "none". */
   levels: string[]
   /** Served switch capability. */
@@ -37,7 +37,7 @@ export type EffortNoteKind =
   | 'unranked_default'
   | 'not_supported'
 
-export interface EffortMapping {
+export interface EffortMapping { // not-wire-format: result of the client-side mapping table (TS twin of Go MapEffort); consumed by the picker, never sent
   /** Mapped stored value: a level, "on", "off", "provider_default", or "" (Not set / cleared). */
   value: string
   /** The switch must wait (picker blocked step) or be refused (REST, tools). */

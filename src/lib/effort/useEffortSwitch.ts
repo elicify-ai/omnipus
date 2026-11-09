@@ -16,24 +16,24 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { effortSwitchNote, mapEffort } from './mapEffort'
 import { effortTargetOf, type ServedRow } from './servedReasoning'
 
-export interface EffortPair {
+export interface EffortPair { // not-wire-format: in-memory slot key passed between the picker hook and call sites; callers copy its fields into their own request bodies
   provider: string
   model: string
 }
 
-export interface EffortSlotValue extends EffortPair {
+export interface EffortSlotValue extends EffortPair { // not-wire-format: in-memory slot value held by the switch hook; callers copy its fields into their own request bodies
   /** Stored effort: '' (Not set), 'provider_default', a level, 'on', 'off'. */
   effort: string
 }
 
 /** A switch waiting on the blocked step. */
-export interface EffortPendingSwitch extends EffortPair {
+export interface EffortPendingSwitch extends EffortPair { // not-wire-format: React state for the blocked switch step of the picker; never leaves the browser
   /** 'levels': pick a level (nearest marked, not chosen); 'nothing_sendable': "Let the provider decide" or Cancel. */
   kind: 'levels' | 'nothing_sendable'
   nearest: string
 }
 
-export interface EffortSwitchOptions {
+export interface EffortSwitchOptions { // not-wire-format: hook options (callbacks and lookup function) for useEffortSwitch; not serialisable at all
   value: EffortSlotValue
   /** The value a Not set slot resolves to (chat: the agent's setting; a riding primary: the default model's). */
   inherit?: string
@@ -51,7 +51,7 @@ export interface EffortSwitchOptions {
   onCommit: (pair: EffortPair, effort: string, note: string | null) => void
 }
 
-export interface EffortSwitch {
+export interface EffortSwitch { // not-wire-format: hook return value (state plus handlers) for useEffortSwitch; not serialisable at all
   pending: EffortPendingSwitch | null
   /** One-shot polite announcement for the picker's live region. */
   announcement: string

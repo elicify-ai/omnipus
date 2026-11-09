@@ -70,7 +70,7 @@ export function thinkingStatsLine(tokens: number | undefined): string {
 
 // ── /effort on the web (FR-023, S-36, S-41) ─────────────────────────────────
 
-export interface WebEffortState {
+export interface WebEffortState { // not-wire-format: input to the local /effort command decision, built from the composer state and catalog; never serialised
   /** The chat's model (the composer's current pair). */
   model: string
   /** Its served catalog row. */
@@ -81,7 +81,7 @@ export interface WebEffortState {
   agentSetting: string
 }
 
-export interface WebEffortDecision {
+export interface WebEffortDecision { // not-wire-format: local /effort result; the reply is appended as a client-side system message, the object itself is never serialised
   reply: string
   /** Set when the conversation's value changes. */
   change?: { value: string }
