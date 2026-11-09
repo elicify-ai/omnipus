@@ -352,7 +352,7 @@ func (t *WebServeTool) Parameters() map[string]any {
 			},
 			"command": map[string]any{
 				"type":        "string",
-				"description": "Optional dev-server command (e.g. 'vite dev'). When set, serve_web runs as a dev server; when omitted, serves static files.",
+				"description": "Optional development-server command (e.g. 'vite dev'). A non-empty command after whitespace trimming selects development mode; omitted, empty or whitespace-only text selects finished-files mode.",
 			},
 			"port": map[string]any{
 				"type":        "integer",
@@ -360,10 +360,10 @@ func (t *WebServeTool) Parameters() map[string]any {
 			},
 			"duration_seconds": map[string]any{
 				"type": "integer",
-				"description": "Optional registration lifetime in seconds, static mode only. Default is " +
-					"24h (86400s), not 1h. Values outside [60s, 24h] are silently clamped to the nearest " +
-					"bound rather than rejected. Dev mode ignores this field — it is governed by the " +
-					"dev-server registry's own idle/hard timeouts instead.",
+				"description": "Optional lifetime for a finished-files registration, in seconds. If omitted, it uses the " +
+					"configured maximum. Values outside the configured minimum and maximum are clamped to the " +
+					"nearest bound. The shipped bounds are 60 and 86400 seconds. Development mode ignores this " +
+					"field and uses its registry's idle and total timeouts.",
 			},
 		},
 		"required": []string{"path"},

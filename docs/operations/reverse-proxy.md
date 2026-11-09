@@ -128,7 +128,7 @@ With either proxy, the gateway must know the fully-qualified HTTPS origin the br
 | Field | Purpose |
 |---|---|
 | `host` | The interface the gateway binds. The default is `127.0.0.1`, which is correct when a reverse proxy on the same machine handles external traffic; use `0.0.0.0` (together with `public_url`) for bare-IP deployments. |
-| `public_url` | The fully-qualified HTTPS origin the browser reaches. Drives the boot-frozen `CanonicalGatewayOrigin` that CSP `frame-ancestors`, CORS `Access-Control-Allow-Origin`, the WebSocket upgrade's `CheckOrigin`, and `web_serve`'s minted preview URLs all use. **Restart-gated** — it is resolved once at boot, so a change here requires a gateway restart (or `POST /api/v1/reload` after a config write) to take effect. Without it set behind a reverse proxy, the gateway falls back to a `host:port` heuristic that will not match the public hostname the browser actually sees, and the origin checks will fail closed. |
+| `public_url` | The complete browser-facing origin, normally HTTPS behind a reverse proxy. It is used when constructing preview URLs and configuring request checks. Restart the gateway after changing it so these consumers agree: the `serve_web` tool reads current configuration, while some existing REST and WebSocket checks retain the address captured at startup. A configuration reload alone does not update all of them. Do not rely on a missing or mismatched public address to reject every request; some checks also accept a matching request Host. A wildcard bind with no public address cannot mint preview links. |
 
 ### Accurate client-IP audit logging (`gateway.trust_xff`)
 
@@ -144,7 +144,7 @@ When a trusted reverse proxy (nginx, Caddy, etc.) sits in front, set:
 }
 ```
 
-With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote_ip` field and for every rate-limit bucket (login brute-force protection and the provider sign-in limiters), which gives the real client IP rather than the proxy's loopback address.
+With `trust_xff: true` the gateway uses the rightmost forwarded address for the audit `remote_ip` field and for IP-keyed rate limits, including login and provider sign-in limits, which gives the real client IP rather than the proxy's loopback address. Other limits, such as account/workspace knowledge-query budgets, use different keys.
 
 **Which entry is used: the rightmost one.** `X-Forwarded-For` is a list, and only its last entry is written by the proxy the gateway trusts — every entry to the left of it was supplied by whatever sent the request. The nginx line above uses `$proxy_add_x_forwarded_for`, which *appends* the connecting peer to whatever the client already sent: a client that sends `X-Forwarded-For: 6.6.6.6` arrives at the gateway as `6.6.6.6, <its real address>`. Reading the leftmost entry would therefore read a value the client chose, letting it forge its audit IP and get a fresh rate-limit bucket on every request. The gateway reads the **rightmost** entry instead. Caddy's `header_up X-Forwarded-For {remote_host}` *replaces* the header with the peer address, so its single entry is both leftmost and rightmost — that configuration is unaffected either way.
 
@@ -156,7 +156,7 @@ With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote
 
 Behind a same-host reverse proxy, every request the gateway sees presents a loopback
 `RemoteAddr` (the proxy's own connection to the gateway, not the original client). This
-means the live-browser capture-ingest endpoint's loopback gate (`127.0.0.1`-only, by
+means the live-browser capture-ingest endpoint's loopback-address gate (IPv4 and IPv6 loopback, by
 design — see ADR-047 D6) provides **no additional defense** in that topology: any
 request reaching the proxy on that path also reaches the gateway looking like
 loopback. This is expected and accounted for — the **per-stream capability token**
@@ -180,7 +180,7 @@ Previews (`/preview/` and `serve_web`) can be turned off entirely without touchi
 }
 ```
 
-This is read **live** on every request — no restart, and no reverse-proxy config change needed either way, since `/preview/` was never a separate listener to disable. Setting it `false` 404s every `/preview/…` request immediately (the SPA renders "preview disabled" rather than a link) and makes `serve_web` refuse new registrations with a clear error; it does not kill any dev server already running (those idle-TTL out on their own). Flipping it back to `true` re-enables the surface on the very next request.
+This is read **live** on every request — no restart, and no reverse-proxy config change needed either way, since `/preview/` was never a separate listener to disable. Setting it `false` 404s every `/preview/…` request immediately (existing chat cards may still display their earlier links, but those links return an error while previews are disabled) and makes `serve_web` refuse new registrations with a clear error; it does not kill any dev server already running (those idle-TTL out on their own). Flipping it back to `true` re-enables the surface on the very next request.
 
 ---
 

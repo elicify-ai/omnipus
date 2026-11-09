@@ -68,7 +68,7 @@ The serving tool has two ways to publish. The agent picks one depending on wheth
 
 A few details behind the table:
 
-- The published folder must contain an `index.html` at its root. The link opens that file first.
+- For a finished-files preview, put `index.html` at the published folder's root; the directory link requests that file. If it is missing, that request fails. A development server handles its own root URL.
 - Publishing the same folder again renews the same link only while that registration is still live and less than 24 hours old; otherwise a new link is issued. Always give the user the link the tool returns rather than assuming an older one still works. Publishing a **different** folder replaces the registration: the old link stops working, so use the new returned link. A new isolated address has a different browser origin and does not share storage that the browser keys to the old origin. A new shared-address link changes only the path on Omnipus's address, so publishing it does not clear saved browser data or sign you out. Publishing is not a reset of the app's server-side data.
 - The development command must come from a fixed list: `next dev`, `vite dev`, `astro dev`, `sveltekit dev`, `npm run dev`, `pnpm dev`, or `yarn dev`. An operator can extend the list in the config file.
 - At most two development servers run at once on a default install, and each agent can run only one at a time.
