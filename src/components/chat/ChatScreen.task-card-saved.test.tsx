@@ -37,10 +37,15 @@
  *  - D8: with a known reason the card shows "I couldn't <verb> the task.
  *    <reason>" (reason UNCHANGED), keeps the "Open tasks" link, and the alert
  *    stays role="alert".
+ *  - Round 5b, Q1 A + Q2 C (team-lead, 2026-11-09 — the link rule): a failed
+ *    call keeps "Open tasks" with or without a reason; the link goes to
+ *    /workspaces/<id>/chat?panel=tasks when the call's params name a workspace
+ *    and to /tasks when they do not (real run_task / delete_task params carry
+ *    only task_id); "Open calendar" appears only when workspace_id is present.
  *
  * The saved success rows are regression protection (green when the dispatcher
  * routes task tools, which it does at HEAD 1bd56231b); the known-reason rows
- * pin D8 through the screen.
+ * pin D8 through the screen; the Round 5b rows pin the link rule through it.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -231,6 +236,9 @@ const RECURRING_TRIGGER = {
   config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' },
 }
 const WORKSPACE_ARGS = { workspace_id: 'ws_1' }
+// Round 5b / Q2 C: the link targets the decisions name, as literals.
+const WORKSPACE_TASKS_HREF = '/workspaces/ws_1/chat?panel=tasks'
+const TASKS_INDEX_HREF = '/tasks'
 
 const NO_REASON_RE = /no reason was given/i
 const SUCCESS_HEADING_RE = /^(I (scheduled|created|updated|started|deleted) the task|The task is already running)$/
@@ -319,20 +327,20 @@ describe('R2-4 / D1 — a saved task call on the real ChatScreen is the task car
 
 describe('R2-4 / D5 + D8 — a saved failed task call on the real ChatScreen', () => {
   /**
-   * D8: "I couldn't <verb> the task. <reason>" in the alert, the reason unchanged, "Open tasks" kept.
+   * D8: "I couldn't <verb> the task. <reason>" in the alert, the reason unchanged, "Open tasks" kept
+   * (pointing at `href` — Round 5b / Q2 C replaces the round-5 `link: boolean` flag, whose false value
+   * meant "assert the sentence alone", with an explicit expected target on every row).
    * The failure line is LOCATED by the reason (whichever wording surrounds it) and its wording is then
    * pinned exactly, so a wrong wording fails the exact check with the text that was really rendered in
    * the message — not a locator error followed by a (truncated) screen dump.
    */
-  function expectKnownReasonFailure(verb: string, reason: string, opts: { link: boolean }): void {
+  function expectKnownReasonFailure(verb: string, reason: string, href: string): void {
     const sentence = screen.getByText(reason, { exact: false })
     expect(ownText(sentence), 'D8 wording').toBe(`I couldn't ${verb} the task. ${reason}`)
     expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D7/D8)').not.toBeNull()
-    if (opts.link) {
-      const open = screen.getByTestId('task-tool-link-open')
-      expect((open.textContent ?? '').trim()).toBe('Open tasks')
-      expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
-    }
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', href)
     expect(screen.queryByText(NO_REASON_RE)).toBeNull()
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
     expect(screen.queryByTestId('task-tool-schedule')).toBeNull()
@@ -346,7 +354,7 @@ describe('R2-4 / D5 + D8 — a saved failed task call on the real ChatScreen', (
       { status: 'error', error: 'task not found: task_99' },
     )
     await renderScreen()
-    expectKnownReasonFailure('update', 'task not found: task_99', { link: true })
+    expectKnownReasonFailure('update', 'task not found: task_99', WORKSPACE_TASKS_HREF)
   })
 
   it('create_task whose reason is only in a {text} result: the D8 sentence and the Open tasks link', async () => {
@@ -357,7 +365,7 @@ describe('R2-4 / D5 + D8 — a saved failed task call on the real ChatScreen', (
       { status: 'error', result: { text: reason } },
     )
     await renderScreen()
-    expectKnownReasonFailure('create', reason, { link: true })
+    expectKnownReasonFailure('create', reason, WORKSPACE_TASKS_HREF)
   })
 
   it('run_task refused by delegation policy (structured failure result): the D8 sentence with the denial reason', async () => {
@@ -372,7 +380,11 @@ describe('R2-4 / D5 + D8 — a saved failed task call on the real ChatScreen', (
     }
     seedSavedCall('run_task', { task_id: 'task_1' }, { status: 'error', result: { ...denial }, error: denial.reason })
     await renderScreen()
-    expectKnownReasonFailure('start', denial.reason, { link: false })
+    // Round 5b / Q2 C: the params are task_id only (run_task's real schema), so the
+    // link goes to /tasks and there is no calendar link. (Round 5 asserted the
+    // sentence alone for this row; the sentence assertions are unchanged.)
+    expectKnownReasonFailure('start', denial.reason, TASKS_INDEX_HREF)
+    expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
   })
 
   it('control: a saved failed call with no error and no result keeps the no-reason sentence (D5), in an alert', async () => {
@@ -384,5 +396,97 @@ describe('R2-4 / D5 + D8 — a saved failed task call on the real ChatScreen', (
     expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
     expect(screen.queryByTestId('task-tool-card')).toBeNull()
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    // Round 5b / Q1 A: the no-reason failure keeps the "Open tasks" link too
+    // (WORKSPACE_ARGS names workspace_id, so the workspace tasks panel).
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
   })
+})
+
+// Round 5b / Q2 C (team-lead decisions Q1 A and Q2 C, 2026-11-09), through the real
+// screen: a saved call whose params name no workspace links "Open tasks" to /tasks and
+// shows no calendar link — failed with a reason (D8), failed with none (D5), and
+// successful. TODAY a successful card shows its links only when the params carry
+// workspace_id, so the success rows are red for the missing /tasks link; the failure
+// view renders no link at all. The stored-error rows assert the link BEFORE the
+// reason (the link is the rule under test, so a failure of the reason check can
+// never shadow it); the sentence assertions that follow are the ones that already
+// hold today.
+describe('Round 5b / Q2 C — a saved task call that names no workspace, on the real ChatScreen', () => {
+  const NO_WORKSPACE_ROWS = [
+    {
+      tool: 'create_task',
+      verb: 'create',
+      params: { title: 'Weekly report', trigger: RECURRING_TRIGGER },
+      reason: 'agent "agent_zz" is not a member of this workspace.',
+      payload: { task_id: 'task_1', status: 'inbox' },
+    },
+    {
+      tool: 'update_task',
+      verb: 'update',
+      params: { task_id: 'task_1', title: 'Weekly report' },
+      reason: 'task not found: task_99',
+      payload: { task_id: 'task_1', status: 'inbox', updated_fields: ['title'] },
+    },
+    {
+      tool: 'run_task',
+      verb: 'start',
+      params: { task_id: 'task_1' },
+      reason: 'task "task_1" is blocked on an unmet dependency; it becomes runnable automatically once its blockers complete',
+      payload: { task_id: 'task_1', status: 'running', session_id: 'sess_1' },
+    },
+    {
+      tool: 'delete_task',
+      verb: 'delete',
+      params: { task_id: 'task_1' },
+      reason: 'Task task_1 was already deleted',
+      payload: { deleted: 'task_1' },
+    },
+  ]
+
+  function expectTasksIndexLinkAndNoCalendar(): void {
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+    expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
+  }
+
+  it.each(NO_WORKSPACE_ROWS)(
+    '$tool: a stored error and no workspace_id -> the alert carries the reason, "Open tasks" links to /tasks, no calendar link',
+    async ({ tool, params, reason }) => {
+      seedSavedCall(tool, params, { status: 'error', error: reason })
+      await renderScreen()
+      expectTasksIndexLinkAndNoCalendar()
+      const sentence = screen.getByText(reason, { exact: false })
+      expect(sentence.closest('[role="alert"]'), 'the reason sits in the catalogued error region').not.toBeNull()
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    },
+  )
+
+  it.each(NO_WORKSPACE_ROWS)(
+    '$tool: no error, no result and no workspace_id -> the D5 sentence, "Open tasks" links to /tasks, no calendar link',
+    async ({ tool, verb, params }) => {
+      seedSavedCall(tool, params, { status: 'error' })
+      await renderScreen()
+      const sentence = screen.getByText(`I couldn't ${verb} the task, and no reason was given. Try again.`)
+      expect(sentence.closest('[role="alert"]')).not.toBeNull()
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+      expectTasksIndexLinkAndNoCalendar()
+    },
+  )
+
+  it.each(NO_WORKSPACE_ROWS)(
+    '$tool: a successful call with no workspace_id -> the card, "Open tasks" links to /tasks, no calendar link',
+    async ({ tool, params, payload }) => {
+      seedSavedCall(tool, params, { result: { text: JSON.stringify(payload) } })
+      await renderScreen()
+      const card = screen.getByTestId('task-tool-card')
+      const open = within(card).getByTestId('task-tool-link-open')
+      expect((open.textContent ?? '').trim()).toBe('Open tasks')
+      expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+      expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    },
+  )
 })

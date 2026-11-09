@@ -14,13 +14,43 @@
 // live→saved disappearance CHECK reproduced.
 //
 // The dispatcher is imported and called REAL — the card, the Zod trigger
-// parse and delegationSlotted all run; nothing in this file is mocked (the
-// fixtures carry no workspace_id, so no router Link renders and no router
-// context is needed). The persisted history result envelope
-// `{ text: "<payload json>" }` is the shape a saved row forwards unchanged.
+// parse and delegationSlotted all run; only the router's Link is stubbed.
+// Round 5b / Q2 C: the fixtures carry no workspace_id, and a card whose call
+// names no workspace now links "Open tasks" to /tasks (team-lead decision Q2 C,
+// 2026-11-09), so a Link renders here and needs a router the unit mount does not
+// have; the same <a> shim as the other TaskToolUI tests stands in for it (this
+// file asserts nothing about the link — its assertions are unchanged). The
+// persisted history result envelope `{ text: "<payload json>" }` is the shape a
+// saved row forwards unchanged.
 
 import { render, screen, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import type { ReactNode } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...original,
+    Link: (props: {
+      to?: unknown
+      params?: Record<string, unknown>
+      search?: Record<string, unknown>
+      children?: ReactNode
+    } & Record<string, unknown>) => {
+      let href = typeof props.to === 'string' ? props.to : ''
+      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
+      const { to: _to, params: _params, search: _search, children, ...rest } = props
+      return (
+        <a href={href + qs} {...rest}>
+          {children}
+        </a>
+      )
+    },
+  }
+})
+
 import { renderHistoricalToolCall } from './HistoricalToolCallBlock'
 
 // Same fixture instant as the live/replay halves: Mon 2026-11-09 09:00

@@ -34,16 +34,26 @@
  *    result, a {text} result, or the `reason` of a generated structured
  *    failure (delegation_denied).
  *  - D8: with a known reason the card shows "I couldn't <verb> the task.
- *    <reason>" (reason UNCHANGED), keeps the "Open tasks" link where the call's
- *    args name the workspace, and the alert stays role="alert".
+ *    <reason>" (reason UNCHANGED), keeps the "Open tasks" link, and the alert
+ *    stays role="alert".
+ *  - Round 5b, Q1 A + Q2 C (team-lead, 2026-11-09 — the link rule): a failed
+ *    call keeps "Open tasks" with or without a reason; the link goes to
+ *    /workspaces/<id>/chat?panel=tasks when the call's args name a workspace
+ *    and to /tasks when they do not (real run_task / delete_task args carry
+ *    only task_id); "Open calendar" appears only when workspace_id is present.
+ *    Round 5b REPLACES the round-5 reading "keeps the link where the call's
+ *    args name the workspace" (which left the task_id-only run_task refusal
+ *    asserting its sentence alone): that row now pins the /tasks link too, live
+ *    and saved (strengthened, nothing removed).
  *  - Frame shapes: contracts/asyncapi.yaml (ToolCallStartFrame,
  *    ToolCallResultFrame, DoneFrame, DelegationFailure); the structured
  *    refusal is the shape of pkg/tools/result.go::DelegationDeniedResult as the
  *    gateway forwards it (Result = the object, Error = its reason).
  *
  * The success rows are regression protection (green when the registrations are
- * mounted and the dispatcher routes task tools, as at HEAD 1bd56231b); the
- * known-reason rows pin D8 through the live adapter and the saved dispatcher.
+ * mounted and the dispatcher routes task tools, as at HEAD 1bd56231b) plus, for
+ * the rows that name no workspace, the Round 5b /tasks link; the known-reason
+ * rows pin D8 through the live adapter and the saved dispatcher.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -424,6 +434,11 @@ const UPDATE_SENTENCE = `I couldn't update the task. ${UPDATE_REASON}`
 const UPDATE_LINE = failureLine('update', UPDATE_REASON)
 const UPDATE_ARGS = { task_id: 'task_99', title: 'Weekly report', workspace_id: 'ws_1' }
 
+// Round 5b / Q2 C: the link targets the decisions name, as literals.
+const WORKSPACE_TASKS_HREF = '/workspaces/ws_1/chat?panel=tasks'
+const WORKSPACE_CALENDAR_HREF = '/workspaces/ws_1/calendar'
+const TASKS_INDEX_HREF = '/tasks'
+
 /** A live turn whose run_task came back refused by delegation policy, exactly as the gateway sends it. */
 async function startRefusedRun(): Promise<void> {
   seedSession(streamingTurn(), true)
@@ -522,6 +537,12 @@ describe('R2-4 / D8 — a refused task call: the live row, and the saved row it 
       expectLiveRow(liveText)
       expect(ownText(liveText), 'live wording (D8)').toBe(DENIAL_SENTENCE)
       expect(liveText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, live').not.toBeNull()
+      // Round 5b / Q2 C: run_task's real args are task_id only, so the live row links to
+      // /tasks and shows no calendar link. (Round 5 asserted the sentence alone here.)
+      const open = screen.getByTestId('task-tool-link-open')
+      expect((open.textContent ?? '').trim()).toBe('Open tasks')
+      expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+      expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
       expect(screen.queryByText(NO_REASON_RE)).toBeNull()
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
     })
@@ -542,6 +563,12 @@ describe('R2-4 / D8 — a refused task call: the live row, and the saved row it 
         expectSavedRow(savedText)
         expect(ownText(savedText), 'saved wording (D8)').toBe(DENIAL_SENTENCE)
         expect(savedText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, saved').not.toBeNull()
+        // Round 5b / Q2 C: the saved row the live row becomes keeps the /tasks link and has
+        // no calendar link (the args name no workspace).
+        const open = screen.getByTestId('task-tool-link-open')
+        expect((open.textContent ?? '').trim()).toBe('Open tasks')
+        expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+        expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
         expect(screen.queryByText(NO_REASON_RE)).toBeNull()
         expect(screen.queryByText(SUCCESS_HEADING_RE)).toBeNull()
         expect(screen.queryByTestId('tool-call-badge')).toBeNull()
@@ -562,7 +589,7 @@ describe('R2-4 / D8 — a refused task call: the live row, and the saved row it 
       expect(liveText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, live').not.toBeNull()
       const open = screen.getByTestId('task-tool-link-open')
       expect((open.textContent ?? '').trim()).toBe('Open tasks')
-      expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
+      expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
       expect(screen.queryByText(NO_REASON_RE)).toBeNull()
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
     })
@@ -585,7 +612,7 @@ describe('R2-4 / D8 — a refused task call: the live row, and the saved row it 
         expect(savedText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, saved').not.toBeNull()
         const open = screen.getByTestId('task-tool-link-open')
         expect((open.textContent ?? '').trim()).toBe('Open tasks')
-        expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
+        expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
         expect(screen.queryByText(NO_REASON_RE)).toBeNull()
         expect(screen.queryByTestId('tool-call-badge')).toBeNull()
         expect(watcher.seen(), 'a generic badge was never added at any point of the hand-off').toBe(false)
@@ -597,47 +624,79 @@ describe('R2-4 / D8 — a refused task call: the live row, and the saved row it 
 })
 
 describe('R2-4 / D1 — saved task rows in the virtualized list a modern browser mounts', () => {
-  const SAVED_ROWS: Array<{ tool: string; params: Record<string, unknown>; result: unknown; heading: string }> = [
+  // Round 5b / Q2 C: each row also states where its links go. The create row names
+  // workspace_id (both links, workspace targets — the existing success-card behaviour);
+  // the others name none (the /tasks link, no calendar link). The new link columns are
+  // the Round 5b addition — the heading assertions are unchanged.
+  const SAVED_ROWS: Array<{
+    tool: string
+    params: Record<string, unknown>
+    result: unknown
+    heading: string
+    tasksHref: string
+    calendarHref: string | null
+  }> = [
     {
       tool: 'create_task',
       params: { title: 'Weekly report', workspace_id: 'ws_1', trigger: RECURRING_TRIGGER },
       result: { text: JSON.stringify({ task_id: 'task_1', status: 'inbox' }) },
       heading: 'I scheduled the task',
+      tasksHref: WORKSPACE_TASKS_HREF,
+      calendarHref: WORKSPACE_CALENDAR_HREF,
     },
     {
       tool: 'update_task',
       params: { task_id: 'task_1', title: 'Weekly report' },
       result: { text: JSON.stringify({ task_id: 'task_1', status: 'inbox', updated_fields: ['title'] }) },
       heading: 'I updated the task',
+      tasksHref: TASKS_INDEX_HREF,
+      calendarHref: null,
     },
     {
       tool: 'run_task',
       params: { task_id: 'task_1' },
       result: { text: JSON.stringify({ task_id: 'task_1', status: 'in_progress', session_id: 'sess_1' }) },
       heading: 'I started the task',
+      tasksHref: TASKS_INDEX_HREF,
+      calendarHref: null,
     },
     {
       tool: 'run_task',
       params: { task_id: 'task_1' },
       result: { text: JSON.stringify({ task_id: 'task_1', status: 'in_progress', session_id: 'sess_1', note: 'already running' }) },
       heading: 'The task is already running',
+      tasksHref: TASKS_INDEX_HREF,
+      calendarHref: null,
     },
     {
       tool: 'delete_task',
       params: { task_id: 'task_1' },
       result: { text: JSON.stringify({ deleted: 'task_1' }) },
       heading: 'I deleted the task',
+      tasksHref: TASKS_INDEX_HREF,
+      calendarHref: null,
     },
   ]
 
-  it.each(SAVED_ROWS)('$tool saved on reload: "$heading", not the generic badge', async ({ tool, params, result, heading }) => {
-    seedSession(savedTurn(tool, params, result), false)
-    await withVirtualizerMetrics(async () => {
-      await mount()
-      const card = await screen.findByTestId('task-tool-card')
-      expectSavedRow(card)
-      expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe(heading)
-      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
-    })
-  })
+  it.each(SAVED_ROWS)(
+    '$tool saved on reload: "$heading", not the generic badge',
+    async ({ tool, params, result, heading, tasksHref, calendarHref }) => {
+      seedSession(savedTurn(tool, params, result), false)
+      await withVirtualizerMetrics(async () => {
+        await mount()
+        const card = await screen.findByTestId('task-tool-card')
+        expectSavedRow(card)
+        expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe(heading)
+        expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+        const open = within(card).getByTestId('task-tool-link-open')
+        expect((open.textContent ?? '').trim()).toBe('Open tasks')
+        expect(open).toHaveAttribute('href', tasksHref)
+        if (calendarHref === null) {
+          expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
+        } else {
+          expect(within(card).getByTestId('task-tool-link-calendar')).toHaveAttribute('href', calendarHref)
+        }
+      })
+    },
+  )
 })

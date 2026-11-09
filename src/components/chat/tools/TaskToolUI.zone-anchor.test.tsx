@@ -29,12 +29,43 @@
 //
 // Scope: TaskToolCardBlock only — the one card both paths render (live/replay
 // parity is pinned in TaskToolUI.live-wiring.test.tsx / -replay.test.tsx).
-// No mocks: the args carry no workspace_id, so no router Link renders, and
-// the trigger parse and Intl run for real. Assertion granularity is
-// part-level regexes, as in the round-1/2 pack — display copy is not pinned.
+// Round 5b / Q2 C: only the router's Link is stubbed. The args carry no
+// workspace_id, and a card whose call names no workspace now links "Open tasks"
+// to /tasks (team-lead decision Q2 C, 2026-11-09), so a Link renders here and
+// needs a router the unit mount does not have; the same <a> shim as the other
+// TaskToolUI tests stands in for it (this file asserts nothing about the link —
+// its schedule assertions are unchanged). The trigger parse and Intl run for
+// real. Assertion granularity is part-level regexes, as in the round-1/2 pack —
+// display copy is not pinned.
 
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import type { ReactNode } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...original,
+    Link: (props: {
+      to?: unknown
+      params?: Record<string, unknown>
+      search?: Record<string, unknown>
+      children?: ReactNode
+    } & Record<string, unknown>) => {
+      let href = typeof props.to === 'string' ? props.to : ''
+      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
+      const { to: _to, params: _params, search: _search, children, ...rest } = props
+      return (
+        <a href={href + qs} {...rest}>
+          {children}
+        </a>
+      )
+    },
+  }
+})
+
 import { TaskToolCardBlock } from './TaskToolUI'
 
 const DTSTART_AUCKLAND_MS = Date.UTC(2026, 10, 9, 20, 0, 0)

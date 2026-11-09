@@ -33,6 +33,13 @@
 // The fixtures are typed with the generated ToolCall / DelegationFailure
 // types (openapi-types.ts, asyncapi-types.ts) and validated by
 // expectValidPage, so an illegal wire shape cannot slip into the suite.
+//
+// ROUND 5b (team-lead decisions Q1 A and Q2 C, 2026-11-09 — the link rule): a
+// failed call keeps the "Open tasks" link with or without a reason (Q1 A); the
+// link goes to /tasks when the call's parameters carry no workspace_id and to
+// /workspaces/<id>/chat?panel=tasks when they name one, and "Open calendar"
+// appears only when workspace_id is present (Q2 C). Every row above the last
+// describe carries workspace_id (TASK_ARGS) and keeps its workspace target.
 
 import { render, screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
@@ -83,6 +90,9 @@ afterEach(() => {
 type SavedTc = Parameters<typeof renderHistoricalToolCall>[0]['tc']
 
 const TASK_ARGS = { task_id: 'task_99', title: 'Weekly report', workspace_id: 'ws_1' }
+// Round 5b / Q2 C: the link targets the decisions name, as literals.
+const WORKSPACE_TASKS_HREF = '/workspaces/ws_1/chat?panel=tasks'
+const TASKS_INDEX_HREF = '/tasks'
 
 /** A wire tool call in the generated ToolCall shape; a failed call by default. */
 function wireCall(tool: string, overrides: Partial<WireToolCall> = {}): WireToolCall {
@@ -132,7 +142,7 @@ function expectKnownReasonFailure(verb: string, reason: string): void {
   expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D7/D8)').not.toBeNull()
   const open = screen.getByTestId('task-tool-link-open')
   expect((open.textContent ?? '').trim()).toBe('Open tasks')
-  expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
+  expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
   // D5: a call that has a reason never claims it has none.
   expect(screen.queryByText(NO_REASON_RE)).toBeNull()
   // Never the generic chip, never a success heading.
@@ -154,6 +164,11 @@ describe('R2-1 — a saved failed task call loaded through the REST adapter keep
     expect(sentence.closest('[role="alert"]')).not.toBeNull()
     // The instrument tells the two outcomes apart: the D8 framing is absent.
     expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
+    // Round 5b / Q1 A: the no-reason failure keeps the "Open tasks" link too
+    // (TASK_ARGS names workspace_id, so the workspace tasks panel).
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
   })
 
   it('control: a SUCCESSFUL saved call over the same path renders the card, so the harness can reach it', async () => {
@@ -222,4 +237,94 @@ describe('D5 — the reason field of a structured delegation_denied failure is a
     renderSaved(tc)
     expectKnownReasonFailure('start', DENIAL.reason)
   })
+})
+
+describe('Round 5b / Q2 C — a saved task call that names no workspace, on the REST path', () => {
+  // Parameters in the shape the real tools take, with NO workspace_id: run_task and
+  // delete_task take only task_id (pkg/tools/run_task.go::TaskRunTool.Parameters,
+  // pkg/tools/task.go::TaskDeleteTool.Parameters); create_task and update_task take
+  // workspace_id as optional (absent or null = the agent's own workspace). The
+  // failure rows pin the alert text and the link, not the D8 framing (the describes
+  // above own that). TODAY the REST adapter drops a stored error
+  // (src/lib/api/sessions.ts::rawToToolCall sets `error: undefined`), so a stored-error
+  // card shows the D5 sentence and no link: the stored-error rows therefore assert the
+  // link BEFORE the reason, so they go red at the missing link first (the link is the
+  // rule under test) and are held to the reason only after that (the R2-1 rows above
+  // own the adapter gap). The no-reason and success rows go red for the link alone.
+  const NO_WORKSPACE_ROWS = [
+    {
+      tool: 'create_task',
+      parameters: { title: 'Weekly report', prompt: 'Write the weekly report', agent_id: 'agent_mia' },
+      reason: 'agent "agent_zz" is not a member of this workspace.',
+      noReason: "I couldn't create the task, and no reason was given. Try again.",
+      payload: { task_id: 'task_99', status: 'inbox' },
+    },
+    {
+      tool: 'update_task',
+      parameters: { task_id: 'task_99', title: 'Weekly report' },
+      reason: 'task not found: task_99',
+      noReason: "I couldn't update the task, and no reason was given. Try again.",
+      payload: { task_id: 'task_99', status: 'inbox', updated_fields: ['title'] },
+    },
+    {
+      tool: 'run_task',
+      parameters: { task_id: 'task_99' },
+      reason: 'task "task_99" is blocked on an unmet dependency; it becomes runnable automatically once its blockers complete',
+      noReason: "I couldn't start the task, and no reason was given. Try again.",
+      payload: { task_id: 'task_99', status: 'running', session_id: 'sess_1' },
+    },
+    {
+      tool: 'delete_task',
+      parameters: { task_id: 'task_99' },
+      reason: 'Task task_99 was already deleted',
+      noReason: "I couldn't delete the task, and no reason was given. Try again.",
+      payload: { deleted: 'task_99' },
+    },
+  ]
+
+  function expectTasksIndexLinkAndNoCalendar(): void {
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+    expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
+  }
+
+  it.each(NO_WORKSPACE_ROWS)(
+    '$tool: a stored error and no workspace_id -> the alert carries the reason, "Open tasks" links to /tasks, no calendar link',
+    async ({ tool, parameters, reason }) => {
+      const tc = await loadThroughRest(wireCall(tool, { parameters, error: reason }))
+      renderSaved(tc)
+      expectTasksIndexLinkAndNoCalendar()
+      expect(screen.getByRole('alert').textContent ?? '').toContain(reason)
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    },
+  )
+
+  it.each(NO_WORKSPACE_ROWS)(
+    '$tool: no error, no result and no workspace_id -> the D5 sentence, "Open tasks" links to /tasks, no calendar link',
+    async ({ tool, parameters, noReason }) => {
+      const tc = await loadThroughRest(wireCall(tool, { parameters }))
+      renderSaved(tc)
+      expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(noReason)
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+      expectTasksIndexLinkAndNoCalendar()
+    },
+  )
+
+  // TODAY a successful card shows its links only when the call's parameters carry
+  // workspace_id, so each success row is red for the missing /tasks link.
+  it.each(NO_WORKSPACE_ROWS)(
+    '$tool: a successful saved call with no workspace_id -> the card, "Open tasks" links to /tasks, no calendar link',
+    async ({ tool, parameters, payload }) => {
+      const tc = await loadThroughRest(
+        wireCall(tool, { parameters, status: 'success', result: { text: JSON.stringify(payload) } }),
+      )
+      renderSaved(tc)
+      const card = screen.getByTestId('task-tool-card')
+      const open = within(card).getByTestId('task-tool-link-open')
+      expect((open.textContent ?? '').trim()).toBe('Open tasks')
+      expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+      expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
+    },
+  )
 })

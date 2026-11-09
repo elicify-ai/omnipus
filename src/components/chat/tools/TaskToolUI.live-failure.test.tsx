@@ -26,9 +26,15 @@
 //    failure.
 //  - D8: with a known reason the card shows "I couldn't <verb> the task.
 //    <reason>" (reason unchanged) and keeps the "Open tasks" link. The alert
-//    stays role="alert". The link is expected where the call's args carry the
-//    workspace id (the card builds the link from it); real run_task args carry
-//    only task_id, so the realistic-args row asserts the sentence alone.
+//    stays role="alert".
+//  - Round 5b, Q1 A + Q2 C (team-lead decisions, 2026-11-09 — the link rule):
+//    a failed call keeps "Open tasks" with or without a reason; the link goes
+//    to /workspaces/<id>/chat?panel=tasks when the call's args name a
+//    workspace and to /tasks when they do not (real run_task args carry only
+//    task_id); "Open calendar" appears only when workspace_id is present.
+//    Round 5b REPLACES the round-5 `link: boolean` flag (false = "the row
+//    asserts the sentence alone") with an explicit expected href, so the
+//    realistic-args row now pins the /tasks link too (strengthened, nothing removed).
 //  - Frame shapes: contracts/asyncapi.yaml (ToolCallStartFrame,
 //    ToolCallResultFrame, DelegationFailure); pkg/tools/result.go::
 //    DelegationDeniedResult is the producer of the structured object.
@@ -138,6 +144,9 @@ const DENIAL: DelegationFailure = {
 }
 const ARGS_WITH_WORKSPACE = { task_id: 'task_1', workspace_id: 'ws_1' }
 const ARGS_REAL_RUN_TASK = { task_id: 'task_1' } // run_task's real schema: task_id only
+// Round 5b / Q2 C: the link targets the decisions name, as literals.
+const WORKSPACE_TASKS_HREF = '/workspaces/ws_1/chat?panel=tasks'
+const TASKS_INDEX_HREF = '/tasks'
 
 function startFrame(tool: string, params: Record<string, unknown>): ToolCallStartFrame {
   return { type: 'tool_call_start', session_id: SID, tool, call_id: CALL_ID, params }
@@ -196,15 +205,13 @@ async function renderLiveThread(): Promise<void> {
 const NO_REASON_RE = /no reason was given/i
 const SUCCESS_HEADING_RE = /^(I (scheduled|created|updated|started|deleted) the task|The task is already running)$/
 
-/** D8: "I couldn't <verb> the task. <reason>" in the alert, the reason unchanged; "Open tasks" kept when the args name a workspace. */
-function expectKnownReasonFailure(verb: string, reason: string, opts: { link: boolean }): void {
+/** D8: "I couldn't <verb> the task. <reason>" in the alert, the reason unchanged; "Open tasks" kept, pointing at `href`. */
+function expectKnownReasonFailure(verb: string, reason: string, href: string): void {
   const sentence = screen.getByText(`I couldn't ${verb} the task. ${reason}`)
   expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D7/D8)').not.toBeNull()
-  if (opts.link) {
-    const open = screen.getByTestId('task-tool-link-open')
-    expect((open.textContent ?? '').trim()).toBe('Open tasks')
-    expect(open).toHaveAttribute('href', '/workspaces/ws_1/chat?panel=tasks')
-  }
+  const open = screen.getByTestId('task-tool-link-open')
+  expect((open.textContent ?? '').trim()).toBe('Open tasks')
+  expect(open).toHaveAttribute('href', href)
   expect(screen.queryByText(NO_REASON_RE)).toBeNull()
   expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   expect(screen.queryByText(SUCCESS_HEADING_RE)).toBeNull()
@@ -229,17 +236,19 @@ describe('R2-2 — a live run_task refused by delegation policy keeps its reason
     // The failure region is mounted by the REGISTERED task UI (a generic chip
     // would have no alert), so the sentence checks below are about the card.
     await screen.findByRole('alert')
-    expectKnownReasonFailure('start', DENIAL.reason, { link: true })
+    expectKnownReasonFailure('start', DENIAL.reason, WORKSPACE_TASKS_HREF)
   })
 
-  it('realistic run_task args (task_id only): the denial reason is shown, framed as D8', async () => {
+  it('realistic run_task args (task_id only): the denial reason is shown, framed as D8, with the /tasks link (Round 5b / Q2 C)', async () => {
     sendFrames([
       startFrame('run_task', ARGS_REAL_RUN_TASK),
       resultFrame('run_task', DENIAL, 'error', DENIAL.reason),
     ])
     await renderLiveThread()
     await screen.findByRole('alert')
-    expectKnownReasonFailure('start', DENIAL.reason, { link: false })
+    expectKnownReasonFailure('start', DENIAL.reason, TASKS_INDEX_HREF)
+    // Q2 C: the call names no workspace, so there is no calendar link.
+    expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
   })
 
   it('a plain-text refusal (the gateway sends the text as the result and no error) -> D8 with that text', async () => {
@@ -247,7 +256,7 @@ describe('R2-2 — a live run_task refused by delegation policy keeps its reason
     sendFrames([startFrame('run_task', ARGS_WITH_WORKSPACE), resultFrame('run_task', reason, 'error')])
     await renderLiveThread()
     await screen.findByRole('alert')
-    expectKnownReasonFailure('start', reason, { link: true })
+    expectKnownReasonFailure('start', reason, WORKSPACE_TASKS_HREF)
   })
 })
 
@@ -258,6 +267,11 @@ describe('R2-2 controls — the harness tells a known reason from none, and a fa
     const alert = await screen.findByRole('alert')
     expect((alert.textContent ?? '').trim()).toContain("I couldn't start the task, and no reason was given. Try again.")
     expect(screen.queryByText(/^I couldn't start the task\. /)).toBeNull()
+    // Round 5b / Q1 A: the no-reason failure keeps the "Open tasks" link too
+    // (ARGS_WITH_WORKSPACE names workspace_id, so the workspace tasks panel).
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
   })
 
   it('control: a successful live create_task renders the card through the same chain, not the generic chip', async () => {
@@ -273,5 +287,49 @@ describe('R2-2 controls — the harness tells a known reason from none, and a fa
     const card = await screen.findByTestId('task-tool-card')
     expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I created the task')
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+})
+
+// Round 5b / Q2 C (team-lead decisions Q1 A and Q2 C, 2026-11-09), through the real
+// live chain: a call whose args name no workspace links "Open tasks" to /tasks and
+// shows no calendar link. These rows go red for the missing link alone — the
+// sentence assertions below already hold today.
+describe('Round 5b / Q2 C — a live task call that names no workspace', () => {
+  it('a failed run_task (real args: task_id only) with no reason -> the D5 sentence, "Open tasks" links to /tasks, no calendar link', async () => {
+    sendFrames([startFrame('run_task', ARGS_REAL_RUN_TASK), resultFrame('run_task', '', 'error')])
+    await renderLiveThread()
+    const alert = await screen.findByRole('alert')
+    expect((alert.textContent ?? '').trim()).toContain("I couldn't start the task, and no reason was given. Try again.")
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+    expect(screen.queryByTestId('task-tool-link-calendar')).toBeNull()
+  })
+
+  it('a successful create_task whose args name no workspace -> the card, "Open tasks" links to /tasks, no calendar link', async () => {
+    sendFrames([
+      startFrame('create_task', { title: 'Weekly report', trigger: { type: 'manual', config: {} } }),
+      resultFrame('create_task', JSON.stringify({ task_id: 'task_1', status: 'inbox' }), 'success'),
+    ])
+    await renderLiveThread()
+    const card = await screen.findByTestId('task-tool-card')
+    const open = within(card).getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+    expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
+  })
+
+  it('a successful run_task (real args: task_id only) -> the card, "Open tasks" links to /tasks, no calendar link', async () => {
+    sendFrames([
+      startFrame('run_task', ARGS_REAL_RUN_TASK),
+      resultFrame('run_task', JSON.stringify({ task_id: 'task_1', status: 'running', session_id: 'sess_1' }), 'success'),
+    ])
+    await renderLiveThread()
+    const card = await screen.findByTestId('task-tool-card')
+    expect((within(card).getByTestId('task-tool-verb').textContent ?? '').trim()).toBe('I started the task')
+    const open = within(card).getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
+    expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
   })
 })
