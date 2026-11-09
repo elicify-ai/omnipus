@@ -130,7 +130,7 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    tee's from its first output line, followed by an `ATTEMPT: <id>` line) can be fetched
    within the bound and carries this attempt's id, this run's HEAD and a verdict — the
    transport died but the run finished — the verdict is RECOVERED and the gate counts as
-   completed. There is no "newest log of this gate" fallback: an older green run of the
+   completed. The runner names its log with the attempt id and its pid and creates it without appending, and the dispatcher rejects any log that holds more than one `ATTEMPT:` identity (two runs in one file). There is no "newest log of this gate" fallback: an older green run of the
    same gate and commit is never adopted, and collected evidence must carry the attempt
    id too. Otherwise the tier ends with an explicit, non-zero
    **STALLED/DIED** verdict naming the gate, the machine and the last log line. Liveness,

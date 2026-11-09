@@ -377,6 +377,13 @@ log_has_attempt() { # $1 log-file $2 attempt
   [ -f "$1" ] && tr -d '\r' <"$1" | grep -qxF "ATTEMPT: $2"
 }
 
+# True when the log carries MORE THAN ONE distinct `ATTEMPT:` identity: two
+# invocations wrote into one file, so a verdict line in it cannot be attributed
+# to either. Such a log is never evidence for any attempt.
+log_mixed_attempts() { # $1 log-file
+  [ -f "$1" ] && [ "$(tr -d '\r' <"$1" | sed -n 's/^ATTEMPT: //p' | sort -u | wc -l)" -gt 1 ]
+}
+
 # One structured line per watchdog decision; the selfcheck asserts on these.
 watch_event() { # $1 tier $2 gate $3 text
   [ -n "$LOG_DIR" ] && printf '%s\n' "$3" >>"$LOG_DIR/watchdog-$1-$2.events"
@@ -461,6 +468,8 @@ handle_incomplete_gate() { # $1 tier $2 machine-id $3 gate $4 log $5 reason
       why="recovery transfer of $remote failed (exit $rc)"
     elif ! log_has_attempt "$rec" "$attempt"; then
       why="$remote does not carry this attempt's id $attempt (older or foreign run log; not adopted)"
+    elif log_mixed_attempts "$rec"; then
+      why="$remote carries more than one attempt identity (two runs wrote one file); no verdict in it can be attributed to $attempt, not adopted"
     elif ! head_matches "$sha" "$EXPECTED_FULL"; then
       why="$remote reports HEAD '${sha:-none}', expected ${EXPECTED_SHORT}; not adopted"
     elif ! grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$rec" 2>/dev/null; then
@@ -696,6 +705,11 @@ collect_machine_logs() { # $1 tier $2 machine-id $3 gates(space-separated)
     fi
     if ! log_has_attempt "$dest" "$attempt"; then
       warn "[$tier] evidence NOT verified: gate $gate log copied from machine $id does not carry this attempt's id $attempt — another run's file, not this one"
+      rc=1
+      continue
+    fi
+    if log_mixed_attempts "$dest"; then
+      warn "[$tier] evidence NOT verified: gate $gate log copied from machine $id carries more than one attempt identity (two runs wrote one file) - no verdict in it can be attributed to attempt $attempt"
       rc=1
       continue
     fi

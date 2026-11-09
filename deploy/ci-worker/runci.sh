@@ -63,13 +63,20 @@ if [ -z "${RUNCI_AS_CI:-}" ]; then
 RUNLOG_DIR=/cache/logs
 mkdir -p "$RUNLOG_DIR" || { echo "cannot create $RUNLOG_DIR — no persistent run log possible"; exit 2; }
 safe_ref="$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')"
-RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
+# The name carries the attempt id and this process id and the file is created
+# with noclobber, never appended to: two invocations in the same UTC second can
+# no longer share one file, so a log can never hold an earlier run's verdict
+# next to a later run's identity (ci-cluster.sh also rejects any log holding
+# more than one ATTEMPT identity).
+safe_attempt="$(printf '%s' "${ATTEMPT:-manual}" | tr -c 'A-Za-z0-9._-' '-')"
+RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ)-${safe_attempt}-$$.log"
 # Prune BEFORE the tee opens the new file: keep the newest 2 existing logs for
 # THIS gate (today's file becomes the 3rd). `@` separates gate from ref — gate
 # names contain `-` (go-test), so a `-` there would make `go-*` also match
 # go-test's logs. xargs -r is GNU-only; this script runs on the Linux worker.
 ( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
-exec > >(tee -a "$RUNLOG") 2>&1
+( set -C; : > "$RUNLOG" ) || { echo "cannot create a new run log $RUNLOG (already exists?)"; exit 2; }
+exec > >(tee "$RUNLOG") 2>&1
 echo "RUNLOG: $RUNLOG"
 echo "ATTEMPT: ${ATTEMPT:-none}"
 fi

@@ -502,6 +502,116 @@ grep -q 'timed out after 2s' "$OUT" || fail "(17) the hung recovery transfer was
 grep -q 'STALLED/DIED' "$OUT" || fail "(17) no STALLED/DIED verdict"
 [ "$FAIL" -eq 0 ] && ok "(17) a TERM-ignoring console is killed and a hung recovery transfer is bounded"
 
+# 18. R2: the ACTUAL runci.sh, executed (not only its extracted trap lines). A copy
+#     with just the worker paths relocated runs until it blocks in `git fetch`
+#     (stubbed), is sent HUP, INT and TERM, and must write the KILLED trailer and
+#     exit 129/130/143. A runner that reset or never installed its traps at run
+#     time (e.g. `trap - HUP INT TERM`) passes case 11 but fails here.
+new_case c18
+RUNNER_FIX="$TMP/runner-fixture"; mkdir -p "$RUNNER_FIX/bin" "$RUNNER_FIX/cache/omnipus/.git"
+sed -e "s#/cache#$RUNNER_FIX/cache#g" -e "s#/tmp/runci.lock#$RUNNER_FIX/runci.lock#g" "$RUNCI" > "$RUNNER_FIX/runci-relocated.sh"
+cat >"$RUNNER_FIX/bin/git" <<'GIT'
+#!/bin/sh
+case "$1" in
+  config) echo '*' ;;
+  fetch) : > "$RUNNER_FIXTURE/ready"; while [ ! -e "$RUNNER_FIXTURE/release" ]; do sleep 0.05; done ;;
+  *) exit 2 ;;
+esac
+GIT
+chmod +x "$RUNNER_FIX/bin/git"
+cat >"$TMP/runnersig.py" <<'PY'
+import os, signal, subprocess, sys, time
+script, name, fixdir = sys.argv[1:4]
+d = os.path.join(fixdir, "sig-" + name); os.makedirs(d)
+env = dict(os.environ, PATH=os.path.join(fixdir, "bin") + ":" + os.environ["PATH"], RUNNER_FIXTURE=d)
+env.pop("RUNCI_AS_CI", None)
+def reset():
+    for s in (signal.SIGINT, signal.SIGHUP, signal.SIGTERM):
+        signal.signal(s, signal.SIG_DFL)
+out = open(os.path.join(d, "console.log"), "w")
+p = subprocess.Popen(["bash", script, "selfcheck-ref", "gofmt", "signal." + name], env=env,
+                     stdout=out, stderr=subprocess.STDOUT, preexec_fn=reset)
+deadline = time.monotonic() + 30
+while not os.path.exists(os.path.join(d, "ready")) and p.poll() is None and time.monotonic() < deadline:
+    time.sleep(0.05)
+if not os.path.exists(os.path.join(d, "ready")):
+    p.kill(); p.wait(); print("runner did not reach the git boundary"); sys.exit(3)
+p.send_signal(getattr(signal, "SIG" + name))
+open(os.path.join(d, "release"), "w").close()
+try:
+    rc = p.wait(timeout=30)
+except subprocess.TimeoutExpired:
+    p.kill(); print("runner did not exit after SIG" + name); sys.exit(4)
+out.close()
+want = "RUNCI: KILLED by signal " + name + " "
+for _ in range(60):
+    data = open(os.path.join(d, "console.log")).read()
+    if want in data: break
+    time.sleep(0.05)
+print(data.strip()); print("EXIT=%d" % rc)
+PY
+actual_signal() { # $1 name $2 expected exit code
+  local o
+  o=$(python3 "$TMP/runnersig.py" "$RUNNER_FIX/runci-relocated.sh" "$1" "$RUNNER_FIX" 2>&1)
+  printf '%s' "$o" | grep -q "^RUNCI: KILLED by signal $1 " \
+    || fail "(18) the ACTUAL runci.sh wrote no KILLED trailer on SIG$1 (traps reset or not installed at run time?): $(printf '%s' "$o" | tail -2 | tr '\n' ' ')"
+  printf '%s' "$o" | grep -qx "EXIT=$2" \
+    || fail "(18) the ACTUAL runci.sh did not exit $2 on SIG$1: $(printf '%s' "$o" | tail -1)"
+}
+grep -q "$RUNNER_FIX/cache/logs" "$RUNNER_FIX/runci-relocated.sh" || fail "(18) fixture: the worker paths were not relocated"
+actual_signal HUP 129; actual_signal INT 130; actual_signal TERM 143
+[ "$FAIL" -eq 0 ] && ok "(18) the actual runci.sh, executed, writes the KILLED trailer and exits 129/130/143 on HUP/INT/TERM"
+
+# 19. R1: the runner's run-log name is unique per invocation. The real logging
+#     prologue (everything before the whole-run mutex) is executed three times in
+#     the SAME UTC second (fixed clock) for the same gate and ref: two different
+#     attempts and one repeated attempt. No two may share a file, and a later
+#     run's log must never contain an earlier run's attempt or verdict.
+new_case c19
+RL="$TMP/runlog-fixture"; mkdir -p "$RL/bin" "$RL/cache"
+printf '#!/bin/sh\necho 20261109T000000Z\n' > "$RL/bin/date"; chmod +x "$RL/bin/date"
+sed -e "s#/cache#$RL/cache#g" -e "s#/tmp/runci.lock#$RL/runci.lock#g" "$RUNCI" > "$RL/runci-relocated.sh"
+if [ "$(grep -c '^# --- whole-run mutex' "$RL/runci-relocated.sh")" -ne 1 ]; then
+  fail "(19) fixture: runci.sh no longer has exactly one '# --- whole-run mutex' marker to split the logging prologue at"
+fi
+sed -n '1,/^# --- whole-run mutex/p' "$RL/runci-relocated.sh" > "$RL/prologue.sh"
+run_prologue() { # $1 tag $2 attempt $3 verdict-line
+  local s="$RL/run-$1.sh"
+  { cat "$RL/prologue.sh"; printf 'echo "HEAD: %s selfcheck"\n%s\n' "$FAKE_SHORT" "$3"; } > "$s"
+  PATH="$RL/bin:$PATH" bash "$s" selfcheck-ref gofmt "$2" > "$RL/out-$1.txt" 2>&1
+  sleep 0.3 # let the tee flush
+  sed -n 's/^RUNLOG: //p' "$RL/out-$1.txt" | head -1
+}
+P1=$(run_prologue a old.go.gofmt 'echo "ALL GATES GREEN"')
+P2=$(run_prologue b current.go.gofmt 'echo "current run died"; exit 1')
+P3=$(run_prologue c current.go.gofmt 'echo "repeat of the current attempt"; exit 1')
+[ -n "$P1" ] && [ -n "$P2" ] && [ -n "$P3" ] || fail "(19) fixture: a prologue run announced no RUNLOG"
+[ "$P1" != "$P2" ] || fail "(19) two attempts in the same second share one run-log path: $P1"
+[ "$P2" != "$P3" ] || fail "(19) a repeated attempt in the same second reuses the earlier run-log path: $P2"
+grep -q 'ATTEMPT: old.go.gofmt' "$P2" 2>/dev/null && fail "(19) the later attempt's log contains the earlier attempt's identity"
+grep -q 'ALL GATES GREEN' "$P2" 2>/dev/null && fail "(19) the later attempt's log contains the earlier attempt's PASS"
+[ "$(grep -c '^ATTEMPT: ' "$P3" 2>/dev/null)" -eq 1 ] || fail "(19) a run log must hold exactly one ATTEMPT identity"
+[ "$FAIL" -eq 0 ] && ok "(19) every run gets its own log file; same-second runs never share or append to one"
+
+# 20. R1: the dispatcher refuses a log holding more than one attempt identity,
+#     even when the current attempt's identity and an old PASS are both in it.
+#     (a) recovery after a dropped console; (b) normal collection after a finished run
+new_case c20a; two_machines
+touch "$FAKE_DIR/hang-mA"
+printf 'ATTEMPT: oldrun.go.gofmt\nHEAD: %s old\nRESULT gofmt: 0\nALL GATES GREEN\nRUNLOG: /cache/logs/gofmt@x.log\nATTEMPT: @ATTEMPT@\nHEAD: %s selfcheck\ncurrent run died, no verdict\n' "$FAKE_SHORT" "$FAKE_SHORT" > "$FAKE_DIR/runlog-mA"
+run_cluster_bounded "$HANG_TIERS"
+[ "$RC" -eq 1 ] || fail "(20a) a mixed-attempt log must not be adopted on recovery: expected exit 1, got $RC"
+grep -q 'OVERALL: PASS' "$OUT" && fail "(20a) an old attempt's PASS certified the unfinished current attempt"
+grep -q 'STALLED/DIED' "$OUT" || fail "(20a) no explicit STALLED/DIED verdict"
+grep -q 'more than one attempt identity' "$OUT" || fail "(20a) the failure does not say the log mixes attempts"
+new_case c20b; two_machines
+printf 'ATTEMPT: oldrun.go.gofmt\nHEAD: %s old\nALL GATES GREEN\nRUNLOG: /cache/logs/gofmt@x.log\nATTEMPT: @ATTEMPT@\nHEAD: %s selfcheck\nALL GATES GREEN\n' "$FAKE_SHORT" "$FAKE_SHORT" > "$FAKE_DIR/runlog-mA"
+run_cluster_bounded "$HANG_TIERS"
+[ "$RC" -ne 0 ] || fail "(20b) collected evidence mixing two attempts must not PASS, got exit 0"
+grep -q 'OVERALL: PASS' "$OUT" && fail "(20b) mixed-attempt evidence was accepted as verified"
+grep -q 'more than one attempt identity' "$OUT" || fail "(20b) collection does not say the log mixes attempts"
+[ "$FAIL" -eq 0 ] && ok "(20) a log with more than one attempt identity is never adopted or collected as evidence"
+
 if [ "$FAIL" -ne 0 ]; then echo "selfcheck: ci-cluster.sh does not behave - see above" >&2; exit 1; fi
 echo "selfcheck: OK (never stops a machine it did not start; refuses unreadable states; a dead session ends in STALLED/DIED or a RECOVERED verdict — never a silent hang; healthy slow gates survive; signal deaths keep their trailer)"
 exit 0

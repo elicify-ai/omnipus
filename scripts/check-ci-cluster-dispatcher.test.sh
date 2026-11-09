@@ -17,6 +17,9 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 PASS=0
 FAIL=0
+# want <n>: run mutant test n. GUARD_TESTS="4 6" runs only those (each mutant test is a
+# full selfcheck run, so the whole file takes longer than 20 minutes); unset runs them all.
+want() { [ -z "${GUARD_TESTS:-}" ] || [[ " $GUARD_TESTS " == *" $1 "* ]]; }
 check() { # label expected actual
   if [ "$3" -eq "$2" ]; then
     echo "  PASS [$1]: exit $3 (expected $2)"; PASS=$((PASS + 1))
@@ -72,6 +75,7 @@ echo "Test 3: a tree without the selfcheck exits 2 (never a silent green)"
 mkdir -p "$TMP_DIR/empty"
 REPO_ROOT="$TMP_DIR/empty" bash "$GUARD" >/dev/null 2>&1; check "missing-selfcheck" 2 $?
 
+if want 4; then
 echo "Test 4: a dispatcher whose watchdog never probes is caught by selfcheck case 8, for the intended reason"
 # The 2026-10-18 hang: with no probing the dead-but-open console is never ended. The selfcheck's
 # fake console never ends by itself, so the mutant must fail on the case's own 40s cap
@@ -98,6 +102,9 @@ else
   fi
 fi
 
+fi
+
+if want 5; then
 echo "Test 5: a runci.sh without its HUP/INT/TERM traps is caught by selfcheck case 11, for the intended reason"
 # The selfcheck takes the trap statements from runci.sh itself and runs them in a child, so a
 # runner whose traps were deleted must fail the case's named assertions (not a setup error).
@@ -113,12 +120,65 @@ else
   check "mutant5-no-traps" 1 "$rc"
   if grep -q 'selfcheck FAIL: (11) runci.sh does not carry exactly the three HUP/INT/TERM trap statements' "$TMP_DIR/mutant5.out" \
     && grep -q 'selfcheck FAIL: (11) the real runci.sh wrote no KILLED trailer for SIGHUP' "$TMP_DIR/mutant5.out" \
-    && ! grep -q -e 'missing' -e 'cannot resolve ref' -e 'syntax error' "$TMP_DIR/mutant5.out"; then
+    && ! grep -v '^selfcheck FAIL: (18)' "$TMP_DIR/mutant5.out" | grep -q -e 'missing' -e 'cannot resolve ref' -e 'syntax error'; then
     echo "  PASS [mutant5-reason]: failed on case 11's trap assertions, as intended"; PASS=$((PASS + 1))
   else
     echo "  FAIL [mutant5-reason]: the mutant failed for some other reason:"; sed 's/^/    | /' "$TMP_DIR/mutant5.out" | tail -20
     FAIL=$((FAIL + 1))
   fi
+fi
+
+fi
+
+# mutant_tree <n> <file-to-mutate> <sed-expr>: copy the three worker scripts into
+# $TMP_DIR/mutant<n>/deploy/ci-worker, apply the sed expression to <file-to-mutate>
+# only, and fail the test if the copy is identical (a mutation that changes nothing proves nothing).
+mutant_tree() {
+  local n="$1" target="$2" expr="$3" d="$TMP_DIR/mutant$1/deploy/ci-worker"
+  mkdir -p "$d"
+  cp "$REPO/deploy/ci-worker/ci-cluster.sh" "$REPO/deploy/ci-worker/ci-cluster-selfcheck.sh" "$REPO/deploy/ci-worker/runci.sh" "$d/"
+  sed -E "$expr" "$REPO/deploy/ci-worker/$target" > "$d/$target.new" && mv "$d/$target.new" "$d/$target"
+  if cmp -s "$REPO/deploy/ci-worker/$target" "$d/$target"; then
+    echo "  FAIL [mutant$n-built]: the mutation did not change $target, so this test proves nothing"
+    FAIL=$((FAIL + 1)); return 1
+  fi
+  GIT_DIR="$GIT_DIR_ABS" REPO_ROOT="$TMP_DIR/mutant$n" bash "$GUARD" >"$TMP_DIR/mutant$n.out" 2>&1; rc=$?
+  return 0
+}
+# expect_named <n> <label> <fixed-string>...: the mutant exited 1 and printed every named line
+expect_named() {
+  local n="$1" label="$2" ok=1 want; shift 2
+  check "$label-exit" 1 "$rc"
+  for want in "$@"; do grep -qF -e "$want" "$TMP_DIR/mutant$n.out" || ok=0; done
+  if [ "$ok" -eq 1 ] && ! grep -v '^selfcheck FAIL: (18)' "$TMP_DIR/mutant$n.out" | grep -q -e 'missing' -e 'cannot resolve ref' -e 'syntax error'; then
+    echo "  PASS [$label-reason]: failed on the named assertion(s), as intended"; PASS=$((PASS + 1))
+  else
+    echo "  FAIL [$label-reason]: the mutant did not fail on the named assertion(s):"; sed 's/^/    | /' "$TMP_DIR/mutant$n.out" | tail -20
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+echo "Test 6: a runner that resets its traps at run time passes case 11 but is caught by case 18 (the actual runner)"
+if want 6 && mutant_tree 6 runci.sh "/^trap '.*' TERM\$/a trap - HUP INT TERM"; then
+  expect_named 6 mutant6-trap-reset "selfcheck FAIL: (18) the ACTUAL runci.sh wrote no KILLED trailer on SIGHUP" \
+    "selfcheck FAIL: (18) the ACTUAL runci.sh wrote no KILLED trailer on SIGINT" \
+    "selfcheck FAIL: (18) the ACTUAL runci.sh wrote no KILLED trailer on SIGTERM"
+  if grep -q 'selfcheck FAIL: (11)' "$TMP_DIR/mutant6.out"; then
+    echo "  FAIL [mutant6-case11-blind]: case 11 caught the reset itself, so the mutant no longer shows case 18 is needed"; FAIL=$((FAIL + 1))
+  else
+    echo "  PASS [mutant6-case11-blind]: case 11 alone does not see the reset; case 18 does"; PASS=$((PASS + 1))
+  fi
+fi
+echo "Test 7: the original shared run-log behaviour (no attempt or pid in the name, no noclobber create) is caught by case 19"
+echo "Test 7: a runner log name that omits the attempt and pid (the same-second collision) is caught by case 19"
+if want 7 && mutant_tree 7 runci.sh 's/-\$\{safe_attempt\}-\$\$\.log/.log/;/^\( set -C; : > /d'; then
+  expect_named 7 mutant7-shared-log "selfcheck FAIL: (19) two attempts in the same second share one run-log path"
+fi
+
+echo "Test 8: a dispatcher that accepts a log with two attempt identities is caught by case 20"
+if want 8 && mutant_tree 8 ci-cluster.sh 's/-gt 1 \]/-gt 99 ]/'; then
+  expect_named 8 mutant8-mixed-log "selfcheck FAIL: (20a) an old attempt's PASS certified the unfinished current attempt" \
+    "selfcheck FAIL: (20b) mixed-attempt evidence was accepted as verified"
 fi
 
 echo ""
