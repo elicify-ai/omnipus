@@ -13,6 +13,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestExternalDispatch_RunsCheckedProgram(t *testing.T) {
 			ts.agent.MaxIterations = extTestEffectiveLimit
 			checkedSource, checkedMarker := t11bNativeProgram(t, spec, "selected-fixture")
 			otherSource, otherMarker := t11bNativeProgram(t, spec, "other-fixture")
-			dir, err := filepath.EvalSymlinks(t.TempDir())
+			dir, err := filepath.EvalSymlinks(t11combined.TrustedProgramDir(t))
 			require.NoError(t, err)
 			other := filepath.Join(dir, "fixture-cli")
 			checked := other + " "

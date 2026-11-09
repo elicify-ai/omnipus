@@ -363,8 +363,15 @@ func TestR5_F1_ExecutorSmokeTestPreparationFailureIsFixedText(t *testing.T) {
 	defer cleanup()
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
-	r5Block(t, home)
-	t11bSavedProgram(t, api, "claude-code")
+	program := t11bSavedProgram(t, api, "claude-code")
+	_, resolved, refusal := api.executorProgram("claude-code")
+	require.Empty(t, refusal, "instrument: the program check succeeds before scratch preparation")
+	require.NotEmpty(t, resolved, "instrument: the saved program has a checked launch identity")
+	require.FileExists(t, program)
+	// Block only scratch creation; blocking the whole home now prevents the
+	// preceding writable-root discovery from reaching this preparation branch.
+	scratchRoot := filepath.Join(home, "executor-smoke-test-runs")
+	require.NoError(t, os.WriteFile(scratchRoot, []byte("scratch directory blocker"), 0o600))
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents/executor-smoke-test",

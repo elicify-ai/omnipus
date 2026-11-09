@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCombinedProgramLocation_CaseSpelledMount_ActualDispatch_R4(t *testing.T) {
 	var mountedRoot string
 	f := t11cNativeFixtureFor(t, func(source string) string {
-		base, err := filepath.EvalSymlinks(t.TempDir())
+		base, err := filepath.EvalSymlinks(t11combined.TrustedProgramDir(t))
 		require.NoError(t, err)
 		mountedRoot = filepath.Join(base, "MountCase")
 		alternate := filepath.Join(base, "mountcase")

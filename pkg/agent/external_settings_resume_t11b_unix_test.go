@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func t11bNativeCLIs() []t11bNativeCLI {
 
 func t11bNativeProgram(t *testing.T, spec t11bNativeCLI, label string) (string, string) {
 	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
+	dir, err := filepath.EvalSymlinks(t11combined.TrustedProgramDir(t))
 	require.NoError(t, err)
 	program, marker := filepath.Join(dir, label), filepath.Join(dir, label+".calls")
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }

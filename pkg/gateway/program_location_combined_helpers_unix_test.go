@@ -24,7 +24,7 @@ import (
 
 func t11cCanonicalDir(t *testing.T) string {
 	t.Helper()
-	p, err := filepath.EvalSymlinks(t.TempDir())
+	p, err := filepath.EvalSymlinks(t11combined.TrustedProgramDir(t))
 	require.NoError(t, err)
 	return p
 }

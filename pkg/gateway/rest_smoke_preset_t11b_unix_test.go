@@ -17,13 +17,14 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func t11bSmokePresetProgram(t *testing.T) (string, string) {
 	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
+	dir, err := filepath.EvalSymlinks(t11combined.TrustedProgramDir(t))
 	require.NoError(t, err)
 	program, marker := filepath.Join(dir, "saved-codex"), filepath.Join(dir, "actual-argv")
 	quote := "'" + strings.ReplaceAll(marker, "'", "'\\''") + "'"

@@ -37,13 +37,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -224,7 +224,7 @@ func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker str
 // shape is used on Unix so the fixture does not depend on a shell.
 func t11BuildMarkerProgram(t *testing.T, marker string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := t11combined.TrustedProgramDir(t)
 	require.NoError(t, os.Chmod(dir, 0o700))
 	src := "package main\nimport \"os\"\nfunc main() {\n" +
 		"\t_ = os.WriteFile(" + t11JSONString(marker) + ", []byte(" + t11JSONString(t11MarkerText) + "), 0o644)\n" +
@@ -336,7 +336,7 @@ func TestCliValidate_NonPersonRefusedZeroSpawn(t *testing.T) {
 // candidate launches the resolved file.
 func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	_, mux, home := t11ValidateMux(t)
-	marker := filepath.Join(t.TempDir(), "marker")
+	marker := filepath.Join(t11combined.TrustedProgramDir(t), "marker")
 	prog := t11BuildMarkerProgram(t, marker)
 	token, cfg := t11Person(t, home)
 	spawns, launched := t11CountSpawns(t)
@@ -385,7 +385,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	t.Run("program inside a workspace mount", func(t *testing.T) {
 		const id = "t11mount"
 		require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: id, Name: "T11 mount"}))
-		host := t.TempDir()
+		host := t11combined.TrustedProgramDir(t)
 		mount, _, err := workspace.CreateMount(home, id, "extra", host)
 		require.NoError(t, err)
 		dst := filepath.Join(mount.HostPath, "fakecli")
@@ -402,7 +402,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			require.NoError(t, os.MkdirAll(work, 0o700))
 			inside := filepath.Join(work, "fakecli")
 			t11CopyExe(t, prog, inside, 0o755)
-			outDir := t.TempDir()
+			outDir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(outDir, 0o700))
 			link := filepath.Join(outDir, "codex-x")
 			require.NoError(t, os.Symlink(inside, link))
@@ -415,13 +415,13 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			work, err := workspace.SafeWorkDir(home, id)
 			require.NoError(t, err)
 			require.NoError(t, os.MkdirAll(work, 0o700))
-			finalDir := t.TempDir()
+			finalDir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(finalDir, 0o700))
 			final := filepath.Join(finalDir, "fakecli")
 			t11CopyExe(t, prog, final, 0o755)
 			mid := filepath.Join(work, "mid")
 			require.NoError(t, os.Symlink(final, mid))
-			outDir := t.TempDir()
+			outDir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(outDir, 0o700))
 			outer := filepath.Join(outDir, "outer")
 			require.NoError(t, os.Symlink(mid, outer))
@@ -443,7 +443,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			t11AssertProgramRan(t, w, marker, final, *spawns, *launched)
 		}
 		t.Run("group-writable file outside forbidden roots is launched", func(t *testing.T) {
-			dir := t.TempDir()
+			dir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(dir, 0o700))
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o775)
@@ -453,7 +453,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			allow(t, dst)
 		})
 		t.Run("other-writable file outside forbidden roots is launched", func(t *testing.T) {
-			dir := t.TempDir()
+			dir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(dir, 0o700))
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o707)
@@ -463,7 +463,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			allow(t, dst)
 		})
 		t.Run("other-writable parent outside forbidden roots is launched", func(t *testing.T) {
-			dir := t.TempDir()
+			dir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(dir, 0o707))
 			fi, err := os.Stat(dir)
 			require.NoError(t, err)
@@ -473,11 +473,11 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			allow(t, dst)
 		})
 		t.Run("group-writable link folder outside forbidden roots is launched", func(t *testing.T) {
-			finalDir := t.TempDir()
+			finalDir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(finalDir, 0o700))
 			finalFile := filepath.Join(finalDir, "fakecli")
 			t11CopyExe(t, prog, finalFile, 0o755)
-			linkDir := t.TempDir()
+			linkDir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(linkDir, 0o775))
 			fi, err := os.Stat(linkDir)
 			require.NoError(t, err)
@@ -488,7 +488,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 		})
 
 		t.Run("not executable", func(t *testing.T) {
-			dir := t.TempDir()
+			dir := t11combined.TrustedProgramDir(t)
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o644)
 			refuse(t, dst, "executable")
@@ -496,7 +496,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	}
 
 	t.Run("relative path", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := t11combined.TrustedProgramDir(t)
 		dst := filepath.Join(dir, "fakecli")
 		t11CopyExe(t, prog, dst, 0o755)
 		wd, err := os.Getwd()
@@ -512,11 +512,11 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	})
 
 	t.Run("directory", func(t *testing.T) {
-		refuse(t, t.TempDir(), "regular")
+		refuse(t, t11combined.TrustedProgramDir(t), "regular")
 	})
 
 	t.Run("allowed program returns the version and the resolved file", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := t11combined.TrustedProgramDir(t)
 		require.NoError(t, os.Chmod(dir, 0o700))
 		dst := filepath.Join(dir, "fakecli")
 		t11CopyExe(t, prog, dst, 0o755)
@@ -544,7 +544,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			// A symlink's own mode is 0777 on Unix. Spec §3.2 founder Q2b does
 			// not look at mode: a link outside the forbidden roots launches the
 			// resolved file.
-			dir := t.TempDir()
+			dir := t11combined.TrustedProgramDir(t)
 			require.NoError(t, os.Chmod(dir, 0o700))
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o755)
@@ -600,7 +600,7 @@ func TestCliValidate_IncompleteDiscoveryRefuses(t *testing.T) {
 	require.NoError(t, os.WriteFile(ws, []byte("not-a-directory"), 0o600))
 	marker := filepath.Join(t.TempDir(), "marker")
 	prog := t11BuildMarkerProgram(t, marker)
-	dir := t.TempDir()
+	dir := t11combined.TrustedProgramDir(t)
 	require.NoError(t, os.Chmod(dir, 0o700))
 	dst := filepath.Join(dir, "fakecli")
 	t11CopyExe(t, prog, dst, 0o755)
@@ -621,7 +621,7 @@ func TestCliValidate_IncompleteMountRefuses(t *testing.T) {
 	require.NoError(t, workspace.SaveRecord(home, workspace.Workspace{ID: id, Name: "T11"}))
 	marker := filepath.Join(t.TempDir(), "marker")
 	prog := t11BuildMarkerProgram(t, marker)
-	dir := t.TempDir()
+	dir := t11combined.TrustedProgramDir(t)
 	require.NoError(t, os.Chmod(dir, 0o700))
 	dst := filepath.Join(dir, "fakecli")
 	t11CopyExe(t, prog, dst, 0o755)

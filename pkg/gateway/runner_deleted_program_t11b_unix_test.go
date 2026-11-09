@@ -12,13 +12,14 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRunnerTestEndpoint_DeletedSavedProgramDoesNotFallBack_S4(t *testing.T) {
-	program, marker := t11bConnectionProgram(t, t.TempDir(), "saved-claude", "claude-code saved-version")
-	fallback, fallbackMarker := t11bConnectionProgram(t, t.TempDir(), "legacy-claude", "claude-code legacy-version")
+	program, marker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "saved-claude", "claude-code saved-version")
+	fallback, fallbackMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "legacy-claude", "claude-code legacy-version")
 	api := t11bConnectionAPI(t, program)
 	t11bSaveProgram(t, api, "claude-code", program)
 	code, control := postRunnerTest(t, api, "ext-claude")

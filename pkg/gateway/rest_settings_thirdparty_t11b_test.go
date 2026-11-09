@@ -20,6 +20,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,7 +79,7 @@ func t11bWriteExe(t *testing.T, name string) string {
 	if runtime.GOOS == "windows" {
 		name += ".cmd"
 	}
-	p := filepath.Join(t.TempDir(), name)
+	p := filepath.Join(t11combined.TrustedProgramDir(t), name)
 	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	return p
 }

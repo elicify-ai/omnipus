@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCliValidate_LaunchesExactCheckedPath is R2-C1. The handshake runs the
@@ -25,7 +25,7 @@ import (
 // runner.TestConnectionCheckedFile, which does not trim.
 func TestCliValidate_LaunchesExactCheckedPath(t *testing.T) {
 	api, _, home := t11ValidateMux(t)
-	dir := t.TempDir()
+	dir := t11combined.TrustedProgramDir(t)
 	require.NoError(t, os.Chmod(dir, 0o700))
 	plainMarker := filepath.Join(t.TempDir(), "plain")
 	spacedMarker := filepath.Join(t.TempDir(), "spaced")
