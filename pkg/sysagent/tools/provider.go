@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -354,6 +355,25 @@ func wireProviderEntry(cfg *config.Config, in providerConfigureInput, ref string
 	}
 }
 
+// providerListingChecker picks the SSRF guard for a live model listing, or
+// nil for none. Outside the hosted edition a local row (loopback/private by
+// definition) is listed unchecked and any other row goes through the
+// configured guard. On hosted the provider endpoint guard applies to every
+// row, local included: a hosted tenant has no local model server, so a local
+// row there is exactly the loopback target to refuse.
+func providerListingChecker(configured providers.URLChecker, local bool) providers.URLChecker {
+	if hosted := providercommon.EndpointGuard(); hosted != nil {
+		if configured != nil {
+			return configured
+		}
+		return hosted
+	}
+	if local {
+		return nil
+	}
+	return configured
+}
+
 // providerCheckNotTested is what a passing model listing does not prove.
 var providerCheckNotTested = []string{"model execution", "quota", "tool support"}
 
@@ -396,8 +416,8 @@ func (t *ProviderConfigureTool) checkSavedProvider(ctx context.Context, rep *con
 		return savedNotWorking("no credential resolves for this provider", scope, providerCheckNotTested...)
 	}
 	var checker providers.URLChecker = providers.NoopChecker{}
-	if !local && t.deps.URLChecker != nil {
-		checker = t.deps.URLChecker
+	if guard := providerListingChecker(t.deps.URLChecker, local); guard != nil {
+		checker = guard
 		if cerr := checker.CheckURL(ctx, ep.API); cerr != nil {
 			return savedNotWorking("the endpoint is not allowed by the outbound-request guard: "+cerr.Error(),
 				scope, providerCheckNotTested...)
@@ -771,8 +791,8 @@ func (t *ModelsListTool) listProviderModels(ctx context.Context, cfg *config.Con
 		return nil, fmt.Sprintf("%s: no API key configured", name)
 	}
 	var checker providers.URLChecker = providers.NoopChecker{}
-	if !local && t.deps.URLChecker != nil {
-		checker = t.deps.URLChecker
+	if guard := providerListingChecker(t.deps.URLChecker, local); guard != nil {
+		checker = guard
 		if cerr := checker.CheckURL(ctx, ep.API); cerr != nil {
 			return nil, fmt.Sprintf("%s: the endpoint is not allowed by the outbound-request guard", name)
 		}
