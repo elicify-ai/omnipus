@@ -1530,6 +1530,46 @@ func TestParseStreamResponse_EmptyStream(t *testing.T) {
 	}
 }
 
+// issue1664CancelAtEndReader cancels at the exact external-stream boundary:
+// its first read returns empty EOF with the context already canceled. No
+// timer or scheduler race can substitute cancellation before the read.
+type issue1664CancelAtEndReader struct {
+	cancel  context.CancelFunc
+	entered bool
+}
+
+func (r *issue1664CancelAtEndReader) Read(_ []byte) (int, error) {
+	r.entered = true
+	r.cancel()
+	return 0, io.EOF
+}
+
+// TestIssue1664_B8_CancelExactlyAtTheEmptyStreamEndIsTheCancel — CHECK F5
+// boundary (round 3): the user's Stop landing exactly at the empty end of a
+// stream must report the CANCEL, never the typed empty-stream failure. The
+// empty verdict would misread a stopped turn as a provider fault. The
+// B7's cancellation outcome takes precedence over B8's provider-failure
+// outcome at this boundary; the oracle is the approved behaviour, not the
+// parser's current branch ordering.
+func TestIssue1664_B8_CancelExactlyAtTheEmptyStreamEndIsTheCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &issue1664CancelAtEndReader{cancel: cancel}
+	_, err := parseStreamResponse(ctx, reader, nil, nil, nil)
+	if !reader.entered {
+		t.Fatal("SETUP: cancellation must coincide with the actual empty stream read")
+	}
+	if err == nil {
+		t.Fatal("a canceled turn must not succeed")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel exactly at the empty stream end: want errors.Is(err, context.Canceled); got %v", err)
+	}
+	if errors.Is(err, common.ErrEmptyStream) {
+		t.Fatalf("cancel exactly at the empty stream end must NOT classify as empty_stream; got %v", err)
+	}
+}
+
 // TestParseStreamResponse_FinishReasonUnknown verifies that a stream with text content but
 // no finish_reason in any chunk and no [DONE] returns finish_reason "unknown".
 // Traces to: inferred from parseStreamResponse implementation in provider.go (fix 14)

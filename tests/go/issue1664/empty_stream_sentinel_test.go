@@ -1,11 +1,11 @@
-// Package issue1664 holds the #1664 assertions that NAME the new
+// Package issue1664 holds the #1664 assertions that name the implemented
 // common.ErrEmptyStream sentinel directly (verify-report.md §B8/B9/B10).
-// They are RED-by-missing-symbol: until the developer adds the sentinel the
-// package does not compile, and that build failure is the recorded RED
-// state (saved log, exit code and "undefined: common.ErrEmptyStream" line)
-// — never a skip, and with zero collateral: no existing package's build is
-// touched. Once the sentinel lands, this package compiles and the
-// assertions below go green with the fix.
+// Correction to the original RED record: the pre-implementation package
+// failed to compile, so none of its three assertions executed in that run.
+// A missing symbol was not a valid assertion-RED proof; the author should
+// have used a loud BLOCKED fatal test until that dependency existed. The
+// saved build-failure log is retained as a process limitation, not counted
+// as three executed failures. Current runs execute the assertions below.
 package issue1664
 
 import (
@@ -32,9 +32,12 @@ import (
 func TestIssue1664_B8_EmptyStreamErrorIsErrEmptyStreamWithUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		// A usage chunk (usage is billed even for an empty answer), then the
-		// bare [DONE]: no finish_reason, no content, no tool calls.
-		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":0,\"total_tokens\":5}}\n\n"))
+		// A usage chunk (usage is billed even for an empty answer — the
+		// prompt was read, and the provider may bill reasoning as completion),
+		// then the bare [DONE]: no finish_reason, no content, no tool calls.
+		// Non-zero in ALL THREE fields (CHECK F4): a zero-valued usage object
+		// attached to the error must fail this test exactly like a nil one.
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -50,6 +53,15 @@ func TestIssue1664_B8_EmptyStreamErrorIsErrEmptyStreamWithUsage(t *testing.T) {
 	require.ErrorAs(t, streamErr, &spe,
 		"#1664 B8: the usage seen on the stream is attached to the error as with StreamProviderError (if the fix chooses a different carrier, adapt THIS line in the fix round — the requirement is the billed usage on the error, not a concrete type)")
 	require.NotNil(t, spe.Usage, "#1664 B8: the attached usage is present")
+	// CHECK F4 (round 3): presence is not the requirement — the stream's
+	// BILLED VALUES are. Mutant m06 swapped the supplied usage for a zero
+	// object and the old test passed; these exact equalities kill it.
+	require.Equal(t, 5, spe.Usage.PromptTokens,
+		"#1664 B8: the billed prompt tokens survive onto the empty-stream error")
+	require.Equal(t, 2, spe.Usage.CompletionTokens,
+		"#1664 B8: the billed completion tokens survive onto the empty-stream error")
+	require.Equal(t, 7, spe.Usage.TotalTokens,
+		"#1664 B8: the billed total survives onto the empty-stream error")
 }
 
 // B9: the sentinel classifies as FailoverTimeout (so a configured fallback

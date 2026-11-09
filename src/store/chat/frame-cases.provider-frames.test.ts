@@ -14,6 +14,7 @@ import { useSessionStore } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import { assembleFallbackNoteMessage } from './slices/provider-frames'
 import type { ServerFrame } from '@/lib/ws'
+import type { ProviderStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 // Partial module mock: the telemetry sink is a process edge (mock at edges
 // only) — everything else in the module stays real. logDiagnostic is a no-op
@@ -425,6 +426,32 @@ describe('provider_status — waiting shows the notice, responding clears it, re
       receivedAt: expect.any(String),
     })
     expect(bucket().providerStatusEvent).not.toHaveProperty('stallAt')
+  })
+
+  it('waiting stores the frame attempt and max_attempts when the generated frame carries both (issue #1664 B3, CHECK F2)', () => {
+    // CHECK F2 (round 3): the round-2 waiting fixture never supplied the new
+    // fields and its expected state never asserted them, so deleting the
+    // frame→store transfer (mutant m05) passed 29/29. This test feeds a
+    // GENERATED-TYPE waiting frame carrying both values through the real
+    // store and asserts both survive into the slot the screen reads.
+    const frame: ProviderStatusFrame = {
+      type: 'provider_status',
+      session_id: SID,
+      turn_id: 'turn-1664-b3',
+      state: 'waiting',
+      sent_at: '2026-09-27T00:00:40Z',
+      silent_since: '2026-09-27T00:00:10Z',
+      stall_at: '2026-09-27T00:00:17Z',
+      attempt: 1,
+      max_attempts: 3,
+      seq: 1,
+    }
+    useChatStore.getState().handleFrame(frame)
+
+    const ev = bucket().providerStatusEvent
+    expect(ev?.attempt).toBe(1)
+    expect(ev?.maxAttempts).toBe(3)
+    expect(ev?.turnId).toBe('turn-1664-b3')
   })
 
   it('responding clears the waiting notice', () => {

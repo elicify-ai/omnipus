@@ -9,10 +9,10 @@
  * It never says "contact support". Oracles from
  * /workspace/logs/fix-1664/verify-report.md §B4 — never from the component.
  *
- * The attempt props arrive with the B3 contract fields; the component does
- * not declare them yet, so they are passed shape-compatibly (a Record
- * spread) — this file typechecks before and after the fix. RED today: the
- * component has no attempt clause.
+ * Round 3 / CHECK F1: check the visible span and the hidden live region
+ * independently. The count/end-time copy exists now; a truncating style
+ * still hides the suffix at narrow widths. jsdom does not measure layout,
+ * so the readability oracle explicitly rejects truncation on that span.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render } from '@testing-library/react'
@@ -42,6 +42,16 @@ function renderWaiting(overrides: Record<string, unknown> = {}) {
   return render(<ProviderWaitingIndicator {...props} />)
 }
 
+function waitingSurfaces(container: HTMLElement) {
+  const live = container.querySelector('[data-testid="provider-waiting-indicator"] [role="status"]')
+  const visible = container.querySelector<HTMLElement>(
+    '[data-testid="provider-waiting-indicator"] > span:not([aria-hidden])',
+  )
+  expect(live, 'the hidden live region must exist').not.toBeNull()
+  expect(visible, 'the visible sentence span must exist').not.toBeNull()
+  return { live: live!, visible: visible! }
+}
+
 const expectedStallTime = () =>
   new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(new Date(STALL_AT))
 
@@ -54,18 +64,40 @@ describe('ProviderWaitingIndicator — the attempt clause (issue #1664 B4, found
     vi.useFakeTimers()
     vi.setSystemTime(SENT_AT)
     const { container } = renderWaiting(attemptProps(1, 3))
-    expect(container.textContent).toContain(
-      `The model hasn't responded for 45s — still waiting. If nothing arrives by ${expectedStallTime()}, this attempt ends (attempt 1 of 3).`,
-    )
+    const full = `The model hasn't responded for 45s — still waiting. If nothing arrives by ${expectedStallTime()}, this attempt ends (attempt 1 of 3).`
+    // A whole-container text query merges the hidden announcement with
+    // the sighted-user line. Neither surface may substitute for the other.
+    const { live, visible } = waitingSurfaces(container)
+    expect(live.textContent).toBe(full)
+    expect(visible.textContent).toBe(full)
+    expect(visible).toBeVisible()
+  })
+
+  it('the visible sentence does not use a truncating style — end time and count stay readable at a narrow chat width', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderWaiting(attemptProps(1, 3))
+    const { visible } = waitingSurfaces(container)
+    // CHECK F1: jsdom cannot establish rendered pixel width. Assert the
+    // permitted no-truncation style oracle, not an invented layout result.
+    expect(visible.className).not.toContain('truncate')
+    expect(visible.className).not.toContain('line-clamp')
+    expect(visible.className).not.toContain('ellipsis')
+    const style = getComputedStyle(visible)
+    expect(style.textOverflow).not.toBe('ellipsis')
+    expect(style.whiteSpace).not.toBe('nowrap')
+    expect(visible.textContent).toContain(`If nothing arrives by ${expectedStallTime()}`)
+    expect(visible.textContent).toContain('(attempt 1 of 3)')
   })
 
   it('on the last attempt the whole call ends: "the call ends (attempt 3 of 3)"', () => {
     vi.useFakeTimers()
     vi.setSystemTime(SENT_AT)
     const { container } = renderWaiting(attemptProps(3, 3))
-    expect(container.textContent).toContain(
-      `The model hasn't responded for 45s — still waiting. If nothing arrives by ${expectedStallTime()}, the call ends (attempt 3 of 3).`,
-    )
+    const full = `The model hasn't responded for 45s — still waiting. If nothing arrives by ${expectedStallTime()}, the call ends (attempt 3 of 3).`
+    const { live, visible } = waitingSurfaces(container)
+    expect(visible.textContent).toBe(full)
+    expect(live.textContent).toBe(full)
   })
 
   it('never says "contact support" (B4)', () => {
@@ -76,7 +108,9 @@ describe('ProviderWaitingIndicator — the attempt clause (issue #1664 B4, found
       [3, 3],
     ] as const) {
       const { container } = renderWaiting(attemptProps(attempt, maxAttempts))
-      expect(container.textContent).not.toContain('contact support')
+      const { live, visible } = waitingSurfaces(container)
+      expect(visible.textContent).not.toContain('contact support')
+      expect(live.textContent).not.toContain('contact support')
     }
   })
 })

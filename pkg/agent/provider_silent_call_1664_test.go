@@ -22,18 +22,23 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // issue1664StreamDelegate routes the loop's streaming gate to the harness's
@@ -291,4 +296,246 @@ func TestIssue1664_B10_EmptyStreamEndsInProviderEmptyReply(t *testing.T) {
 		require.NotContains(t, finalText, "The model returned an empty response",
 			"#1664 B10: the fixed empty-response sentence is not used for this case")
 	}
+}
+
+// TestIssue1664_B5_EmptyStreamRetryCarriesEmptyReplyReasonAndTranscriptSession —
+// CHECK F5 (round 3): the empty stream's own retry line. B10 proved the
+// empty stream gets the 3-attempt rule but never asserted its RETRY PAYLOAD:
+// the reason must be empty_reply (what the gateway maps to error_code
+// empty_reply and what founder Q4 A's sentence renders), the attempt is the
+// next call (2), the cap is 3, the timing carries sent_at and
+// retry_at = sent_at + backoff, and the session is the TRANSCRIPT session
+// id — the ADR-057 consumer-set guard (loop.go::u9ToolExecSessionIDs), so
+// the frame lands in the right chat even when the routing key differs.
+func TestIssue1664_B5_EmptyStreamRetryCarriesEmptyReplyReasonAndTranscriptSession(t *testing.T) {
+	issue1478ShortSilence(t)
+	provider := &issue1478Provider{script: func(_ context.Context, _ int) (*providers.LLMResponse, error) {
+		return nil, common.NewEmptyStreamError(nil)
+	}}
+	h, _, _ := issue1664CallWithHarness(t, provider, func(h *wu22Harness) {
+		// Distinct on purpose: stamp the transcript session, not a
+		// cancellation/routing address (ADR-057 consumer-set identity).
+		h.ts.sessionKey = "routing-key-not-the-transcript-session"
+	}) // the exhausted round ends in error; the retry events are the oracle
+	retries := issue1664RetryEvents(h)
+	require.Len(t, retries, 2,
+		"the empty stream follows the silent-call rule (founder Q3 A): 3 attempts, 2 retry lines")
+	require.NotEqual(t, h.sid, h.ts.sessionKey, "SETUP: transcript and routing identities must differ")
+
+	first := retries[0]
+	require.Equal(t, "empty_reply", first.Reason,
+		"#1664 F5: the empty stream's retry line carries reason empty_reply — its own cause, never the timeout spelling")
+	require.Equal(t, 2, first.Attempt,
+		"#1664 F5: the retry line counts the call ABOUT to be made (the RetryInfo convention)")
+	require.Equal(t, 3, first.MaxAttempts,
+		"#1664 F5: founder Q1 A keeps 3 attempts; the line shows the cap")
+	require.False(t, first.SentAt.IsZero(), "#1664 F5: sent_at is set (the frame's emission time)")
+	require.Equal(t, first.Backoff, first.RetryAt.Sub(first.SentAt),
+		"#1664 F5: retry_at is the END of this backoff")
+	require.GreaterOrEqual(t, first.Backoff, 500*time.Millisecond)
+	require.LessOrEqual(t, first.Backoff, 2*time.Second)
+	require.Equal(t, h.sid, first.SessionID,
+		"#1664 F5 (ADR-057): the retry payload is stamped with the TRANSCRIPT session id, not the routing key and never empty")
+	require.Equal(t, "empty_reply", retries[1].Reason)
+	require.Equal(t, 3, retries[1].Attempt, "the second retry announces the next call, attempt 3")
+	require.Equal(t, 3, retries[1].MaxAttempts)
+	require.Equal(t, h.sid, retries[1].SessionID, "the later retry also uses the transcript session")
+	require.False(t, retries[1].SentAt.IsZero())
+	require.Equal(t, retries[1].Backoff, retries[1].RetryAt.Sub(retries[1].SentAt))
+}
+
+// TestIssue1664_B7_StopDuringBackoffAfterTheRetryFrameEndsTurnCanceled —
+// CHECK F5 (round 3): B7 stopped the call INSIDE the first provider call;
+// the retry frame had never been emitted. This is the other half of the
+// Stop story: the first attempt fails, the retry frame IS out, the loop
+// sits in its real backoff — and NOW the user presses Stop. The turn ends
+// CANCELED (a turn_canceled transcript entry, same record the hard-abort
+// finish-method test asserts), no second provider call happens, and no
+// second retry frame follows. Full-turn harness (ProcessScheduled), since
+// the outcome record belongs to the turn level, not the response stage.
+func TestIssue1664_B7_StopDuringBackoffAfterTheRetryFrameEndsTurnCanceled(t *testing.T) {
+	issue1478ShortSilence(t)
+	provider := &issue1478Provider{script: func(_ context.Context, _ int) (*providers.LLMResponse, error) {
+		return nil, context.DeadlineExceeded
+	}}
+	al, inst, store, sid := newTruncationTestHarness(t, provider, 4, 0)
+	candidates := []providers.FallbackCandidate{{Provider: "p", Model: "m"}}
+	inst.Model, inst.Candidates = "m", candidates
+	inst.StoreProviderPool(map[string]providers.LLMProvider{"p": provider})
+	// Production chain shape; the CHAIN's own backoff is refused so the only
+	// wait in play is the loop's real timeout backoff — the one the Stop
+	// must land inside. The loop's backoff stays real (0.5–2 s).
+	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker()).
+		WithRetryWait(func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
+
+	var mu sync.Mutex
+	var retryFrames []LLMRetryPayload
+	var terminalErrorCodes []string
+	retrySeen := make(chan struct{}, 4)
+	al.SetEventSyncTap(func(e Event) {
+		if e.Kind == EventKindError {
+			if p, ok := e.Payload.(ErrorPayload); ok {
+				mu.Lock()
+				terminalErrorCodes = append(terminalErrorCodes, p.Code)
+				mu.Unlock()
+			}
+		}
+		if e.Kind != EventKindLLMRetry {
+			return
+		}
+		if p, ok := e.Payload.(LLMRetryPayload); ok {
+			mu.Lock()
+			retryFrames = append(retryFrames, p)
+			mu.Unlock()
+		}
+		select {
+		case retrySeen <- struct{}{}:
+		default:
+		}
+	})
+	t.Cleanup(func() { al.SetEventSyncTap(nil) })
+
+	type outcome struct{ err error }
+	resultCh := make(chan outcome, 1)
+	go func() {
+		_, runErr := al.ProcessScheduled(context.Background(), inst.ID, sid, "please answer", "webchat", sid)
+		resultCh <- outcome{runErr}
+	}()
+
+	// Observe the announced retry before requesting Stop. Guard the setup:
+	// a delayed test goroutine must not accidentally test a later call.
+	select {
+	case <-retrySeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first retry frame never appeared — the backoff this test must interrupt never started")
+	}
+	mu.Lock()
+	firstRetry := retryFrames[0]
+	mu.Unlock()
+	require.Equal(t, 1, issue1664CallCount(provider), "SETUP: Stop must precede the announced second call")
+	require.True(t, time.Now().Before(firstRetry.RetryAt), "SETUP: the announced retry backoff must still be pending")
+	cancelOutcome, cancelErr := al.RequestCancel(context.Background(),
+		CancelScope{SessionID: sid},
+		CancelCanceller{UserID: "test-user", Channel: "web"},
+		CancelHooks{})
+	require.NoError(t, cancelErr)
+	require.True(t, cancelOutcome.Fired, "the Stop must claim the in-flight turn")
+
+	var final outcome
+	select {
+	case final = <-resultCh:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the turn did not end after the Stop during the backoff")
+	}
+
+	mu.Lock()
+	frames := append([]LLMRetryPayload(nil), retryFrames...)
+	errorCodes := append([]string(nil), terminalErrorCodes...)
+	mu.Unlock()
+	// Separate subtests retain each assertion and report every promised
+	// outcome even when the first call-count assertion is already RED.
+	t.Run("no later provider call", func(t *testing.T) {
+		require.Equal(t, 1, issue1664CallCount(provider),
+			"#1664 F5: the Stop during the backoff allows no further provider call; got %d", issue1664CallCount(provider))
+	})
+	t.Run("no later retry frame", func(t *testing.T) {
+		require.Len(t, frames, 1,
+			"#1664 F5: exactly one retry frame — the one emitted BEFORE the Stop; no later frame follows")
+	})
+	t.Run("turn_canceled outcome", func(t *testing.T) {
+		// A cancellation marker alone must not hide a later timeout error.
+		// Clean abort may return nil; any returned/emitted failure must be
+		// the cancellation verdict, never a provider-failure verdict (B7).
+		if final.err != nil {
+			assert.Equal(t, "turn_canceled", string(TranslateTurnError(final.err).Code), "Stop wins over provider failure in the final result")
+		}
+		for _, code := range errorCodes {
+			assert.Equal(t, "turn_canceled", code, "no later timeout/empty-provider error may replace the cancellation outcome")
+		}
+		// Same durable outcome the hard-abort finish-method test asserts.
+		require.Eventually(t, func() bool {
+			entries, err := store.ReadTranscript(sid)
+			if err != nil {
+				return false
+			}
+			for i := range entries {
+				if entries[i].Type == session.EntryTypeTurnCancelled {
+					return true
+				}
+			}
+			return false
+		}, 5*time.Second, 20*time.Millisecond,
+			"#1664 F5: the Stop during the backoff ends the turn CANCELED — a turn_canceled transcript entry")
+	})
+}
+
+// issue1664StreamingChatProvider adapts the external provider edge: the
+// multi-candidate loop calls Chat rather than ChatStream, so this test
+// provider obtains each answer with the real HTTP streaming parser. It
+// returns neither a scripted sentinel nor a canned answer to the loop.
+// The fallback chain, retry logic and transcript writer remain unmodified.
+// This does not claim the production multi-candidate path itself streams.
+type issue1664StreamingChatProvider struct{ *providers.HTTPProvider }
+
+func (p *issue1664StreamingChatProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+	return p.HTTPProvider.ChatStream(ctx, messages, tools, model, options, nil, nil)
+}
+
+// F5: drive an actual primary empty stream through the entire turn, not
+// just ClassifyError or a scripted FallbackChain callback. Both choices
+// reach the real HTTP streaming parser through the provider-edge adapter
+// above. The configured backup must supply the final answer and the
+// successful assistant transcript entry.
+func TestIssue1664_B9_PrimaryEmptyStreamBackupAnswersTheTurn(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("SETUP: decode provider request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		model, _ := request["model"].(string)
+		assert.Equal(t, true, request["stream"], "both attempts must take the real streaming path")
+		mu.Lock()
+		calls = append(calls, model)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		switch model {
+		case "primary-model":
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		case "backup-model":
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"backup answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+		default:
+			t.Errorf("unexpected candidate model %q", model)
+		}
+	}))
+	defer server.Close()
+	provider, err := providers.NewHTTPProviderWithMaxTokensFieldAndRequestTimeout("k", server.URL, "", "", 0, nil)
+	require.NoError(t, err)
+	streamingProvider := &issue1664StreamingChatProvider{HTTPProvider: provider}
+	al, inst, store, sid := newTruncationTestHarness(t, streamingProvider, 4, 0)
+	inst.Model = "primary-model"
+	inst.Candidates = []providers.FallbackCandidate{
+		{Provider: "p", Model: "primary-model"},
+		{Provider: "p", Model: "backup-model"},
+	}
+	inst.StoreProviderPool(map[string]providers.LLMProvider{"p": streamingProvider})
+	// No transport streamer is advertised: the real non-streaming finalizer
+	// must persist the backup reply obtained through the provider-edge adapter.
+
+	answer, runErr := al.ProcessScheduled(context.Background(), inst.ID, sid, "answer using the configured model", "webchat", sid)
+	require.NoError(t, runErr, "F5/Q3 A: an empty primary stream must allow the configured backup to complete the turn")
+	require.Equal(t, "backup answer", answer, "the successful turn returns the backup's actual reply")
+	mu.Lock()
+	gotCalls := append([]string(nil), calls...)
+	mu.Unlock()
+	require.Equal(t, []string{"primary-model", "backup-model"}, gotCalls,
+		"invoke the configured primary then the configured backup exactly once each")
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	last := lastTruncationAssistantEntry(entries)
+	require.NotNil(t, last, "a successful assistant reply must be durable")
+	require.Equal(t, "backup answer", last.Content)
 }

@@ -88,6 +88,46 @@ func TestIssue1664_B5_TimeoutRetryBecomesNoResponseRetryFrame(t *testing.T) {
 	require.Equal(t, pmJSONTime(t, retryAt), m["retry_at"], "#1664 B5: retry_at is the end of the backoff")
 }
 
+// TestIssue1664_B5_EmptyReplyRetryBecomesEmptyReplyRetryFrame — CHECK F5
+// (round 3): the existing B5 wire test feeds only Reason "timeout". The
+// empty stream's retry must take the same route WITHOUT losing its own
+// cause: reason empty_reply → error_code empty_reply on the frame (the
+// cause founder Q4 A's retry line renders), with the next call, the cap and
+// the backoff's end and the transcript-session address. The routing key
+// deliberately has no chat binding: the payload's transcript identity must
+// reach the wire without relying on the routing-address fallback.
+func TestIssue1664_B5_EmptyReplyRetryBecomesEmptyReplyRetryFrame(t *testing.T) {
+	h, ch := pmHub(t)
+	sentAt := time.Date(2026, 11, 8, 9, 0, 30, 0, time.UTC)
+	retryAt := sentAt.Add(2 * time.Second)
+	h.hubSyncTap(agent.Event{
+		Kind: agent.EventKindLLMRetry,
+		Meta: agent.EventMeta{TurnID: "turn-1664-b5-empty", SessionKey: "unbound-routing-key-1664"},
+		Payload: agent.LLMRetryPayload{
+			Attempt: 2, MaxAttempts: 3, MaxRetries: 2,
+			Reason: "empty_reply", Provider: "p", Model: "m",
+			SentAt: sentAt, RetryAt: retryAt, SessionID: pmSessionID,
+		},
+	})
+	require.Len(t, ch, 1,
+		"#1664 F5: the empty_reply retry must reach the chat as one provider_retry frame")
+	raw := <-ch
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	require.Equal(t, "provider_retry", m["type"])
+	require.Equal(t, "empty_reply", m["error_code"],
+		"#1664 F5: the empty stream's retry keeps its OWN cause on the wire — never collapsed into no_response")
+	require.Equal(t, float64(2), m["attempt"], "#1664 F5: the line counts the next call (attempt 2 of 3)")
+	require.Equal(t, float64(3), m["max_attempts"], "#1664 F5: founder Q1 A keeps 3 attempts")
+	require.Equal(t, pmJSONTime(t, retryAt), m["retry_at"], "#1664 F5: retry_at is the end of the backoff")
+	require.Equal(t, pmJSONTime(t, sentAt), m["sent_at"], "#1664 F5: retain the frame's server-clock emission time")
+	require.Equal(t, float64(2), m["retry_after_seconds"], "the frame's countdown agrees with its two-second backoff")
+	require.Equal(t, pmSessionID, m["session_id"], "#1664 F5 (ADR-057): address the transcript session, never the routing key")
+	require.Equal(t, "turn-1664-b5-empty", m["turn_id"])
+	require.Equal(t, "p", m["provider"])
+	require.Equal(t, "m", m["model"])
+}
+
 // warnCapture records WARN records through slog's default logger while a
 // test runs, so a logsafeWarn call can be asserted exactly (message and the
 // full attribute set). Installed per test, restored via t.Cleanup; gateway
