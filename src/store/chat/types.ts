@@ -1132,8 +1132,11 @@ export interface ChatStore extends HistorySlice {
    * session — e.g. the browser panel's "Take over" pausing its own pinned
    * session. Omitted (the default) targets the active session, matching
    * every pre-existing call site (Stop button, Escape, `/cancel`).
+   * Returns the #1534 checkpoint of the bubble it froze (what the screen
+   * showed), or undefined when there is nothing to report
+   * (stop-checkpoint.ts::shownCheckpointFor).
    */
-  markLastMessageInterrupted: (sessionId?: string) => void
+  markLastMessageInterrupted: (sessionId?: string) => NonNullable<CancelFrame['shown']> | undefined
 
   startToolCall: (callId: string, tool: string, params: Record<string, unknown>) => void
   resolveToolCall: (callId: string, result: unknown, status: 'success' | 'error', durationMs?: number, error?: string) => void
