@@ -780,7 +780,13 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
     expect(controls.wsOpened, 'S-2.2 control 3: the WS origin check must refuse a label-origin connection').toBe(false)
   })
 
-  /** A saved canonical serve_web call (F3's replay path) with a VALID isolated_url for this origin. */
+  /**
+   * A saved canonical serve_web call (F3's replay path) with a VALID
+   * isolated_url for this origin, in the shape the gateway really persists:
+   * serve_web returns a string, recorded as {text: "<that JSON string>"}
+   * (pkg/agent/tool_result_transcript.go::projectRecordedResult; read back the
+   * same way by serveWebResultOf above).
+   */
   function servedTranscript(tag: string, isolated: string) {
     const fakePath = `/preview/mia/iso-card-token-${tag}/`
     const fakeUrl = `${BASE_URL}${fakePath}`
@@ -808,11 +814,13 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
               duration_ms: 80,
               parameters: { path: 'e2e', duration_seconds: 3600 },
               result: {
-                kind: 'static',
-                path: fakePath,
-                url: fakeUrl,
-                expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
-                isolated_url: isolated,
+                text: JSON.stringify({
+                  kind: 'static',
+                  path: fakePath,
+                  url: fakeUrl,
+                  expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+                  isolated_url: isolated,
+                }),
               },
             },
           ],
