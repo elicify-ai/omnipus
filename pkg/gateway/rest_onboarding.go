@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
@@ -339,6 +340,12 @@ func decodeOnboardingCompleteBody(
 // "onboarding state unknown" or "an authentication authority already
 // exists" — see onboardingWindowGate / preAuthOnboardingWindowGate.
 const onboardingClosedMsg = "onboarding already complete"
+
+// onboardingCatalogEndpointRefusedMsg is the 400 for an endpoint override on
+// a catalog provider id on the hosted edition (see
+// common.CatalogBaseOverrideRefused).
+const onboardingCatalogEndpointRefusedMsg = "This provider's address can't be changed. " +
+	"Leave the address empty to use the provider's own."
 
 // Refusals of the custom-endpoint path of POST /onboarding/complete (#1700,
 // design §2.5). The wizard shows them after "Could not complete setup: ".
@@ -827,6 +834,17 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 		}
 		ro.provider.Custom = true
 	}
+	// Hosted edition: a catalog id keeps the catalog's endpoint (the PUT
+	// /providers/{id} rule). An endpoint override on one is refused unless
+	// the operator's SSRF allow list names its host. A custom endpoint (the
+	// default branch above) is not a catalog id: it carries its own key and
+	// address, and the SSRF checks on the custom path decide whether the
+	// address is acceptable, exactly as PUT /providers/{id} treats a custom
+	// row (isCustomRow).
+	if !ro.provider.Custom && providercommon.CatalogBaseOverrideRefused(ro.provider.Endpoint) {
+		jsonErrField(ro.w, http.StatusBadRequest, onboardingCatalogEndpointRefusedMsg, "endpoint")
+		return true
+	}
 	// The two variants diverge for the first time here: the api_key variant
 	// must carry a key, and the sign_in variant must name a row whose catalog
 	// entry actually declares sign_in (the rule OnboardingProviderSignIn.yaml
@@ -1171,6 +1189,11 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 			entryMap["auth_method"] = ro.provider.AuthMethod
 			if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 				entryMap["api_base"] = ep
+			} else if custom, _ := entryMap["custom"].(bool); usableStoredAPIBase(ro.provider.ID, strVal(entryMap, "api_base"), custom) == "" {
+				// Hosted: the owner onboarded this pair without an endpoint, so
+				// a base already on the row (a planted one) must not survive
+				// and receive the owner's key.
+				delete(entryMap, "api_base")
 			}
 			if region := strings.TrimSpace(ro.provider.Region); region != "" {
 				entryMap["region"] = region
@@ -1556,8 +1579,8 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 			"Couldn't verify your %s key: no endpoint is configured for this provider and none was supplied. Continuing with the key as entered.",
 			providerDisplayName,
 		)
-	} else if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), probeBase); err != nil {
+	} else if checker := a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(r.Context(), probeBase); err != nil {
 			// SEC-24: this endpoint is reachable pre-auth and CSRF-exempt, and
 			// probeBase can come straight from the request body, so the probe
 			// must never be the thing that reaches an internal address. Skipping
@@ -1671,22 +1694,25 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 }
 
 // refuseBlockedCustomEndpoint is the custom row's address check (#1700, design
-// §2.4): when the address (SSRF) guard is on and refuses the endpoint, the
-// request is refused with 422 before any outbound call and before anything is
-// stored. On a release build the checker is nil unless sandbox.ssrf.enabled
-// is set. A hosted build swaps in its always-on endpoint checker and refusal
-// text here and in validateAndStoreOnboardingKey's addressRefusalRecorder
-// (design §6, port note step 2).
+// §2.4): when the address guard refuses the endpoint, the request is refused
+// with 422 before any outbound call and before anything is stored. The guard
+// is a.endpointChecker(), the same checker the key check dials through: the
+// configured one when sandbox.ssrf.enabled is set, else the hosted edition's
+// always-on endpoint guard (design §6, port note step 2), else none — core
+// with sandbox.ssrf off checks nothing here. The refusal text comes from
+// endpointRefusalMessage, as on PUT /providers/{id}: a host that does not
+// resolve is reported as not found, not as an internal address.
 func (a *restAPI) refuseBlockedCustomEndpoint(
 	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
 ) bool {
-	if a.ssrfChecker == nil {
+	checker := a.endpointChecker()
+	if checker == nil {
 		return false
 	}
-	if err := a.ssrfChecker.CheckURL(r.Context(), provider.Endpoint); err != nil {
+	if err := checker.CheckURL(r.Context(), provider.Endpoint); err != nil {
 		slog.Warn("onboarding: SSRF guard refused a custom endpoint",
 			"provider", provider.ID, "error", err)
-		jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
+		jsonErr(w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 		return true
 	}
 	return false
@@ -1721,16 +1747,30 @@ func (a *restAPI) checkOnboardingKey(
 	if provider.Custom {
 		in.ProbeModels = []string{provider.Model}
 	}
-	if !provider.Custom || a.ssrfChecker == nil {
+	return a.validateKeyNotingRefusal(ctx, in, provider.Custom)
+}
+
+// validateKeyNotingRefusal runs providers.ValidateKey through the effective
+// endpoint checker (ssrfChk). For a custom row it also reports whether that
+// checker refused an address on policy grounds while the check ran — at
+// connect time or on a redirect — which the result alone reports only as
+// "unreachable". The custom onboarding path and PUT /providers/{id} refuse
+// the save on that report; a catalog row keeps its unreachable warning.
+func (a *restAPI) validateKeyNotingRefusal(
+	ctx context.Context, in providers.ValidateInput, custom bool,
+) (providers.ValidationResult, bool) {
+	checker := a.endpointChecker()
+	if !custom || checker == nil {
 		return providers.ValidateKey(ctx, in, a.ssrfChk()), false
 	}
-	refusals := &addressRefusalRecorder{sc: a.ssrfChecker}
+	refusals := &addressRefusalRecorder{sc: checker}
 	result := providers.ValidateKey(ctx, in, refusals)
 	return result, refusals.refused.Load()
 }
 
 // addressRefusalRecorder is the providers.URLChecker a custom row's key check
-// runs with (review of #1700). It applies a.ssrfChecker unchanged and records
+// runs with (review of #1700; onboarding and PUT /providers/{id}). It applies a.endpointChecker() — the same
+// checker ssrfChk hands every other key check — unchanged and records
 // whether the guard refused an address on policy grounds — at connect time
 // (the host now resolves to a blocked address) or on a redirect — which the
 // key check's result alone reports only as "unreachable". It adds no check of
@@ -2042,6 +2082,13 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	// later for a reason the operator cannot act on. A custom row is not a
 	// catalog row, so it declares no auth methods and is never refused here.
 	ro.catalogRow, ro.isCatalogRow = providers.CatalogProvider(ro.body.Id)
+	// Hosted edition: the same refusal PUT /providers/{id} applies — an
+	// api_base on a catalog id is refused unless the operator's SSRF allow
+	// list names its host (common.CatalogBaseOverrideRefused).
+	if ro.isCatalogRow && providercommon.CatalogBaseOverrideRefused(reqAPIBase) {
+		jsonErrField(ro.w, http.StatusBadRequest, onboardingCatalogEndpointRefusedMsg, "api_base")
+		return true
+	}
 	if len(ro.catalogRow.AuthMethods) > 0 && !catalogOffersAuth(ro.catalogRow.AuthMethods, ro.body.Auth) {
 		jsonErrField(ro.w, http.StatusBadRequest, probeUnsupportedAuthMsg(ro.body.Auth), "auth")
 		return true
@@ -2093,10 +2140,10 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	// well-formed and the server REFUSED it — reporting that as "the provider
 	// rejected your key" would send the operator hunting for a credential
 	// problem that does not exist.
-	if ro.a.ssrfChecker != nil {
-		if err := ro.a.ssrfChecker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
+	if checker := ro.a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
 			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
-			jsonErr(ro.w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
+			jsonErr(ro.w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 			return true
 		}
 	}
