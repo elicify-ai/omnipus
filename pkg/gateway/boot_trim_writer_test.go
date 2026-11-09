@@ -30,9 +30,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -82,6 +87,7 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 		return nil, errors.New("trim-sweep instrument forbids external request: " + r.URL.Host)
 	})
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	gate := installTrimWorkerGate(t)
 	profileRoot := filepath.Join(home, "browser", "profiles")
 	var plantedDirs []string
 	for i := 0; i < trimKillProfiles; i++ {
@@ -101,55 +107,56 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stop)
 	stopBootWritersOnCleanup(t, rc)
+	// Runs BEFORE the drain cleanup above (LIFO): a failure while the trim
+	// goroutine is held must release it so the cleanup drain can join it.
+	t.Cleanup(gate.release)
 
 	// The sweep is provably mid-flight here: at least one profile has been
 	// locked or already trimmed, and the sweep never re-checks its context
 	// until the whole walk is done.
 	firstProfileTouch(t, profileRoot, plantedDirs)
 
+	// Deterministic in-flight gate (CHECK 5 re-audit R1/R2). The REAL boot
+	// trim goroutine is held, by the test, at the point where its real sweep
+	// has finished and it logs the result: it cannot exit, and so cannot
+	// call its deferred WaitGroup Done, until the test releases it. Whatever
+	// the machine's speed, the trim goroutine is therefore provably still a
+	// live writer when the drain runs, and a drain that does not wait for
+	// it has to return while it is held.
+	<-gate.entered(t)
+
 	// The drain's budget is test-controlled (CHECK 4 R3, see the file
 	// comment): no wall-clock deadline races the sweep's real workload.
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	defer stopCancel()
+	// A drain that returns because its budget expired is not a join (CHECK 4
+	// R3): the budget handed to it here must carry no wall-clock deadline.
+	if _, hasDeadline := stopCtx.Deadline(); hasDeadline {
+		t.Fatal("boot background writers were not joined by the teardown drain: it was handed a wall-clock deadline, so an early return would be a budget expiry, not a join")
+	}
+	var seq atomic.Int64
+	var returnSeq int64
 	drained := make(chan struct{})
-	// The drain goroutine itself records the state on both sides of the
-	// call, so the observations are taken at the moment the drain starts and
-	// at the moment it returns — not whenever this goroutine gets scheduled
-	// afterwards (CHECK 5 finding F1: an observer that resumes after a sweep
-	// that outlived the drain sees a quiet home and cannot tell the order).
-	// The fields are written before close(drained) and read after it.
-	var atStart, atReturn []string
-	var joinedAtReturn bool
 	go func() {
 		defer close(drained)
-		atStart = plantedCachesRemaining(plantedDirs)
 		rc.stopBootBackgroundWriters(stopCtx)
-		atReturn = plantedCachesRemaining(plantedDirs)
-		select {
-		case <-rc.bootBackgroundDone:
-			joinedAtReturn = true
-		default:
-		}
+		returnSeq = seq.Add(1)
 	}()
+	// While the trim goroutine is held, a correct drain is blocked and
+	// cannot return; the wait below ends on that state, never on a timer.
+	if awaitDrainBlockedOrReturned(t, drained) {
+		gate.release()
+		<-drained
+		t.Fatal("boot background writers were not joined by the teardown drain: it returned while the boot cache-trim goroutine was still held")
+	}
+	releaseSeq := seq.Add(1)
+	gate.release()
 	awaitTrimDrainReturn(t, drained, stopCancel, profileRoot, plantedDirs)
-
-	// Fixture activation: the join is only exercised if the sweep is still
-	// walking when the drain begins. A sweep that had already finished by
-	// then would make any early return legitimate and prove nothing.
-	if len(atStart) == 0 {
-		t.Fatalf("instrument: the boot cache-trim sweep was not in flight when the teardown drain started (all %d planted caches already trimmed); the join was not exercised",
-			trimKillProfiles)
-	}
-	// Ordering at the moment of return: every planted profile must already be
-	// trimmed and the done channel closed when stopBootBackgroundWriters
-	// returned. A drain that returned while the sweep was still walking
-	// fails here even if the sweep finishes before anything else looks.
-	if !joinedAtReturn {
-		t.Fatal("boot background writers were not joined by the teardown drain (checked at the moment it returned)")
-	}
-	if len(atReturn) > 0 {
-		t.Fatalf("boot cache-trim sweep still had %d of %d planted profiles untrimmed at the moment the teardown drain returned (first: %v)",
-			len(atReturn), trimKillProfiles, atReturn[:min(3, len(atReturn))])
+	// Return order, recorded by sequence number before any filesystem
+	// inventory: the release of the held trim goroutine precedes the
+	// drain's return.
+	if returnSeq < releaseSeq {
+		t.Fatalf("teardown drain returned (seq %d) before the held boot cache-trim goroutine was released (seq %d)", returnSeq, releaseSeq)
 	}
 
 	select {
@@ -209,4 +216,110 @@ func awaitTrimDrainReturn(t *testing.T, drained <-chan struct{}, cancel context.
 		t.Fatalf("teardown drain did not return before the test deadline: a hang, not a budget expiry; %d of %d planted profiles under %s still untrimmed",
 			len(plantedCachesRemaining(plantedDirs)), trimKillProfiles, profileRoot)
 	}
+}
+
+// trimWorkerGate holds the real boot trim goroutine at its post-sweep log
+// line (success or recovered panic), through a slog default handler that
+// forwards every record to a text handler on stderr.
+type trimWorkerGate struct {
+	reached     chan struct{}
+	released    chan struct{}
+	reachedOnce sync.Once
+	releaseOnce sync.Once
+}
+
+func (g *trimWorkerGate) entered(t *testing.T) <-chan struct{} {
+	t.Helper()
+	return g.reached
+}
+
+func (g *trimWorkerGate) release() { g.releaseOnce.Do(func() { close(g.released) }) }
+
+type trimWorkerGateHandler struct {
+	slog.Handler
+	gate *trimWorkerGate
+}
+
+func (h trimWorkerGateHandler) Handle(ctx context.Context, r slog.Record) error {
+	if strings.HasPrefix(r.Message, "browser-trim: trimmed closed workspace browser caches at boot") ||
+		strings.HasPrefix(r.Message, "browser-trim: cache trim panicked") {
+		h.gate.reachedOnce.Do(func() { close(h.gate.reached) })
+		<-h.gate.released
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h trimWorkerGateHandler) WithAttrs(a []slog.Attr) slog.Handler {
+	return trimWorkerGateHandler{h.Handler.WithAttrs(a), h.gate}
+}
+
+func (h trimWorkerGateHandler) WithGroup(n string) slog.Handler {
+	return trimWorkerGateHandler{h.Handler.WithGroup(n), h.gate}
+}
+
+// installTrimWorkerGate installs the gate; the cleanup always releases the
+// held goroutine and restores the previous default logger.
+func installTrimWorkerGate(t *testing.T) *trimWorkerGate {
+	t.Helper()
+	g := &trimWorkerGate{reached: make(chan struct{}), released: make(chan struct{})}
+	old := slog.Default()
+	// A fresh text handler, not old.Handler(): the stock default handler
+	// writes through the log package, which SetDefault re-points at the
+	// new handler — a feedback loop that deadlocks on the log mutex.
+	slog.SetDefault(slog.New(trimWorkerGateHandler{slog.NewTextHandler(os.Stderr, nil), g}))
+	t.Cleanup(func() {
+		g.release()
+		slog.SetDefault(old)
+	})
+	return g
+}
+
+// awaitDrainBlockedOrReturned returns true if the drain returned, false once
+// the drain is provably blocked behind the held trim goroutine. "Provably
+// blocked" is read from one stop-the-world goroutine snapshot: the drain is
+// parked in its select, the boot joiner is parked in WaitGroup.Wait, and
+// every other goroutine the boot spawned has already exited (their Done has
+// run, so a joiner that was still parked would be waiting on the held trim
+// goroutine only). No timer is involved: the loop ends on a state, and the
+// go test deadline remains the only bound.
+func awaitDrainBlockedOrReturned(t *testing.T, drained <-chan struct{}) bool {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	for {
+		select {
+		case <-drained:
+			return true
+		default:
+		}
+		n := runtime.Stack(buf, true)
+		if drainBlockedBehindTrimWorker(string(buf[:n])) {
+			select {
+			case <-drained:
+				return true
+			default:
+			}
+			return false
+		}
+		runtime.Gosched()
+	}
+}
+
+func drainBlockedBehindTrimWorker(dump string) bool {
+	var drainParked, joinerParked, worker bool
+	for _, g := range strings.Split(dump, "\n\n") {
+		header, _, _ := strings.Cut(g, "\n")
+		switch {
+		case strings.Contains(g, "stopBootBackgroundWriters") && strings.Contains(header, "select"):
+			drainParked = true
+		case strings.Contains(g, "runBrowserCacheTrimSchedule"):
+			worker = true
+		case strings.Contains(g, "created by") && strings.Contains(g, "initializeAgentLoop"):
+			if strings.Contains(g, "sync.(*WaitGroup).Wait") && !strings.Contains(header, "runnable") {
+				joinerParked = true
+			} else {
+				return false // another boot writer is still alive
+			}
+		}
+	}
+	return drainParked && joinerParked && worker
 }
