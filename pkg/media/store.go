@@ -178,6 +178,13 @@ type FileMediaStore struct {
 	// live refs: resolving one returns its kept cause, never ErrNotFound, and
 	// SaveRegistry keeps writing the row so it is not lost. Guarded by mu.
 	failedRefs map[string]failedRegistryRef
+
+	// beforeSuccessorPinRegistration, when non-nil, runs in PinRef right
+	// before a successor's storeRef, with no lock held. It is a field only so
+	// a test can land a concurrent registration of the same ref in that
+	// window (SFH-4). Production code never sets it; nil changes nothing. A
+	// test sets it before the store is shared, so it is not guarded by mu.
+	beforeSuccessorPinRegistration func(successor *FileMediaStore, ref string)
 }
 
 // failedRegistryRef is one registry row LoadRegistry kept with its inspection
@@ -304,7 +311,9 @@ func (s *FileMediaStore) forwardToSuccessors(ref, localPath string, meta MediaMe
 // lifetime instead of expiring with its original scope (for example the
 // person's upload). The ref ID, path and metadata do not change. Returns
 // ErrNotFound when ref is not registered, e.g. it expired before the pin. The
-// change is persisted and forwarded down the handover chain like Store.
+// change is persisted and forwarded down the handover chain like Store: on
+// success every successor, including the live store users are served from,
+// holds ref pinned.
 func (s *FileMediaStore) PinRef(ref, scope string) error {
 	if !isPinnedScope(scope) {
 		return fmt.Errorf("media store: pin %s: scope %q is not a pinned scope", ref, scope)
@@ -312,16 +321,33 @@ func (s *FileMediaStore) PinRef(ref, scope string) error {
 	if err := s.pinRef(ref, scope); err != nil {
 		return err
 	}
+	s.mu.RLock()
+	entry, ok := s.refs[ref]
+	s.mu.RUnlock()
+	if !ok {
+		// Released between the pin and this read: nothing is left to send.
+		return fmt.Errorf("%w: %s", ErrNotFound, ref)
+	}
 	s.scheduleSave()
 	s.succMu.Lock()
 	succ := s.successor
 	s.succMu.Unlock()
 	for succ != nil {
-		// pinRef's only error is ErrNotFound: a successor that never received
-		// this ref has nothing to pin.
-		if err := succ.pinRef(ref, scope); err == nil {
-			succ.scheduleSave()
+		// A successor whose copy of ref expired after the handover gets the
+		// complete registration, as Store forwards it, so the ref this store
+		// reports resolves in the live store. storeRef is a no-op when the
+		// successor already holds ref in any scope, including an unpinned one
+		// that a concurrent forward inserted after an earlier check; so the
+		// pin that follows, under the successor's own lock, is what certifies
+		// the result, and its failure is returned.
+		if s.beforeSuccessorPinRegistration != nil {
+			s.beforeSuccessorPinRegistration(succ, ref)
 		}
+		succ.storeRef(ref, entry.path, entry.meta, scope)
+		if err := succ.pinRef(ref, scope); err != nil {
+			return fmt.Errorf("media store: pin %s in successor: %w", ref, err)
+		}
+		succ.scheduleSave()
 		succ.succMu.Lock()
 		next := succ.successor
 		succ.succMu.Unlock()
