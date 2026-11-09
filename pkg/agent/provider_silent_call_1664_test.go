@@ -478,7 +478,7 @@ func TestIssue1664_B7_StopDuringBackoffAfterTheRetryFrameEndsTurnCanceled(t *tes
 type issue1664StreamingChatProvider struct{ *providers.HTTPProvider }
 
 func (p *issue1664StreamingChatProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
-	return p.HTTPProvider.ChatStream(ctx, messages, tools, model, options, nil, nil)
+	return p.ChatStream(ctx, messages, tools, model, options, nil, nil)
 }
 
 // F5: drive an actual primary empty stream through the entire turn, not
