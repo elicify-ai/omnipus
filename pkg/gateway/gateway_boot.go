@@ -1521,6 +1521,12 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.configSnapshotMiddleware); stg.err != nil {
 		return nil, true, fmt.Errorf("wrapping HTTP handler: %w", stg.err)
 	}
+	// Runs after CSRF (wrapped below, so outermost) and before the snapshot, so
+	// only requests that passed CSRF get the longer write deadline a reload
+	// wait needs.
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(reloadWaitWriteDeadlineMiddleware); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler: %w", stg.err)
+	}
 	// F-13 / ADR-044: /preview/ is registered on this SAME main mux (see
 	// registerPreviewEndpoints above), so the WrapHTTPHandler(configSnapshotMiddleware)
 	// call above already covers it — HandlePreview's configFromContext(r.Context())
@@ -1531,7 +1537,7 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	//
 	// WrapHTTPHandler semantics: "wrap N times" stacks outermost-last, so the
 	// execution order on a request is:
-	//   CSRF check → configSnapshot injection → mux dispatch → auth check in handler
+	//   CSRF check → reload write deadline → configSnapshot injection → mux dispatch → auth check in handler
 	//
 	// The sprint plan (temporal-puzzling-melody.md §1) calls for
 	// "auth → RBAC → CSRF → handler". We place CSRF BEFORE the per-handler
