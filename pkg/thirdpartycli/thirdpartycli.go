@@ -12,6 +12,7 @@ package thirdpartycli
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 )
@@ -125,12 +126,20 @@ type CheckError struct {
 	Detail string
 }
 
-// Error implements error with the operator-facing summary.
+// Error implements error with the operator-facing summary. It carries the
+// path, so it belongs in the server log and never in a client text; a client
+// gets ClientSummary.
 func (e *CheckError) Error() string {
 	if e.At == "" {
-		return fmt.Sprintf("%s: check %s failed", e.CLI, e.Check)
+		return e.ClientSummary()
 	}
-	return fmt.Sprintf("%s: check %s failed at %s", e.CLI, e.Check, e.At)
+	return e.ClientSummary() + " at " + e.At
+}
+
+// ClientSummary is the failed check without any path (founder Q48 A): the
+// program and the check class only, safe to send to a client.
+func (e *CheckError) ClientSummary() string {
+	return fmt.Sprintf("%s: check %s failed", e.CLI, e.Check)
 }
 
 // IsPresetCheck reports whether the error came from ValidatePreset.
@@ -157,17 +166,21 @@ func NoPathText(cli string) string {
 }
 
 // CheckFailedText is the run refusal when the saved path fails its checks
-// (r17 §3.11 CheckFailed).
+// (r17 §3.11 CheckFailed). The text reaches browsers, tool results and chat
+// transcripts, so it names only the program and the check class (founder Q48
+// A). at, the path element that failed, is logged here, so no caller can build
+// the refusal without the server log recording where the check failed.
 func CheckFailedText(cli, check, at string) string {
+	slog.Warn("third-party program check: the program is refused", "cli", cli, "check", check, "path", at)
 	if check == CheckLocationUnverifiable {
 		// Moving or fixing the program would not help, so this refusal names
 		// the real cause instead of "does not pass its checks".
 		return "This agent cannot run: the location of the program set for " + DisplayName(cli) +
-			" in Settings → Third-party agents cannot be checked (" + check + " at " + at + ") because " +
+			" in Settings → Third-party agents cannot be checked (" + check + ") because " +
 			locationUnverifiableCause + ". " + locationUnverifiableLog + "."
 	}
 	return "This agent cannot run: the program set for " + DisplayName(cli) +
-		" in Settings → Third-party agents does not pass its checks (" + check + " at " + at +
+		" in Settings → Third-party agents does not pass its checks (" + check +
 		"). A person can fix it there."
 }
 

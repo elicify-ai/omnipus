@@ -30,14 +30,15 @@
 //     (EventCliValidate), including the no-spawn classifications.
 //   - Response hygiene: `detail` is a fixed classified message per reason — NEVER
 //     raw stderr from the spawned process (FR-017). The one non-fixed detail is
-//     path-not-allowed's, "not allowed: <cli>: check <name> failed at <at>"
-//     (the failed check and a path, produced before anything runs), so
-//     process output still cannot be smuggled through the response.
+//     path-not-allowed's, "not allowed: <cli>: check <name> failed" (the program
+//     and the failed check; the path goes to the server log only, founder Q48
+//     A), so neither a path nor process output reaches the response.
 
 package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -218,13 +219,18 @@ func (a *restAPI) validateCLI(ctx context.Context, cli, cliPath string) gen.CliV
 }
 
 // pathNotAllowedResponse is the path-not-allowed classification: not ok,
-// nothing resolved or run, and the check's own message naming the failed
-// check (spec §3.2 C-A2): "not allowed: <cli>: check <name> failed at <at>"
-// (thirdpartycli.CheckError.Error). The message comes from a filesystem check
-// made before any spawn, never from process output.
+// nothing resolved or run, and a detail naming the program and the failed
+// check (spec §3.2 C-A2 as amended by founder Q48 A): "not allowed: <cli>:
+// check <name> failed" (thirdpartycli.CheckError.ClientSummary). The path the
+// check failed at goes to the server log only. An error that is not a
+// CheckError keeps the fixed "not allowed" detail.
 func pathNotAllowedResponse(checkErr error) gen.CliValidateResponse {
+	slog.Warn("cli-validate: the program is refused", "error", checkErr)
 	resp := buildCliValidateResponse(gen.CliValidateResponseReasonPathNotAllowed, nil, nil)
-	resp.Detail = strPtr("not allowed: " + checkErr.Error())
+	var ce *thirdpartycli.CheckError
+	if errors.As(checkErr, &ce) {
+		resp.Detail = strPtr("not allowed: " + ce.ClientSummary())
+	}
 	return resp
 }
 

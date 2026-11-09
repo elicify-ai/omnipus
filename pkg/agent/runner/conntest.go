@@ -18,6 +18,10 @@
 // Distinguishing missing-binary from unauthed is a hard requirement (US-6): the
 // two have different remedies (install vs `login`), so they MUST NOT collapse
 // into one generic failure.
+//
+// ConnectionTestResult.Message reaches the client, so it is fixed text per
+// reason (founder Q48 A, Q50 A): a program path, the program's output and
+// operating-system errors go to the server log only.
 
 package runner
 
@@ -25,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -167,12 +172,13 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 	//    (it stats the path directly); a bare name is resolved via $PATH.
 	binPath, err := exec.LookPath(target)
 	if err != nil {
+		slog.Warn("connection test: the CLI binary was not found", "cli", cli, "path", target, "error", err)
 		return ConnectionTestResult{
 			OK:     false,
 			Reason: ReasonMissingBinary,
 			Message: fmt.Sprintf(
-				"[%s] %q CLI not found at %q: install %s / fix cli_path and ensure it is executable on PATH",
-				ReasonMissingBinary, cli, target, spec.binary,
+				"[%s] %q CLI not found: install %s / fix cli_path and ensure it is executable on PATH",
+				ReasonMissingBinary, cli, spec.binary,
 			),
 		}
 	}
@@ -199,10 +205,11 @@ func TestConnectionCheckedFile(ctx context.Context, cli, checkedFile string) Con
 		}
 	}
 	if !filepath.IsAbs(checkedFile) {
+		slog.Warn("connection test: the checked program path is not absolute", "cli", cli, "path", checkedFile)
 		return ConnectionTestResult{
 			OK:      false,
 			Reason:  ReasonMissingBinary,
-			Message: fmt.Sprintf("[%s] %q checked program path %q is not absolute", ReasonMissingBinary, cli, checkedFile),
+			Message: fmt.Sprintf("[%s] %q checked program path is not absolute", ReasonMissingBinary, cli),
 		}
 	}
 	return testConnectionBinary(ctx, cli, spec, checkedFile)
@@ -214,10 +221,11 @@ func testConnectionBinary(ctx context.Context, cli string, spec cliSpec, binPath
 	// 2. Handshake — run `<binary> --version`, no real work, no tokens.
 	version, hErr := probeVersion(ctx, binPath, spec.versionArgs)
 	if hErr != nil {
+		slog.Warn("connection test: the version handshake failed", "cli", cli, "path", binPath, "error", hErr)
 		return ConnectionTestResult{
 			OK:      false,
 			Reason:  ReasonHandshakeFailed,
-			Message: fmt.Sprintf("[%s] %q version handshake failed: %v", ReasonHandshakeFailed, cli, hErr),
+			Message: fmt.Sprintf("[%s] %q version handshake failed. Details are in the server log.", ReasonHandshakeFailed, cli),
 		}
 	}
 
@@ -227,8 +235,8 @@ func testConnectionBinary(ctx context.Context, cli string, spec cliSpec, binPath
 			OK:     false,
 			Reason: ReasonUnauthenticated,
 			Message: fmt.Sprintf(
-				"[%s] %q is installed (v%s) but not authenticated: %s",
-				ReasonUnauthenticated, cli, version, spec.loginHint,
+				"[%s] %q is installed but not authenticated: %s",
+				ReasonUnauthenticated, cli, spec.loginHint,
 			),
 			CLIVersion: version,
 		}
@@ -237,7 +245,7 @@ func testConnectionBinary(ctx context.Context, cli string, spec cliSpec, binPath
 	return ConnectionTestResult{
 		OK:         true,
 		Reason:     ReasonOK,
-		Message:    fmt.Sprintf("%q ready: binary %s present, v%s, authenticated", cli, binPath, version),
+		Message:    fmt.Sprintf("%q ready: binary present, authenticated", cli),
 		CLIVersion: version,
 	}
 }
