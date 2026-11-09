@@ -72,7 +72,7 @@ func buildProductionMiddlewareChain(api *restAPI, mux http.Handler) http.Handler
 	// dispatcher outermost — execution order is dispatcher → nav → planted →
 	// csrf → configSnapshot → mux.
 	inner := csrfMW(api.configSnapshotMiddleware(mux))
-	guarded := middleware.PlantedCookieGuard()(inner)
+	guarded := api.plantedCookieGuard()(inner)
 	navigated := middleware.NavigationGuard()(guarded)
 	return api.previewHostDispatchMW(navigated)
 }

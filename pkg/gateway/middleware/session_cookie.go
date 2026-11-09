@@ -57,6 +57,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -134,6 +135,15 @@ func MintSessionToken() (string, []byte, error) {
 	return token, hash, nil
 }
 
+// FormatSessionIssuedAt renders a session issue time the way it is stored in
+// gateway.users[].session_issued_at: RFC 3339, UTC, whole seconds. Every
+// sign-in point that persists a session hash stores this next to it; the
+// planted-cookie guard (planted_cookie.go) derives the genuine cookie's
+// original expiry from it.
+func FormatSessionIssuedAt(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
+}
+
 // WriteSessionCookie writes the omnipus-session cookie to w carrying the
 // given plaintext token. This is header-only (no disk I/O) and cannot fail.
 // Callers MUST persist the corresponding bcrypt hash to disk BEFORE calling
@@ -192,8 +202,10 @@ func IssueSessionCookie(
 		return "", fmt.Errorf("session: bcrypt: %w", err)
 	}
 
-	// Persist hash via the caller-supplied mutator. The mutator owns the
-	// configMu read-modify-write contract; we just supply the closure.
+	// Persist hash (and the issue time, ADR-094 FR-015) via the caller-supplied
+	// mutator. The mutator owns the configMu read-modify-write contract; we
+	// just supply the closure.
+	issuedAt := FormatSessionIssuedAt(time.Now())
 	mutateErr := configMutator(func(m map[string]any) error {
 		gw, ok := m["gateway"].(map[string]any)
 		if !ok {
@@ -210,6 +222,7 @@ func IssueSessionCookie(
 			}
 			if uname, _ := um["username"].(string); uname == username {
 				um["session_token_hash"] = string(hash)
+				um["session_issued_at"] = issuedAt
 				return nil
 			}
 		}

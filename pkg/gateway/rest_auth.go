@@ -792,6 +792,7 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tokenID := config.TokenIDFromRaw(token)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
+	sessionIssuedAt := middleware.FormatSessionIssuedAt(time.Now())
 
 	var evictedTokens int
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -829,6 +830,10 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			// Session-cookie token remains single-slot (one browser session
 			// cookie per login is the existing contract); overwrite as before.
 			userMap["session_token_hash"] = string(sessionHash)
+			// ADR-094 FR-015: the issue time next to the hash, so the
+			// planted-cookie guard can re-send this cookie with its
+			// original expiry.
+			userMap["session_issued_at"] = sessionIssuedAt
 			return nil
 		}
 		return ErrUserNotFound

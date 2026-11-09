@@ -261,6 +261,23 @@ var devBypassUser = config.UserConfig{Username: "_dev_bypass"}
 // via the legacy OMNIPUS_BEARER_TOKEN environment fallback.
 var envTokenUser = config.UserConfig{Username: "_env_token"}
 
+// plantedCookieGuard builds the ADR-094 FR-015 planted-cookie guard with the
+// gateway's wiring: the audit log and the live account list (read per
+// request) it validates the genuine session against before re-sending it.
+// Production (gateway_boot.go) and the test chain that mirrors it
+// (buildProductionMiddlewareChain) both build the guard here.
+func (a *restAPI) plantedCookieGuard() func(http.Handler) http.Handler {
+	return middleware.PlantedCookieGuard(
+		middleware.WithPlantedCookieAuditLog(a.agentLoop.AuditLogger()),
+		middleware.WithPlantedCookieSessionUsers(func() []config.UserConfig {
+			if cfg := a.agentLoop.GetConfig(); cfg != nil {
+				return cfg.Gateway.Users
+			}
+			return nil
+		}),
+	)
+}
+
 // configSnapshotMiddleware snapshots the current config into the request context
 // so all handlers in the same request see a consistent config. This prevents a
 // race condition during hot-reload where the config pointer can be replaced

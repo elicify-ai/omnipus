@@ -264,6 +264,50 @@ func TestPreviewPlantedCookieClearSet(t *testing.T) {
 		require.Equal(t, 3, n, "FR-015 bound at the root path")
 	})
 
+	t.Run("genuine_session_resent_after_clear_set", func(t *testing.T) {
+		// FR-015 (founder decision 2026-11-09): when one presented value is
+		// the validated genuine session, the response carries the unchanged
+		// clear set PLUS exactly one re-send of that value at host-only
+		// Path=/, after every clear line, expiring at issue time + 24 h.
+		// (The rows above present no valid session, so they carry no re-send.)
+		issuedAt := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+		h.api.agentLoop.GetConfig().Gateway.Users[0].SessionIssuedAt = issuedAt.Format(time.RFC3339)
+		t.Cleanup(func() { h.api.agentLoop.GetConfig().Gateway.Users[0].SessionIssuedAt = "" })
+
+		resp := h.piRedDoPlanted(t, http.MethodPost, "/api/v1/agents",
+			"omnipus-session="+h.sessionTok+"; omnipus-session=planted", "", "")
+		t.Cleanup(func() { _ = resp.Body.Close() })
+
+		var clearOnly []string
+		var resent []*http.Cookie
+		lastClear, resendAt := -1, -1
+		for i, raw := range resp.Header.Values("Set-Cookie") {
+			c, err := http.ParseSetCookie(raw)
+			require.NoError(t, err)
+			if c.Name == "omnipus-session" && c.Value != "" {
+				resent = append(resent, c)
+				resendAt = i
+				continue
+			}
+			if c.Name == "omnipus-session" {
+				lastClear = i
+			}
+			clearOnly = append(clearOnly, raw)
+		}
+		clearResp := &http.Response{Header: http.Header{"Set-Cookie": clearOnly}}
+		n := piRedAssertClearSet(t, clearResp, "omnipus-session", "/api/v1/agents", false)
+		require.Equal(t, 15, n, "the clear set itself is unchanged by the re-send")
+
+		require.Len(t, resent, 1, "exactly one genuine-session re-send")
+		c := resent[0]
+		require.Equal(t, h.sessionTok, c.Value, "the re-send carries the genuine value, never a new session")
+		require.Equal(t, "/", c.Path)
+		require.Empty(t, c.Domain, "host-only, like the genuine cookie")
+		require.True(t, c.Expires.Equal(issuedAt.Add(middleware.SessionCookieMaxAge*time.Second)),
+			"expires at the original expiry (issue time + 24 h), got %s", c.Expires)
+		require.Greater(t, resendAt, lastClear, "the re-send follows every omnipus-session clear line")
+	})
+
 	t.Run("host_csrf_secure_on", func(t *testing.T) {
 		// DS-5 row 4: __Host-csrf clear lines mirror the ISSUANCE posture —
 		// Secure on even on plain HTTP (the name never legitimately exists

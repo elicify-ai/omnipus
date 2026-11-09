@@ -13,8 +13,10 @@
 // read (DS-5 rows 1–4, round-2 MAJ-002): it scans the RAW Cookie header for a
 // duplicated reserved name, marks the credential read failed (so the session
 // read returns ErrSessionNotFound rather than trusting a possibly-planted
-// value), emits the founder-corrected clear set (FR-015 verbatim), and answers
-// state-changing requests with the typed planted_cookie_cleared error.
+// value), emits the founder-corrected clear set (FR-015 verbatim), re-sends the
+// validated genuine session cookie with its original value and expiry after
+// those lines (founder decision 2026-11-09; see genuineSessionResend), and
+// answers state-changing requests with the typed planted_cookie_cleared error.
 //
 // Scope (MIN-007): the detector NEVER fires on a Mode 1 preview-Host request
 // — the host dispatcher routes those away before this middleware runs, so a
@@ -31,6 +33,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/pathredact"
 )
 
@@ -187,6 +190,9 @@ const plantedCookieDetectedEvent = "auth.planted_cookie_detected"
 // plantedCookieGuardOptions carries the guard's optional wiring.
 type plantedCookieGuardOptions struct {
 	auditLog *audit.Logger
+	// sessionUsers returns the current account list, read per request so a
+	// login after boot is seen. Nil disables the genuine-session re-send.
+	sessionUsers func() []config.UserConfig
 }
 
 // PlantedCookieGuardOption configures PlantedCookieGuard. The variadic form
@@ -200,6 +206,84 @@ type PlantedCookieGuardOption func(*plantedCookieGuardOptions)
 // RequireMatchingOriginOnStateChanging precedent.
 func WithPlantedCookieAuditLog(auditLog *audit.Logger) PlantedCookieGuardOption {
 	return func(o *plantedCookieGuardOptions) { o.auditLog = auditLog }
+}
+
+// WithPlantedCookieSessionUsers gives the guard the current account list so
+// it can re-send the genuine session cookie after its clear lines (FR-015,
+// founder decision 2026-11-09). Without it the guard only clears.
+func WithPlantedCookieSessionUsers(users func() []config.UserConfig) PlantedCookieGuardOption {
+	return func(o *plantedCookieGuardOptions) { o.sessionUsers = users }
+}
+
+// rawSessionCookieValues returns every non-empty omnipus-session value on the
+// RAW Cookie header lines, in order (same raw scan as
+// plantedReservedDuplicates, for the same reason).
+func rawSessionCookieValues(r *http.Request) []string {
+	var vals []string
+	for _, headerLine := range r.Header.Values("Cookie") {
+		for _, pair := range strings.Split(headerLine, ";") {
+			name, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
+			if ok && strings.TrimSpace(name) == SessionCookieName && value != "" {
+				vals = append(vals, value)
+			}
+		}
+	}
+	return vals
+}
+
+// genuineSessionResend returns the cookie to re-send after the clear lines:
+// the presented omnipus-session value that validates against a user's
+// SessionTokenHash, with that session's ORIGINAL expiry (session_issued_at +
+// SessionCookieMaxAge). It returns nil — clear only — when no value
+// validates, when more than one distinct value validates, when the session
+// has no parseable issue time (issued before the field existed), when the
+// original expiry has passed, or on a cross-site subresource request (the
+// same request ResolveUserFromCookie refuses to evaluate). It never mints.
+func genuineSessionResend(r *http.Request, users []config.UserConfig, now time.Time) *http.Cookie {
+	if IsCrossSiteSubresourceRequest(r) {
+		return nil
+	}
+	var (
+		genuine string
+		owner   *config.UserConfig
+	)
+	for _, value := range rawSessionCookieValues(r) {
+		if value == genuine {
+			continue
+		}
+		for i := range users {
+			if users[i].SessionTokenHash.IsZero() || users[i].SessionTokenHash.Verify(value) != nil {
+				continue
+			}
+			if owner != nil {
+				return nil // two different values validate: no single genuine session
+			}
+			genuine, owner = value, &users[i]
+			break
+		}
+	}
+	if owner == nil {
+		return nil
+	}
+	issuedAt, err := time.Parse(time.RFC3339, owner.SessionIssuedAt)
+	if err != nil {
+		return nil
+	}
+	expires := issuedAt.Add(SessionCookieMaxAge * time.Second)
+	maxAge := int(expires.Sub(now) / time.Second)
+	if maxAge <= 0 {
+		return nil
+	}
+	return &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    genuine,
+		Path:     "/",
+		Expires:  expires,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		Secure:   requestIsSecure(r),
+		SameSite: http.SameSiteStrictMode,
+	}
 }
 
 // PlantedCookieGuard is the ADR-094 FR-015 middleware: detect duplicated
@@ -256,6 +340,15 @@ func PlantedCookieGuard(opts ...PlantedCookieGuardOption) func(http.Handler) htt
 			requestSecure := RequestIsSecure(r)
 			for _, name := range dup {
 				appendPlantedClearSet(w.Header(), name, r.URL.Path, requestSecure)
+				// On host localhost the Domain=localhost; Path=/ clear line is
+				// host-only (RFC 6265 §5.3 step 5) and deletes the genuine
+				// session too, so re-send the validated genuine cookie with its
+				// original value and expiry AFTER the clear lines (S-4.4).
+				if name == SessionCookieName && o.sessionUsers != nil {
+					if c := genuineSessionResend(r, o.sessionUsers(), time.Now()); c != nil {
+						http.SetCookie(w, c)
+					}
+				}
 			}
 			if isStateChangingMethod(r.Method) {
 				writePlantedCookieCleared(w)
