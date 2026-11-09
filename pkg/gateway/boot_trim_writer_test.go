@@ -112,11 +112,45 @@ func TestTrimSweep_JoinedBeforeHomeRemoval(t *testing.T) {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	defer stopCancel()
 	drained := make(chan struct{})
+	// The drain goroutine itself records the state on both sides of the
+	// call, so the observations are taken at the moment the drain starts and
+	// at the moment it returns — not whenever this goroutine gets scheduled
+	// afterwards (CHECK 5 finding F1: an observer that resumes after a sweep
+	// that outlived the drain sees a quiet home and cannot tell the order).
+	// The fields are written before close(drained) and read after it.
+	var atStart, atReturn []string
+	var joinedAtReturn bool
 	go func() {
 		defer close(drained)
+		atStart = plantedCachesRemaining(plantedDirs)
 		rc.stopBootBackgroundWriters(stopCtx)
+		atReturn = plantedCachesRemaining(plantedDirs)
+		select {
+		case <-rc.bootBackgroundDone:
+			joinedAtReturn = true
+		default:
+		}
 	}()
 	awaitTrimDrainReturn(t, drained, stopCancel, profileRoot, plantedDirs)
+
+	// Fixture activation: the join is only exercised if the sweep is still
+	// walking when the drain begins. A sweep that had already finished by
+	// then would make any early return legitimate and prove nothing.
+	if len(atStart) == 0 {
+		t.Fatalf("instrument: the boot cache-trim sweep was not in flight when the teardown drain started (all %d planted caches already trimmed); the join was not exercised",
+			trimKillProfiles)
+	}
+	// Ordering at the moment of return: every planted profile must already be
+	// trimmed and the done channel closed when stopBootBackgroundWriters
+	// returned. A drain that returned while the sweep was still walking
+	// fails here even if the sweep finishes before anything else looks.
+	if !joinedAtReturn {
+		t.Fatal("boot background writers were not joined by the teardown drain (checked at the moment it returned)")
+	}
+	if len(atReturn) > 0 {
+		t.Fatalf("boot cache-trim sweep still had %d of %d planted profiles untrimmed at the moment the teardown drain returned (first: %v)",
+			len(atReturn), trimKillProfiles, atReturn[:min(3, len(atReturn))])
+	}
 
 	select {
 	case <-rc.bootBackgroundDone:
