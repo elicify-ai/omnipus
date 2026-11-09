@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -76,10 +77,20 @@ func runU2bQueuedPersonStopGuard(t *testing.T, stop func(*u2bLauncherProcess, st
 	require.Contains(t, beforeSessions, sessionID, "instrument: the fresh durable reader sees the actual queued child")
 	require.Equal(t, []string{sessionID}, u2bQueuedStopTaskSessionIDs(t, p, taskID))
 
+	goalBefore := readTaskGoal(t, taskID)
+	require.Equal(t, generated.GoalStateActive, goalBefore.State, "instrument: the queued task has an active paired goal")
+	require.NotEmpty(t, goalBefore.GoalID, "instrument: the original goal identity is observable")
+	require.NotEmpty(t, goalBefore.ActiveSessionID, "instrument: the original goal session binding is observable")
+	sub := p.loop.SubscribeEvents(64) // Only Stop's events, not the earlier queued dispatch.
+	defer p.loop.UnsubscribeEvents(sub.ID)
+
 	stop(p, taskID, sessionID)
 	u2bAsyncJoin(t, "queued person Stop and any executor settlement tail", p.loop.taskExecutor.wg.Wait)
 	stopped, err := p.loop.taskStore.Get(taskID)
 	require.NoError(t, err)
+	requireU2bQueuedPersonStopOutcome(t, stopped)
+	requireU2bQueuedPersonStopEvent(t, sub, taskID, sessionID)
+	requireU2bQueuedPersonStopGoal(t, taskID, goalBefore)
 	assert.NotEqual(t, InterruptedTaskResult, stopped.Result, "a person's Stop is not a gateway interruption")
 	record, err := p.loop.GetSessionLifecycleStore().Load(sessionID)
 	require.NoError(t, err)
@@ -107,6 +118,7 @@ func runU2bQueuedPersonStopGuard(t *testing.T, stop func(*u2bLauncherProcess, st
 		clk.Advance(time.Minute)
 		next.runDueAndJoin(t)
 		requireU2bQueuedStopSurvives(t, next, bootWorker, stopped, record, beforeRuns, beforeSessions)
+		requireU2bQueuedPersonStopGoal(t, taskID, goalBefore)
 		next.stop()
 	}
 }
@@ -121,6 +133,7 @@ func requireU2bQueuedStopSurvives(
 	assert.Equal(t, stopped.Status, after.Status, "the task's person-stop status must survive crash, boot and a later due tick")
 	assert.Equal(t, stopped.Result, after.Result, "boot must preserve the person's task outcome, not rewrite it as gateway interruption")
 	assert.Equal(t, stopped.CancelReason, after.CancelReason, "the person's cancel reason must survive both boots")
+	assert.Equal(t, stopped.CompletedAt, after.CompletedAt, "the original Stop completion time must survive both boots")
 	assert.NotEqual(t, InterruptedTaskResult, after.Result, "only a gateway interruption may make this task replayable; a person's Stop never may")
 	runs := p.runs(t, stopped.ID)
 	if assert.Len(t, runs, 1, "a person-stopped queued launch must never gain a replay run") {
