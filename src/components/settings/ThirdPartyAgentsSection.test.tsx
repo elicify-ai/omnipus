@@ -45,7 +45,7 @@ const PRESET = '--dangerously-bypass-approvals-and-sandbox --model gpt-5-codex'
 const REFUSAL = 'The program path for Codex is not allowed: it is inside a workspace.'
 const REFUSAL_BODY: ErrorResponse = {
   error: REFUSAL, code: 'cli_path_invalid', field: 'clis.codex.path',
-  details: { cli: 'codex', check: 'agent_writable_location', at: '/Users/me/ws/codex/fake' },
+  details: { cli: 'codex', check: 'agent_writable_location' },
 }
 function expectedSave(codexPath = '/opt/homebrew/bin/codex', codexPreset = ''): ThirdPartyAgentSettings {
   return { clis: {
