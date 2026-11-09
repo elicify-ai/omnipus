@@ -2,9 +2,11 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"syscall"
 	"testing"
 	"time"
 
@@ -79,9 +81,16 @@ func TestReloadWaitWriteDeadlineMiddleware_SlowResponses(t *testing.T) {
 				return
 			}
 			require.Nil(t, response, "the expired server write deadline must prevent an HTTP response")
-			require.ErrorIs(t, requestErr, io.EOF, "the server must drop the connection, not hit the client hang guard")
+			require.True(t, isReloadWaitConnectionDrop(requestErr),
+				"the server must drop the connection with EOF or connection reset, not a client timeout: %v", requestErr)
 		})
 	}
+}
+
+// The client may observe a clean close or a TCP reset. Neither a client timeout
+// nor a partially delivered/truncated HTTP response satisfies the regression.
+func isReloadWaitConnectionDrop(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func startReloadWaitDeadlineTestServer(t *testing.T, handler http.Handler, writeTimeout, safetyTimeout time.Duration) string {
