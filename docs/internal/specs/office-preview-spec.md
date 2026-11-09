@@ -840,7 +840,7 @@ RED: one qa-lead instance owns **every** row below; CHECK: a different instance 
 | T-03 | Renderer/extract in sandbox: file/URL-action PDF causes no open/connect; positive control instrumented | Integration | MV-6 |
 | T-04 | Resolver candidates + registered manifest; PATH and links ignored | Unit | B-28 |
 | T-05 | LibreOffice manifest: replaced executable → damaged, zero launches; size/mtime triggers re-hash | Unit | B-17 |
-| T-06 | Converter argv/env golden | Unit | MV-2 |
+| T-06 | Program argv/env goldens (converter, renderer, extractor) | Unit | MV-2 |
 | T-07 | Fake converter outputs (junk + markers, exit codes) | Integration | B-15 |
 | T-08 | Deadline kills converter and grandchild | Integration | B-21 |
 | T-09 | Stop during conversion | Integration | B-22 |
