@@ -1691,19 +1691,20 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 }
 
 // refuseBlockedCustomEndpoint is the custom row's address check (#1700, design
-// §2.4): when the address (SSRF) guard is on and refuses the endpoint, the
-// request is refused with 422 before any outbound call and before anything is
-// stored. On a release build the checker is nil unless sandbox.ssrf.enabled
-// is set. A hosted build swaps in its always-on endpoint checker and refusal
-// text here and in validateAndStoreOnboardingKey's addressRefusalRecorder
-// (design §6, port note step 2).
+// §2.4): when the address guard refuses the endpoint, the request is refused
+// with 422 before any outbound call and before anything is stored. The guard
+// is a.endpointChecker(), the same checker the key check dials through: the
+// configured one when sandbox.ssrf.enabled is set, else the hosted edition's
+// always-on endpoint guard (design §6, port note step 2), else none — core
+// with sandbox.ssrf off checks nothing here.
 func (a *restAPI) refuseBlockedCustomEndpoint(
 	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
 ) bool {
-	if a.ssrfChecker == nil {
+	checker := a.endpointChecker()
+	if checker == nil {
 		return false
 	}
-	if err := a.ssrfChecker.CheckURL(r.Context(), provider.Endpoint); err != nil {
+	if err := checker.CheckURL(r.Context(), provider.Endpoint); err != nil {
 		slog.Warn("onboarding: SSRF guard refused a custom endpoint",
 			"provider", provider.ID, "error", err)
 		jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
@@ -1741,16 +1742,18 @@ func (a *restAPI) checkOnboardingKey(
 	if provider.Custom {
 		in.ProbeModels = []string{provider.Model}
 	}
-	if !provider.Custom || a.ssrfChecker == nil {
+	checker := a.endpointChecker()
+	if !provider.Custom || checker == nil {
 		return providers.ValidateKey(ctx, in, a.ssrfChk()), false
 	}
-	refusals := &addressRefusalRecorder{sc: a.ssrfChecker}
+	refusals := &addressRefusalRecorder{sc: checker}
 	result := providers.ValidateKey(ctx, in, refusals)
 	return result, refusals.refused.Load()
 }
 
 // addressRefusalRecorder is the providers.URLChecker a custom row's key check
-// runs with (review of #1700). It applies a.ssrfChecker unchanged and records
+// runs with (review of #1700). It applies a.endpointChecker() — the same
+// checker ssrfChk hands every other key check — unchanged and records
 // whether the guard refused an address on policy grounds — at connect time
 // (the host now resolves to a blocked address) or on a redirect — which the
 // key check's result alone reports only as "unreachable". It adds no check of

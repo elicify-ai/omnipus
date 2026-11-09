@@ -39,8 +39,10 @@ type endpointGuardState struct {
 	checker *security.SSRFChecker
 }
 
+// endpointGuardInstalled holds the boot-installed allow list (nil: none);
+// endpointGuardStrict is the guard with no exemptions.
 var (
-	endpointGuardInstalled atomic.Pointer[endpointGuardState] //nolint:gochecknoglobals // boot-installed allow list
+	endpointGuardInstalled atomic.Pointer[endpointGuardState]
 	endpointGuardStrict    = &endpointGuardState{checker: security.NewSSRFChecker(nil)}
 )
 
