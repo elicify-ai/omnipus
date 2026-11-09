@@ -507,11 +507,13 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 		taskStore:     task.New(tmpDir + "/tasks"),
 	}
 
-	// Step 4: GET /api/v1/providers — must include openai as connected.
+	// Step 4: GET /api/v1/providers — must include openai as connected. The
+	// request is signed in: on the hosted edition the route never serves an
+	// anonymous caller, even before onboarding completes.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
 	r.URL.Path = "/api/v1/providers"
-	apiWithRef.HandleProviders(w, isolateRateLimit(t, r))
+	apiWithRef.HandleProviders(w, isolateRateLimit(t, signedIn(r)))
 
 	require.Equal(t, http.StatusOK, w.Code, "GET /providers must return 200")
 	var providers []map[string]any
