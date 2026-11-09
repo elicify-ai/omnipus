@@ -37,6 +37,7 @@ Day-to-day pages.
 | [Previews](previews.md) | Sites agents build |
 | [Security](security.md) | Permissions, sandbox, credentials, audit |
 | [Settings](settings.md) | Providers, limits, profile, usage |
+| [Custom endpoint](custom-endpoint.md) | Connect Azure OpenAI or another unlisted provider |
 | [Troubleshooting](troubleshooting.md) | Problems by symptom |
 
 ## Connecting things
