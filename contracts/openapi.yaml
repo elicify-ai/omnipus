@@ -3092,8 +3092,8 @@ paths:
         Session detail, rename (PUT) and delete (DELETE) apply only to the bare
         /sessions/{id} address, with no sub-path. Unknown sub-paths return 404,
         never session detail. Known sub-paths are messages and tool-results,
-        including their descendants; non-GET methods return 405 with Allow: GET
-        without renaming or deleting the session. GET messages/{history_position}
+        including their descendants; non-GET methods (OPTIONS preflight aside)
+        return 405 with Allow: GET without renaming or deleting the session. GET messages/{history_position}
         is getSessionHistoryEntry, which validates the position itself.
       tags:
       - sessions
@@ -3294,11 +3294,12 @@ paths:
         content_original_size_bytes; getSessionHistoryEntry returns the full occurrence
         (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)").
         No lifetime read/rebuild, 503/preparing state or full-history fallback.
-        This sub-path accepts GET only. Other methods return 405 with Allow: GET
-        without renaming or deleting the session; those operations require the
-        bare /sessions/{id} address. Nested messages/... paths are the
-        getSessionHistoryEntry address: GET there validates the position, and
-        other methods return 405 with Allow: GET.
+        This sub-path accepts GET only. Other methods (OPTIONS preflight aside)
+        return 405 with Allow: GET without renaming or deleting the session;
+        those operations require the bare /sessions/{id} address. Nested
+        messages/... paths are the getSessionHistoryEntry address: GET there
+        validates the position, and other methods (OPTIONS preflight aside)
+        return 405 with Allow: GET.
       tags:
       - sessions
       security:
@@ -3403,7 +3404,9 @@ paths:
         '405':
           description: >
             This sub-path accepts GET only. Any other method returns 405 with
-            response header Allow: GET. The session is not renamed or deleted.
+            response header Allow: GET, except OPTIONS, the browser preflight
+            request, which the gateway answers before the sessions handler runs.
+            The session is not renamed or deleted.
           headers:
             Allow:
               schema:
@@ -3456,9 +3459,9 @@ paths:
         override the storage-primary rule shared with getSessionMessages: a cleanup
         storage failure combined with cancellation, an unknown position or any
         selector error is the sanitized storage 500, never 404 or 410.
-        This sub-path accepts GET only. Other methods return 405 with Allow: GET
-        without renaming or deleting the session; those operations require the
-        bare /sessions/{id} address.
+        This sub-path accepts GET only. Other methods (OPTIONS preflight aside)
+        return 405 with Allow: GET without renaming or deleting the session;
+        those operations require the bare /sessions/{id} address.
       tags:
       - sessions
       security:
@@ -3529,7 +3532,9 @@ paths:
         '405':
           description: >
             This sub-path accepts GET only. Any other method returns 405 with
-            response header Allow: GET. The session is not renamed or deleted.
+            response header Allow: GET, except OPTIONS, the browser preflight
+            request, which the gateway answers before the sessions handler runs.
+            The session is not renamed or deleted.
           headers:
             Allow:
               schema:
@@ -3566,11 +3571,12 @@ paths:
         session B's path. The SPA fetches this lazily when the user expands a
         clamped tool call, keeping main-thread memory bounded during
         high-volume agent activity. This sub-path accepts GET only. Other methods
-        return 405 with Allow: GET without renaming or deleting the session;
-        those operations require the bare /sessions/{id} address. The tool-results
-        prefix and its descendants are known sub-paths; the read handler still
-        validates the path and ref, so a known prefix alone does not guarantee
-        a successful GET.
+        (OPTIONS preflight aside) return 405 with Allow: GET without renaming or
+        deleting the session; those operations require the bare /sessions/{id}
+        address. The tool-results prefix and its descendants are known sub-paths;
+        the read handler still validates the path and ref and answers 400 for a
+        malformed one (for example a missing ref), so a known prefix alone does
+        not guarantee a successful GET.
       tags:
       - tools
       security:
@@ -3606,7 +3612,9 @@ paths:
         '405':
           description: >
             This sub-path accepts GET only. Any other method returns 405 with
-            response header Allow: GET. The session is not renamed or deleted.
+            response header Allow: GET, except OPTIONS, the browser preflight
+            request, which the gateway answers before the sessions handler runs.
+            The session is not renamed or deleted.
           headers:
             Allow:
               schema:
