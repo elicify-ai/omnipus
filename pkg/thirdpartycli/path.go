@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -61,7 +62,7 @@ func checkProgramPath(cli, enteredPath string, agentWritable []string, rootsErr 
 	if rootErr != nil {
 		return failUnverifiable(cli, enteredPath, rootErr)
 	}
-	final, hops, cerr := resolveChain(cli, enteredPath, roots)
+	final, ids, hops, cerr := resolveChain(cli, enteredPath, roots)
 	if cerr != nil {
 		return "", cerr
 	}
@@ -74,7 +75,7 @@ func checkProgramPath(cli, enteredPath string, agentWritable []string, rootsErr 
 		check = windowsNameCheck(final)
 	}
 	if check == "" {
-		check = finalFileCheck(cli, final, fi, roots)
+		check = finalFileCheck(cli, final, ids, fi, roots)
 	}
 	if check != "" {
 		return fail(check, final)
@@ -93,17 +94,21 @@ func failUnverifiable(cli, enteredPath string, cause error) (string, error) {
 
 // resolveChain unfolds every symlink on the way to enteredPath's final file —
 // directory components as well as the last one — and returns that file's
-// path with no symlink left in it, plus the number of links followed. Before
+// path with no symlink left in it, the identity of each of its elements below
+// the filesystem top (see insideAny), and the number of links followed. Before
 // a link is followed, the link itself and its containing folder (already
 // resolved) must lie outside every agent-writable root (r17 §3.5; a link that
 // is itself a root is caught too); relative targets resolve against that
 // folder; at most maxLinkHops links. A missing element is not_found at the
 // element, or at the last link followed when that link's target is missing.
-func resolveChain(cli, enteredPath string, roots []forbiddenRoot) (string, int, error) {
-	fail := func(check, at string) (string, int, error) {
-		return "", 0, &CheckError{CLI: cli, Check: check, At: at}
+func resolveChain(cli, enteredPath string, roots []forbiddenRoot) (string, []os.FileInfo, int, error) {
+	fail := func(check, at string) (string, []os.FileInfo, int, error) {
+		return "", nil, 0, &CheckError{CLI: cli, Check: check, At: at}
 	}
 	resolved, pending := splitPath(enteredPath)
+	// ids holds one identity per element of resolved below the filesystem
+	// top; it changes exactly when resolved does.
+	var ids []os.FileInfo
 	// fromLink counts the pending components that came from link targets,
 	// so a missing one is reported at the link that named it.
 	hops, lastLink, fromLink := 0, "", 0
@@ -116,6 +121,9 @@ func resolveChain(cli, enteredPath string, roots []forbiddenRoot) (string, int, 
 		}
 		if comp == ".." {
 			resolved = filepath.Dir(resolved)
+			if len(ids) > 0 {
+				ids = ids[:len(ids)-1]
+			}
 			continue
 		}
 		cur := filepath.Join(resolved, comp)
@@ -128,9 +136,10 @@ func resolveChain(cli, enteredPath string, roots []forbiddenRoot) (string, int, 
 		}
 		if fi.Mode()&os.ModeSymlink == 0 {
 			resolved = cur
+			ids = append(ids, fi)
 			continue
 		}
-		if check := linkLocationCheck(cli, cur, resolved, roots); check != "" {
+		if check := linkLocationCheck(cli, cur, resolved, append(slices.Clip(ids), fi), ids, roots); check != "" {
 			return fail(check, cur)
 		}
 		if hops >= maxLinkHops {
@@ -152,30 +161,30 @@ func resolveChain(cli, enteredPath string, roots []forbiddenRoot) (string, int, 
 				return fail(CheckNotFound, cur)
 			}
 			resolved = targetRoot
+			ids = nil
 		}
 		fromLink += len(targetParts)
 		pending = append(targetParts, pending...)
 	}
-	return resolved, hops, nil
+	return resolved, ids, hops, nil
 }
 
 // linkLocationCheck applies the link rows of r17 §3.5 to the link at link,
 // whose containing folder is dir: neither may lie inside an agent-writable
-// root. It returns the failing check name or "".
-func linkLocationCheck(cli, link, dir string, roots []forbiddenRoot) string {
-	for _, p := range []string{link, dir} {
-		if check := locationCheck(cli, p, roots); check != "" {
-			return check
-		}
+// root. linkIDs and dirIDs are their element identities (see insideAny). It
+// returns the failing check name or "".
+func linkLocationCheck(cli, link, dir string, linkIDs, dirIDs []os.FileInfo, roots []forbiddenRoot) string {
+	if check := locationCheck(cli, link, linkIDs, roots); check != "" {
+		return check
 	}
-	return ""
+	return locationCheck(cli, dir, dirIDs, roots)
 }
 
 // locationCheck returns CheckAgentWritableLocation when p lies inside an
-// agent-writable root, or "". A path element that disappears while it is
-// examined is CheckNotFound, never "outside"; the cause is logged.
-func locationCheck(cli, p string, roots []forbiddenRoot) string {
-	inside, err := insideAny(p, roots)
+// agent-writable root, or "". A path element that cannot be examined is
+// CheckNotFound, never "outside"; the cause is logged.
+func locationCheck(cli, p string, ids []os.FileInfo, roots []forbiddenRoot) string {
+	inside, err := insideAny(p, ids, roots)
 	if err != nil {
 		slog.Error("third-party program check: a path element could not be examined, so the program is refused",
 			"cli", cli, "path", p, "error", err)
@@ -211,14 +220,14 @@ func splitPath(p string) (root string, parts []string) {
 
 // finalFileCheck applies the final-file rows of r17 §3.5 in their stated order
 // and returns the failing check name or "".
-func finalFileCheck(cli, path string, fi os.FileInfo, roots []forbiddenRoot) string {
+func finalFileCheck(cli, path string, ids []os.FileInfo, fi os.FileInfo, roots []forbiddenRoot) string {
 	switch {
 	case !fi.Mode().IsRegular():
 		return CheckNotRegularFile
 	case canExecute(path) != nil:
 		return CheckNotExecutable
 	}
-	return locationCheck(cli, path, roots)
+	return locationCheck(cli, path, ids, roots)
 }
 
 // forbiddenRoot is one spelling of an agent-writable root plus, when the
@@ -307,33 +316,42 @@ func rootIdentities(p string) ([]os.FileInfo, error) {
 // every spelling the volume accepts for a root — letter case, composed or
 // decomposed Unicode (macOS treats "Café" written either way as one folder),
 // or any other equivalence — is caught. The text check stays for roots that
-// do not exist yet. A path element that cannot be read is an error, never
-// "outside": the missing element could be exactly the one that matches a
-// root.
-func insideAny(p string, roots []forbiddenRoot) (bool, error) {
+// do not exist yet.
+//
+// ids are the identities of p and of the folders above it, which resolveChain
+// read while it walked to p; it refuses any element it cannot read, so such
+// an element never gets here. Only the filesystem top (see fileSystemTop) is
+// read now, and failing to read it is an error, never "outside": it could be
+// exactly the element that matches a root.
+func insideAny(p string, ids []os.FileInfo, roots []forbiddenRoot) (bool, error) {
 	for _, r := range roots {
 		if pathWithin(r.path, p) {
 			return true, nil
 		}
 	}
-	for cur := filepath.Clean(p); ; {
-		fi, err := os.Lstat(cur)
-		if err != nil {
-			return false, fmt.Errorf("%q could not be examined: %w", cur, err)
+	for _, fi := range ids {
+		if isRootIdentity(fi, roots) {
+			return true, nil
 		}
-		for _, r := range roots {
-			for _, id := range r.ids {
-				if os.SameFile(fi, id) {
-					return true, nil
-				}
+	}
+	top := fileSystemTop(p)
+	fi, err := os.Lstat(top)
+	if err != nil {
+		return false, fmt.Errorf("%q could not be examined: %w", top, err)
+	}
+	return isRootIdentity(fi, roots), nil
+}
+
+// isRootIdentity reports whether fi is the same file as an existing root.
+func isRootIdentity(fi os.FileInfo, roots []forbiddenRoot) bool {
+	for _, r := range roots {
+		for _, id := range r.ids {
+			if os.SameFile(fi, id) {
+				return true
 			}
 		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return false, nil
-		}
-		cur = parent
 	}
+	return false
 }
 
 // pathWithin reports whether p equals or lies below root. Both are folded by

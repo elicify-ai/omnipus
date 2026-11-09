@@ -42,6 +42,19 @@ func extensionAdmitted(path string) bool {
 // isAbsolutePath is the Windows rule: a drive path or a UNC path.
 func isAbsolutePath(p string) bool { return filepath.IsAbs(p) }
 
+// fileSystemTop is the folder p ends at when walked upward: the root of its
+// drive or share, in the form filepath.Dir stops at.
+func fileSystemTop(p string) string {
+	cur := filepath.Clean(p)
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return cur
+		}
+		cur = parent
+	}
+}
+
 // windowsNameCheck applies the Windows-only rows of r17 §3.5 to one path
 // element: no alternate data stream (":" after the drive), no 8.3 short
 // component, an admitted extension.
