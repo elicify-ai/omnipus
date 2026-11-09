@@ -35,6 +35,7 @@ import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { Button } from '@/components/ui/button'
 
 // ── makeAssistantToolUI capture (live registration surface) ─────────────────
 
@@ -84,9 +85,9 @@ vi.mock('@assistant-ui/react', () => {
       Send: ({ disabled, children, className, 'data-testid': testId }: {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
       }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
+        React.createElement(Button, { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
       AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+        React.createElement(Button, { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
@@ -94,7 +95,7 @@ vi.mock('@assistant-ui/react', () => {
         React.createElement('div', { className }, children),
       Name: () => null,
       Remove: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
+        React.createElement(Button, { type: 'button', className }, children),
       Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },
