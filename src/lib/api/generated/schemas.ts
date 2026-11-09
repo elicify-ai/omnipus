@@ -9027,7 +9027,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents/:id",
     alias: "getAgent",
-    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Agent detail, update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones, return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method.
 `,
     requestFormat: "json",
     parameters: [
@@ -9060,7 +9060,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
+    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state. Update applies only to PUT /agents/{id}, with no sub-path. PUT on a known sub-path that does not serve PUT returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
 `,
     requestFormat: "json",
     parameters: [
@@ -9120,7 +9120,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id",
     alias: "deleteAgent",
-    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;).
+    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;). Delete applies only to DELETE /agents/{id}, with no sub-path. DELETE on a known sub-path that does not serve DELETE returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
 `,
     requestFormat: "json",
     parameters: [
@@ -9207,6 +9207,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -9249,6 +9255,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -9280,6 +9292,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9331,6 +9349,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -9366,6 +9390,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9407,6 +9437,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -9437,6 +9473,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9475,6 +9517,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9524,6 +9572,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {

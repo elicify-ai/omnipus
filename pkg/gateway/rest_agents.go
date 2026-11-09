@@ -83,8 +83,127 @@ func (a *restAPI) handleAgentSlotCarveOut(w http.ResponseWriter, r *http.Request
 	return true
 }
 
-// HandleAgents handles /api/v1/agents (list + create), /api/v1/agents/{id} (detail),
-// and /api/v1/agents/{id}/sessions (sessions for agent).
+// agentSubRoute is one allowed sub-path under /api/v1/agents/{id}/.
+// methods is the exhaustive Allow list for that sub-resource. A route with
+// workspaceSegment set is name + "/" + {workspaceId}; every other route must
+// equal name exactly.
+type agentSubRoute struct {
+	name             string
+	workspaceSegment bool
+	methods          []string
+}
+
+// agentSubRoutes is the explicit list of sub-paths HandleAgents accepts under
+// /api/v1/agents/{id}/, taken from contracts/openapi.yaml. Anything else is
+// 404. A listed sub-path used with a method not in methods is 405 with an
+// Allow header. The bare agent (/api/v1/agents/{id}, no sub-path) is not in
+// this list: only it is updated or deleted as a whole.
+var agentSubRoutes = []agentSubRoute{
+	{name: "sessions", methods: []string{http.MethodGet}},
+	{name: "activity-runs", methods: []string{http.MethodGet}},
+	{name: "runner/test", methods: []string{http.MethodPost}},
+	{name: "tools", methods: []string{http.MethodGet, http.MethodPut}},
+	{name: "mailboxes", workspaceSegment: true, methods: []string{http.MethodGet, http.MethodPut, http.MethodDelete}},
+	{name: "dependencies", methods: []string{http.MethodGet}},
+}
+
+// matchAgentSubRoute returns the allow-list entry for subPath. A
+// workspace-segment route matches its bare name and name + "/" + anything, so
+// a malformed mailbox address keeps its 400 (see agentMailboxWorkspaceID).
+func matchAgentSubRoute(subPath string) (agentSubRoute, bool) {
+	for _, route := range agentSubRoutes {
+		if subPath == route.name {
+			return route, true
+		}
+		if route.workspaceSegment && strings.HasPrefix(subPath, route.name+"/") {
+			return route, true
+		}
+	}
+	return agentSubRoute{}, false
+}
+
+// agentMailboxWorkspaceID extracts {workspaceId} from "mailboxes/{workspaceId}".
+// A missing or extra segment, or an invalid ID, writes 400 and returns false.
+// It runs before the method check, so a malformed mailbox address is 400 for
+// every method.
+func agentMailboxWorkspaceID(w http.ResponseWriter, subPath string) (string, bool) {
+	mbParts := strings.SplitN(subPath, "/", 2)
+	if len(mbParts) != 2 || mbParts[1] == "" || strings.Contains(mbParts[1], "/") {
+		jsonErr(w, http.StatusBadRequest,
+			"mailboxes path requires exactly one workspace ID segment: /agents/{id}/mailboxes/{workspaceId}")
+		return "", false
+	}
+	if err := validateEntityID(mbParts[1]); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+		return "", false
+	}
+	return mbParts[1], true
+}
+
+// dispatchAgentSubPath serves /api/v1/agents/{id}/{subPath}.
+// An unknown sub-path is 404. A known sub-path with the wrong method is 405
+// and sets Allow to the methods that sub-resource accepts. This function
+// never updates or deletes the agent itself.
+func (a *restAPI) dispatchAgentSubPath(w http.ResponseWriter, r *http.Request, agentID, subPath string) {
+	route, ok := matchAgentSubRoute(subPath)
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	var workspaceID string
+	if route.workspaceSegment {
+		if workspaceID, ok = agentMailboxWorkspaceID(w, subPath); !ok {
+			return
+		}
+	}
+	if !slices.Contains(route.methods, r.Method) {
+		w.Header().Set("Allow", strings.Join(route.methods, ", "))
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	switch route.name {
+	case "sessions":
+		a.listAgentSessions(w, agentID)
+	case "activity-runs":
+		// The Activity panel's task and scheduler run rows (session-core FR-033).
+		a.listAgentActivityRuns(w, r, agentID)
+	case "runner/test":
+		// External-CLI runner connection test (Spec-4 FR-4.2).
+		a.testAgentRunner(w, r, agentID)
+	case "tools":
+		// Per-agent tool registry view and update (FR-028, FR-086).
+		if r.Method == http.MethodGet {
+			a.HandleAgentToolsRegistry(w, r, agentID)
+		} else {
+			a.updateAgentTools(w, r, agentID)
+		}
+	case "mailboxes":
+		// One (agent, workspace) email mailbox account (M11, pair-addressed
+		// 2026-07-03: the same agent may hold a different mailbox in each
+		// workspace it belongs to).
+		switch r.Method {
+		case http.MethodGet:
+			a.getAgentMailbox(w, agentID, workspaceID)
+		case http.MethodPut:
+			a.setAgentMailbox(w, r, agentID, workspaceID)
+		default:
+			a.deleteAgentMailbox(w, agentID, workspaceID)
+		}
+	case "dependencies":
+		// getAgentDependencies has no handler yet (#1709). Until it has one,
+		// GET keeps its previous answer, the agent detail; #1707 changes only
+		// the methods this path refuses.
+		a.getAgent(w, agentID)
+	default:
+		// A listed route with no handler must not fall through onto the agent.
+		jsonErr(w, http.StatusNotFound, "not found")
+	}
+}
+
+// HandleAgents handles /api/v1/agents (list + create), /api/v1/agents/{id}
+// (detail, update, delete) and the sub-resources listed in agentSubRoutes.
+// PUT and DELETE apply only to the bare agent. Any sub-path is either a listed
+// sub-resource or 404.
 func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	remainder := strings.TrimPrefix(path, "/api/v1/agents")
@@ -114,71 +233,11 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// GET /api/v1/agents/{id}/sessions
-	if r.Method == http.MethodGet && agentID != "" && subPath == "sessions" {
-		a.listAgentSessions(w, agentID)
-		return
-	}
-
-	// GET /api/v1/agents/{id}/activity-runs — the Activity panel's task and
-	// scheduler run rows (session-core FR-033).
-	if r.Method == http.MethodGet && agentID != "" && subPath == "activity-runs" {
-		a.listAgentActivityRuns(w, r, agentID)
-		return
-	}
-
-	// POST /api/v1/agents/{id}/runner/test — external-CLI runner connection test (Spec-4 FR-4.2)
-	if agentID != "" && subPath == "runner/test" {
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.testAgentRunner(w, r, agentID)
-		return
-	}
-
-	// GET/PUT /api/v1/agents/{id}/tools — per-agent tool registry view (FR-028, FR-086)
-	if agentID != "" && subPath == "tools" {
-		switch r.Method {
-		case http.MethodGet:
-			a.HandleAgentToolsRegistry(w, r, agentID)
-		case http.MethodPut:
-			a.updateAgentTools(w, r, agentID)
-		default:
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-		return
-	}
-
-	// GET/PUT/DELETE /api/v1/agents/{id}/mailboxes/{workspaceId} — one
-	// (agent, workspace) email mailbox account (M11, pair-addressed
-	// 2026-07-03: the same agent may hold a different mailbox in each
-	// workspace it belongs to). Match both the bare "mailboxes" prefix (so a
-	// missing workspace segment gets a proper 400 instead of silently
-	// falling through to the generic agent-CRUD switch below) and
-	// "mailboxes/<workspaceId>".
-	if agentID != "" && (subPath == "mailboxes" || strings.HasPrefix(subPath, "mailboxes/")) {
-		mbParts := strings.SplitN(subPath, "/", 2)
-		if len(mbParts) != 2 || mbParts[1] == "" || strings.Contains(mbParts[1], "/") {
-			jsonErr(w, http.StatusBadRequest,
-				"mailboxes path requires exactly one workspace ID segment: /agents/{id}/mailboxes/{workspaceId}")
-			return
-		}
-		workspaceID := mbParts[1]
-		if err := validateEntityID(workspaceID); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			a.getAgentMailbox(w, agentID, workspaceID)
-		case http.MethodPut:
-			a.setAgentMailbox(w, r, agentID, workspaceID)
-		case http.MethodDelete:
-			a.deleteAgentMailbox(w, agentID, workspaceID)
-		default:
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
+	// A sub-path is never the agent itself. Refuse it here so the method
+	// switch below cannot update or delete the agent, and cannot return the
+	// agent detail for an address it does not recognise (#1707).
+	if agentID != "" && subPath != "" {
+		a.dispatchAgentSubPath(w, r, agentID, subPath)
 		return
 	}
 

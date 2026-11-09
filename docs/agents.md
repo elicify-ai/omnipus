@@ -119,6 +119,8 @@ Omnipus can create three kinds of agent:
 
 **Without the app.** Scripts and integrations can still create an agent through the REST endpoint `POST /api/v1/agents`. It is an API only, with no screen in the app.
 
+For scripts that change or remove an agent, update with `PUT /api/v1/agents/{id}` and delete with `DELETE /api/v1/agents/{id}` — never add a sub-path. An unknown sub-path returns `404`; a known one (`sessions`, `activity-runs`, `runner/test`, `tools`, `mailboxes/{workspaceId}`, `dependencies`) used with a method it does not serve returns `405` and an `Allow` header listing the methods it does serve. Neither refusal changes or deletes the agent.
+
 To change an agent, open its card on the workspace's **Team**, or its row menu in the sidebar, and choose **Edit**. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
 
 ## Where an agent's instructions come from
