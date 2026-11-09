@@ -717,7 +717,7 @@ Some gateway addresses used to answer anyone who could reach the gateway. They n
 | Configuration reload, `POST /reload` | Only a bearer token: an account's token or the gateway's command-line token, sent as `Authorization: Bearer <token>`. A browser session cookie, the `OMNIPUS_BEARER_TOKEN` environment fallback and development bypass are not accepted. Anything else gets 401 and no reload happens. An installation with no accounts and no command-line token refuses every reload request |
 | Health checks, `/health` and `/ready` | Open, unchanged, so monitoring and container health checks keep working |
 
-While development bypass (`gateway.dev_mode_bypass`) is on, the uploads and workspace-media addresses treat every caller as signed in, as other signed-in routes do. Keep it off on any installation other people can reach.
+While development bypass (`gateway.dev_mode_bypass`) is on, the uploads and workspace-media addresses let a caller in without signing in, as other signed-in routes do. A caller that sends a wrong bearer token can still be refused. Keep it off on any installation other people can reach.
 
 ## Limits and things to watch
 

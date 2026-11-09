@@ -331,7 +331,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 ## Connected-server headers and the general configuration endpoint
 
-A connected (MCP) server reached over a network address can send extra request headers, such as `Authorization: Bearer …`. A header value is treated as a credential. Set or change headers only in **Skills & Tools → MCP Servers**, or from a script with `POST` or `PATCH /api/v1/mcp-servers`. Those routes store each value encrypted in the credential vault; `config.json` keeps only an internal pointer to it.
+A connected (MCP) server reached over a network address can send extra request headers, such as `Authorization: Bearer …`. A header value is treated as a credential. Set or change headers only in **Skills & Tools → MCP Servers**, or from a script: create a server with `POST /api/v1/mcp-servers`, and change an existing one with `PATCH /api/v1/mcp-servers/<name>`, where `<name>` is the server's name. `PATCH` on `/api/v1/mcp-servers` itself, without a name, is answered with status 405. Both routes store each header value encrypted in the credential vault; `config.json` keeps only an internal pointer to it.
 
 The general configuration endpoint, `PUT /api/v1/config`, protects these headers:
 
@@ -340,10 +340,13 @@ The general configuration endpoint, `PUT /api/v1/config`, protects these headers
 | A real header value under `tools.mcp.servers.<name>.headers` | Refused with status 403 and a message pointing to `/api/v1/mcp-servers`. Nothing in that body is saved. This holds for every way of writing the key: nested objects, dotted keys such as `"tools.mcp.servers.s1.headers.Authorization"`, and any letter case, such as `Headers` or `SERVERS` |
 | The internal header pointers (`header_refs`) | Refused with status 403 in any shape or letter case. They are never returned by `GET /api/v1/config` either |
 | The placeholder `[redacted]` as a header value | Accepted. `GET /api/v1/config` shows a header value kept in `config.json` (for example from an older install) as `[redacted]` and leaves out headers stored in the vault, so a script that reads the configuration and saves it back sends the placeholder. It means "unchanged": a value saved earlier stays as it is, and the placeholder itself is never saved as a header |
-| A server without its headers, for example a read-modify-write that changes only `enabled` | Accepted. The server keeps its stored header credentials. Removing the server removes them too |
+| A server without its headers, for example a read-modify-write that changes only `enabled` | Accepted. The server keeps the headers stored in the vault. A header value kept in `config.json` itself (from an older install) is **not** kept when you leave it out: it is dropped from the saved server. To keep such a value, send its header back with the `[redacted]` placeholder, as a script that saves the result of `GET /api/v1/config` does |
+| A body that leaves a server out of `tools.mcp.servers` | Accepted. The server and its internal header pointers are removed from `config.json`, but the encrypted header values **stay in the vault**. To remove a server together with its stored header values, delete it in **Skills & Tools → MCP Servers** or with `DELETE /api/v1/mcp-servers/<name>`, which tries to remove those vault entries after the server is removed |
 | The same setting spelled twice in one object, for example both `servers` and `SERVERS` | Refused with status 400. Nothing is saved, because it is unclear which spelling should win |
 
 Keys are saved in their standard lower-case spelling. A body that writes `"TOOLS"` or `"Servers"` is saved as `tools` and `servers`.
+
+Removing a server or a header in Omnipus only deletes Omnipus's own copy. It does not cancel the token at the service that issued it; revoke it there if it may have been exposed.
 
 Agents read the same section through the `get_config` tool. A read of `tools`, `tools.mcp` or a server returns that section with each server, and any header kept in `config.json` with its value replaced by `[REDACTED]`; the internal pointers are left out, and a read that asks for them directly is refused. Agents cannot change the MCP section with `set_config`; they use the MCP server tools (see [tools](tools.md#tools-from-connected-servers)).
 
