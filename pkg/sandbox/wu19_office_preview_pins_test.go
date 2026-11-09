@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -197,7 +198,13 @@ func wu19OfficeMaybeUpdatePins(t *testing.T, p *wu19Inventory) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Remove(temporary.Name()) })
+	t.Cleanup(func() {
+		// A successful rename consumes the temporary name; other cleanup
+		// failures must fail the test rather than disappear into a blank assignment.
+		if err := os.Remove(temporary.Name()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("remove temporary Office preview pin file: %v", err)
+		}
+	})
 	if err := temporary.Chmod(0644); err != nil {
 		t.Fatal(err)
 	}

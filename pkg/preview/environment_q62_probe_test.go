@@ -10,10 +10,10 @@ import (
 
 // not-wire-format: private process-edge test receipt, never gateway/SPA data.
 type q62TargetReceipt struct {
-	Stage   string
-	Program string
-	PID     int
-	Env     []string
+	Stage   string   `json:"Stage"`
+	Program string   `json:"Program"`
+	PID     int      `json:"PID"`
+	Env     []string `json:"Env"`
 }
 
 func q62TargetSnapshot(program string) q62TargetReceipt {

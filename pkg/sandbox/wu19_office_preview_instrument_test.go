@@ -83,11 +83,11 @@ func TestWU19_OfficePreviewClosedEnvironment(t *testing.T) {
 }
 
 func wu19OfficeMap[K comparable, V any](source map[K]V) map[K]V {
-	copy := make(map[K]V, len(source))
+	cloned := make(map[K]V, len(source))
 	for key, value := range source {
-		copy[key] = value
+		cloned[key] = value
 	}
-	return copy
+	return cloned
 }
 
 func wu19OfficeFixture(t *testing.T, base *wu19Inventory, name, old, replacement string) *wu19Inventory {
