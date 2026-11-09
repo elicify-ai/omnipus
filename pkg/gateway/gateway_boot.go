@@ -1706,24 +1706,56 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 	// (e.g. corrupted manifest) does not abort the loop — the error is
 	// logged and the next tick proceeds. Libraries with no orphan files
 	// are a fast no-op.
+	//
+	// The done channel lets teardown WAIT for the goroutine, not just cancel
+	// it: this goroutine's FIRST act is repairLibraryAssociationsOnce — a
+	// writer under workspaces/ — and an in-flight tick touches disk too
+	// (Library.OrphanGC). Context cancellation alone stops the NEXT tick but
+	// leaves the current one running; join-on-done is what keeps a shutdown
+	// (or a test's t.TempDir removal) from racing it
+	// (#1598 "workspaces: directory not empty"). Consumed by
+	// drainBootBackgroundWriters.
+	//
+	// The goroutine derives its context from stg.ctx but carries its OWN
+	// cancel (orphanGCCancel): both teardown drains call it BEFORE joining
+	// done. Deriving the exit signal from stg.ctx alone is not enough — the
+	// graceful shutdown cancels stg.ctx only late (after the turn drain), and
+	// a partial-boot abort or a test harness teardown leaves the parent
+	// context live forever, so a drain that could only join, never cancel,
+	// would sit on done until its budget expired while the goroutine kept
+	// running (CHECK 1 finding F2, 2026-11-08). Same cancel-and-join contract
+	// as the catalog refresh loop.
+	orphanCtx, orphanCancel := context.WithCancel(stg.ctx)
+	orphanDone := make(chan struct{})
+	if stg.runningServices == nil {
+		// Degenerate harness: no services object to carry the handles, so no
+		// drain can ever cancel this goroutine — stop it before it starts.
+		orphanCancel()
+	} else {
+		stg.runningServices.orphanGCDone = orphanDone
+		stg.runningServices.orphanGCCancel = orphanCancel
+	}
 	go func() {
+		defer close(orphanDone)
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
 		// #1449 A-14: the one-time association repair for uploads made
 		// before the durable library_path existed, once per workspace.
+		// Synchronous and uncancelable by design; the join below is what
+		// covers it — the cancel stops only the tick loop after it.
 		stg.repairLibraryAssociationsOnce()
-		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
-		// which never exits) — this goroutine outlives the process
-		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
-		// class of bug: any un-canceled background loop started here can
-		// still be mid-tick (Library.OrphanGC touches disk) when a caller
-		// that boots/tears down many gateways in one process — every test
-		// using testutil.StartTestGateway — has already moved on to
+		// orphanCtx.Done() must be observed here (not a bare
+		// `for range ticker.C`, which never exits) — this goroutine outlives
+		// the process otherwise. See runCatalogRefreshLoop's doc comment for
+		// the shared class of bug: any un-canceled background loop started
+		// here can still be mid-tick (Library.OrphanGC touches disk) when a
+		// caller that boots/tears down many gateways in one process — every
+		// test using testutil.StartTestGateway — has already moved on to
 		// t.TempDir() cleanup of homePath.
 		for {
 			select {
-			case <-stg.ctx.Done():
+			case <-orphanCtx.Done():
 				return
 			case <-ticker.C:
 			}
