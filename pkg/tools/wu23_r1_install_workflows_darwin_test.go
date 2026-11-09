@@ -155,8 +155,8 @@ func wu23R1DocumentToolsRun(t *testing.T, god bool) {
 	cfg := config.DefaultConfig()
 	cfg.Sandbox.ToolPolicies["bash"] = string(config.ToolPolicyAllow)
 	cfg.Agents.List = []config.AgentConfig{*persisted}
-	if err := config.SaveConfig(filepath.Join(f.Home, "config.json"), cfg); err != nil {
-		t.Fatal(err)
+	if saveErr := config.SaveConfig(filepath.Join(f.Home, "config.json"), cfg); saveErr != nil {
+		t.Fatal(saveErr)
 	}
 	python, err := exec.LookPath("python3")
 	if err != nil {

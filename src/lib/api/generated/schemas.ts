@@ -42,6 +42,7 @@ type OnboardingProviderApiKey = {
   api_key: string;
   model?: string | undefined;
   endpoint?: string | undefined;
+  protocol?: ("openai-compatible" | "anthropic") | undefined;
   region?: string | undefined;
 };
 type OnboardingProviderSignIn = {
@@ -3765,6 +3766,7 @@ export const OnboardingProviderApiKey =
     api_key: z.string().min(1),
     model: z.string().min(1).max(256).optional(),
     endpoint: z.string().optional(),
+    protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
     region: z.string().max(128).optional(),
   }) satisfies z.ZodType<OnboardingProviderApiKey>;
 export const OnboardingProviderSignIn =
@@ -13014,7 +13016,7 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
-    description: `AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no &#x60;admin&#x60; block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
+    description: `AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no &#x60;admin&#x60; block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. Returns 422 when a custom endpoint&#x27;s base URL is refused by the address (SSRF) guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -13039,6 +13041,11 @@ Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request
       {
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
         schema: ErrorResponse,
       },
       {

@@ -18,13 +18,13 @@
  * (which stays as the full-detail reference for a reader who wants every
  * tool named).
  *
- * Source of truth for MEMBERSHIP (which 29 tools ask) is
+ * Source of truth for MEMBERSHIP (which 30 tools ask) is
  * `pkg/tools/auto_approve.go`'s `AutoApproveClassTable()` — every
  * `AutoAsks`-classified entry except `bash` (its own `AutoShellMode` class,
  * governed by the separate shell-permission mode UI, not this list) and,
  * in L1 stage 1, except the not-yet-shipped connect_channel, connect_mailbox,
  * remove_secret and select_secret_version. This
- * file's own test (`autoApproveAskGroups.test.ts`) pins the count at 29 and
+ * file's own test (`autoApproveAskGroups.test.ts`) pins the count at 30 and
  * asserts every group's tools are disjoint and cover exactly that set, so a
  * future addition to the Go table that isn't mirrored here fails loudly
  * instead of silently under-reporting what Auto-approve still asks about.
@@ -60,6 +60,8 @@ export const AUTO_APPROVE_ASK_GROUPS: AutoApproveAskGroup[] = [
       'disable_channel',
       'configure_channel',
       'test_channel',
+      // channels-spec-r8 FR-032: changing who a connection may start messages to always asks.
+      'set_channel_outbound',
       'create_agent',
       'update_agent',
       // FR-021 (omnipus-system-agent): changing an agent's tool permissions always asks.

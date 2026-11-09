@@ -18,10 +18,24 @@ type Check = { id: string; kind: string; file?: string; test?: string; story?: s
 type Manifest = { component: string; stories: Array<{ file: string; exports: string[] }>; checks: Check[] }
 type StoryIndex = { entries: Record<string, { id: string; importPath: string; exportName: string; type: string }> }
 type AxeViolation = { id: string; nodes: Array<{ target: unknown[]; html: string; failureSummary?: string }> }
-type AccessibilityException = {
+type AccessibilityExceptionBase = {
   id: string; owner: string; component: string; story: string; check: string; rule: string; node: string
-  trigger: string; focusScope: string; requiredAutomatedProofs: string[]; manualEvidence: string; reference: string; rationale: string
+  requiredAutomatedProofs: string[]; manualEvidence: string; reference: string; rationale: string
 }
+// Modal-menu exception (DropdownMenu): the reviewed node is the host root, and
+// focusScope is the subtree scanned with the full ruleset.
+type ModalMenuAccessibilityException = AccessibilityExceptionBase & {
+  rule: 'aria-hidden-focus'; trigger: string; focusScope: string
+}
+// Portal-region exception (Tooltip): the reviewed node is the one region
+// violation (the bubble's positioning wrapper), trigger carries
+// aria-describedby, content is the bubble root that wrapper must hold. No
+// focus-trap fields — a tooltip is not a modal menu, and those proofs stay on
+// the DropdownMenu path only.
+type PortalRegionAccessibilityException = AccessibilityExceptionBase & {
+  rule: 'region'; trigger: string; content: string
+}
+type AccessibilityException = ModalMenuAccessibilityException | PortalRegionAccessibilityException
 type Metadata = {
   keyboard?: Array<{
     trigger: string; key: string; expectFocus?: string; expectExpanded?: boolean
@@ -116,10 +130,31 @@ const expectedException = {
   requiredAutomatedProofs: ['single-reviewed-axe-node', 'open-menu-full-axe', 'single-hidden-root-focusable', 'initial-focus-in-menu', 'tab-contained', 'shift-tab-contained', 'programmatic-focus-contained', 'escape-restores-trigger', 'restored-document-full-axe'],
   manualEvidence: 'outstanding-screen-reader', reference: 'https://github.com/radix-ui/primitives/discussions/3994',
 }
-if (exceptionRegistry.version !== 1 || exceptionRegistry.exceptions.length !== 1) throw new Error('Accessibility exception registry has unknown version or entries')
-const dropdownMenuException = exceptionRegistry.exceptions[0]
+// Founder K1 A (2026-11-07): the region rule only, for the open Tooltip bubble
+// only. node is the selector axe-core 4.12's region rule reports (the outermost
+// regionless ancestor — Radix's positioning wrapper). content is the bubble
+// root (src/components/ui/tooltip.tsx TooltipContent, data-slot="tooltip-content").
+// trigger is TooltipTrigger (data-slot="tooltip-trigger"), which carries
+// aria-describedby while the bubble is open.
+const expectedTooltipException = {
+  id: 'radix-tooltip-portal-region', owner: 'design-system', component: 'Tooltip', story: 'Default', check: 'tooltip-axe',
+  rule: 'region', node: 'div[data-radix-popper-content-wrapper=""]', trigger: '[data-slot="tooltip-trigger"]', content: '[data-slot="tooltip-content"]',
+  requiredAutomatedProofs: ['open-bubble-full-axe', 'single-reviewed-region-node', 'trigger-described-by-bubble-text', 'restored-document-full-axe'],
+  manualEvidence: 'outstanding-screen-reader', reference: 'https://dequeuniversity.com/rules/axe/4.12/region',
+  rationale: 'The open Tooltip bubble is portalled to the end of the document, outside the story main landmark (contract §2.9; founder K1 A, 2026-11-07). axe-core 4.12\'s region rule reports the outermost regionless ancestor, which is Radix\'s positioning wrapper around the content root (src/components/ui/tooltip.tsx TooltipContent). The exception is the region rule only, for that one wrapper only, and only while its single element child is the content root, one scan of the open document with the full axe ruleset reports nothing but that one region node (so the bubble subtree passes every other rule), the trigger\'s aria-describedby points at the bubble\'s text, and the whole document passes the full axe ruleset after the bubble closes. Screen-reader confirmation is still outstanding; the describedby link is the automated stand-in, not a screen-reader session.',
+}
+if (exceptionRegistry.version !== 1) throw new Error('Accessibility exception registry has unknown version or entries')
+const exceptionsById = new Map(exceptionRegistry.exceptions.map((entry) => [entry.id, entry]))
+if (exceptionsById.size !== exceptionRegistry.exceptions.length) throw new Error('Accessibility exception registry has unknown version or entries')
+const expectedExceptionIds = [expectedException.id, expectedTooltipException.id]
+if (exceptionsById.size !== expectedExceptionIds.length || expectedExceptionIds.some((id) => !exceptionsById.has(id))) throw new Error('Accessibility exception registry has unknown version or entries')
+const dropdownMenuException = exceptionsById.get(expectedException.id) as ModalMenuAccessibilityException
+const tooltipRegionException = exceptionsById.get(expectedTooltipException.id) as PortalRegionAccessibilityException
 for (const [key, value] of Object.entries(expectedException)) {
-  if (JSON.stringify(dropdownMenuException[key as keyof AccessibilityException]) !== JSON.stringify(value)) throw new Error(`Accessibility exception registry drift: ${key}`)
+  if (JSON.stringify(dropdownMenuException[key as keyof ModalMenuAccessibilityException]) !== JSON.stringify(value)) throw new Error(`Accessibility exception registry drift: ${key}`)
+}
+for (const [key, value] of Object.entries(expectedTooltipException)) {
+  if (JSON.stringify(tooltipRegionException[key as keyof PortalRegionAccessibilityException]) !== JSON.stringify(value)) throw new Error(`Accessibility exception registry drift: ${key}`)
 }
 const manifests: Manifest[] = existsSync(manifestDir)
   ? readdirSync(manifestDir).filter((file) => file.endsWith('.json')).sort()
@@ -368,6 +403,80 @@ async function proveDropdownMenuFocusContainment(page: Page) {
   return outcome
 }
 
+// Takes the findings of one scan of the OPEN document with every axe rule. The
+// region rule only, and only the one reviewed node: a second rule, a second
+// node, a node that is not the registered wrapper, or no region finding at all
+// (a stale exception) fails here — the same shape as
+// assertDropdownMenuExceptionBoundary, for a different rule.
+function assertTooltipRegionBoundary(manifest: Manifest, check: Check, violations: AxeViolation[]) {
+  expect({ component: manifest.component, story: check.story, check: check.id }).toEqual({
+    component: tooltipRegionException.component, story: tooltipRegionException.story, check: tooltipRegionException.check,
+  })
+  const found = JSON.stringify(violations.map((violation) => ({ id: violation.id, targets: violation.nodes.map((node) => node.target) })))
+  expect(violations.map((violation) => violation.id), `the open-state scan must report only the reviewed ${tooltipRegionException.rule} finding; it reported ${found}`).toEqual([tooltipRegionException.rule])
+  const nodes = violations[0]?.nodes ?? []
+  expect(nodes, 'the region scan must report exactly one node').toHaveLength(1)
+  // Identity is the axe target, not node.html. axe-core truncates that snippet
+  // (measured: `data-radix-popper-co...`), so a substring of the full attribute
+  // name cannot be read back from it. The content-root proof is the live
+  // element in proveTooltipBubbleException: the wrapper's only element child
+  // is [data-slot="tooltip-content"].
+  expect(nodes[0].target, `region node target ${JSON.stringify(nodes[0].target)}`).toEqual([tooltipRegionException.node])
+  return nodes[0]
+}
+
+// While the bubble is open: the reviewed wrapper's only element child is the
+// content root, and the trigger's aria-describedby resolves to that bubble. The
+// reference is followed from the TRIGGER's attribute, never from the bubble's own
+// id: looking the bubble up by its own id would only prove it matches itself.
+// Then Escape closes the bubble so the caller can scan the whole document.
+async function proveTooltipBubbleException(page: Page) {
+  const outcome: Record<string, boolean> = {}
+  const content = page.locator(tooltipRegionException.content)
+  const trigger = page.locator(tooltipRegionException.trigger)
+  const wrapper = page.locator(tooltipRegionException.node)
+  await expect(wrapper, 'the reviewed region node must be on the page exactly once').toHaveCount(1)
+  await expect(trigger, 'the tooltip trigger must be on the page exactly once').toHaveCount(1)
+  await expect(content, 'the tooltip content root must be visible while the exception is claimed').toBeVisible()
+  const onlyChild = await wrapper.evaluate((element, contentSelector) => {
+    const children = [...element.children]
+    return children.length === 1 && (children[0] as Element).matches(contentSelector)
+  }, tooltipRegionException.content)
+  expect(onlyChild, 'the reviewed region node must be the positioning wrapper whose only element child is the tooltip content root').toBe(true)
+  outcome['single-reviewed-region-node'] = true
+
+  const description = await page.evaluate(({ triggerSelector, contentSelector }) => {
+    // Case and whitespace do not change the words a screen reader speaks, so a CSS
+    // text-transform on the visible bubble cannot fail the comparison.
+    const words = (text: string | null | undefined) => (text ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
+    const bubble = document.querySelector<HTMLElement>(contentSelector)
+    const ids = (document.querySelector(triggerSelector)?.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+    return {
+      ids,
+      targets: ids.map((id) => {
+        const element = document.getElementById(id)
+        return {
+          id,
+          found: element !== null,
+          inBubble: element !== null && bubble !== null && (element === bubble || bubble.contains(element)),
+          text: words(element?.textContent),
+        }
+      }),
+      bubbleText: words(bubble?.innerText),
+    }
+  }, { triggerSelector: tooltipRegionException.trigger, contentSelector: tooltipRegionException.content })
+  expect(description.ids, 'the trigger must name the bubble in aria-describedby while it is open').not.toEqual([])
+  const bubbleTarget = description.targets.find((target) => target.found && target.inBubble)
+  expect(bubbleTarget, `aria-describedby must resolve to the bubble; it resolved ${JSON.stringify(description.targets)}`).toBeDefined()
+  expect(bubbleTarget!.text.length, 'the described text must not be empty').toBeGreaterThan(0)
+  expect(bubbleTarget!.text, 'the described text must be the bubble text').toBe(description.bubbleText)
+  outcome['trigger-described-by-bubble-text'] = true
+
+  await page.keyboard.press('Escape')
+  await expect(content, 'Escape must remove the portalled bubble before the restored-document scan').toHaveCount(0)
+  return outcome
+}
+
 async function pointerHitsTarget(page: Page, selector: string, x: number, y: number, coarse: boolean) {
   await page.evaluate(({ selector }) => {
     const state = window as Window & { __designSystemPointerHit?: boolean | null }
@@ -550,6 +659,70 @@ test('reviewed DropdownMenu exception rejects an extra violation, extra node and
   await expect(proveDropdownMenuFocusContainment(page)).rejects.toThrow()
 })
 
+test('reviewed Tooltip region exception accepts the one registered wrapper and rejects everything else', () => {
+  const manifest = { component: 'Tooltip', stories: [], checks: [] }
+  const check = { id: 'tooltip-axe', kind: 'axe', story: 'Default', applicable: true }
+  const reviewedNode = {
+    target: ['div[data-radix-popper-content-wrapper=""]'],
+    html: '<div data-radix-popper-content-wrapper=""><div data-slot="tooltip-content" role="tooltip">Bubble</div></div>',
+  }
+  // Positive control: the exact reviewed finding is accepted and handed back. Every
+  // rejection below differs from this input by one fault, so none of them can be a
+  // helper that throws for every input.
+  expect(assertTooltipRegionBoundary(manifest, check, [{ id: 'region', nodes: [reviewedNode] }])).toBe(reviewedNode)
+  expect(() => assertTooltipRegionBoundary(manifest, check, [
+    { id: 'region', nodes: [reviewedNode] },
+    { id: 'button-name', nodes: [] },
+  ])).toThrow()
+  expect(() => assertTooltipRegionBoundary(manifest, check, [{
+    id: 'region', nodes: [reviewedNode, { target: ['div.stray'], html: '<div class="stray">Stray</div>' }],
+  }])).toThrow()
+  expect(() => assertTooltipRegionBoundary(manifest, check, [{
+    id: 'region', nodes: [{ target: ['#storybook-root'], html: '<div id="storybook-root"></div>' }],
+  }])).toThrow()
+  // A stale exception — no region finding left to excuse — fails so it gets removed.
+  expect(() => assertTooltipRegionBoundary(manifest, check, [])).toThrow()
+  // The exception belongs to its own component, story and check only.
+  expect(() => assertTooltipRegionBoundary(manifest, { ...check, id: 'tooltip-keyboard' }, [{ id: 'region', nodes: [reviewedNode] }])).toThrow()
+})
+
+test('reviewed Tooltip bubble proof follows the trigger reference and rejects every other shape', async ({ page }) => {
+  const trigger = (attributes: string) => `<span data-slot="tooltip-trigger" tabindex="0" ${attributes}>Trigger</span>`
+  const bubbleWith = (inner: string) => `<div data-radix-popper-content-wrapper=""><div data-slot="tooltip-content" role="tooltip" id="bubble-id">${inner}</div></div>`
+  const show = async (markup: string) => {
+    await page.setContent(markup)
+    // Radix removes the portalled bubble when it closes; model that on Escape.
+    await page.evaluate(() => {
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') document.querySelector('[data-radix-popper-content-wrapper]')?.remove()
+      })
+    })
+  }
+  const bubble = bubbleWith('Auto approval is on')
+  // Positive control: a trigger that points at the bubble passes both proofs and
+  // Escape closes the bubble. Each rejection below differs from this by one fault.
+  await show(`<main>${trigger('aria-describedby="bubble-id"')}</main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).resolves.toEqual({ 'single-reviewed-region-node': true, 'trigger-described-by-bubble-text': true })
+  // No aria-describedby at all.
+  await show(`<main>${trigger('')}</main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/must name the bubble/)
+  // A reference to an id that does not exist.
+  await show(`<main>${trigger('aria-describedby="bubble-id-gone"')}</main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/must resolve to the bubble/)
+  // A reference to another element carrying the same words outside the bubble.
+  await show(`<main>${trigger('aria-describedby="elsewhere"')}<p id="elsewhere">Auto approval is on</p></main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/must resolve to the bubble/)
+  // A reference to a part of the bubble that carries only some of its words.
+  await show(`<main>${trigger('aria-describedby="inner"')}</main>${bubbleWith('<span id="inner">Auto</span> approval is on')}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/described text must be the bubble text/)
+  // A visible bubble that carries no text at all (an icon only).
+  await show(`<main>${trigger('aria-describedby="bubble-id"')}</main>${bubbleWith('<svg width="12" height="12"></svg>')}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/described text must not be empty/)
+  // A wrapper that holds something besides the content root.
+  await show(`<main>${trigger('aria-describedby="bubble-id"')}</main>${bubble.replace('</div></div>', '</div><div>extra</div></div>')}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/only element child/)
+})
+
 test('forced-colors contract rejects stripped boundaries and indicators', async ({ page }) => {
   await page.emulateMedia({ forcedColors: 'active' })
   await page.setContent('<button id="boundary" style="border:1px none CanvasText;background:Canvas;color:CanvasText">Action</button><div id="track" style="background:Canvas"><span id="indicator" style="background:Canvas">40%</span></div>')
@@ -635,6 +808,42 @@ for (const manifest of manifests) {
               componentViolations: componentResult.violations,
               rawFinding,
               focusProofs,
+              restoredDocumentViolations: restoredDocumentResult.violations,
+            }, null, 2)),
+            contentType: 'application/json',
+          })
+        } else if (manifest.component === tooltipRegionException.component && check.id === tooltipRegionException.check && check.story === tooltipRegionException.story) {
+          // The bubble is portalled outside the story's <main>, so axe's region rule
+          // reports it. Unlike the modal DropdownMenu, the host document is NOT inert
+          // while the bubble is open, so one scan of the open document with every axe
+          // rule is enough: its only finding must be the one reviewed region node.
+          // That is the open-bubble proof — the bubble subtree and the rest of the page
+          // pass every other rule — and any second regionless node fails. It is one
+          // scan instead of a subtree scan plus a region-only scan because each axe
+          // scan costs several seconds of this test's fixed 45s budget. Escape then
+          // closes the bubble and the whole document must pass the full ruleset. The
+          // DropdownMenu path above is unchanged.
+          const openResult = await new AxeBuilder({ page }).analyze()
+          const rawFinding = assertTooltipRegionBoundary(manifest, check, openResult.violations as AxeViolation[])
+          const bubbleProofs = await proveTooltipBubbleException(page)
+          const restoredDocumentResult = await new AxeBuilder({ page }).analyze()
+          expect(restoredDocumentResult.violations, 'Tooltip host document must pass the complete axe ruleset after the bubble closes').toEqual([])
+          const proofs: Record<string, boolean> = {
+            'open-bubble-full-axe': openResult.violations.length === 1 && openResult.violations[0].id === tooltipRegionException.rule,
+            'single-reviewed-region-node': rawFinding.target.length === 1 && rawFinding.target[0] === tooltipRegionException.node && bubbleProofs['single-reviewed-region-node'] === true,
+            'trigger-described-by-bubble-text': bubbleProofs['trigger-described-by-bubble-text'] === true,
+            'restored-document-full-axe': restoredDocumentResult.violations.length === 0,
+          }
+          for (const proof of tooltipRegionException.requiredAutomatedProofs) {
+            expect(proofs[proof], `required Tooltip region proof ${proof} must pass`).toBe(true)
+          }
+          await testInfo.attach('reviewed-accessibility-exception.json', {
+            body: Buffer.from(JSON.stringify({
+              exception: tooltipRegionException,
+              openDocumentViolations: openResult.violations,
+              rawFinding,
+              bubbleProofs,
+              proofs,
               restoredDocumentViolations: restoredDocumentResult.violations,
             }, null, 2)),
             contentType: 'application/json',
