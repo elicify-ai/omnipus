@@ -56,16 +56,24 @@ func TestR8c_SettingsSaveRefusalHasNoPathAndLogsIt_Q58(t *testing.T) {
 
 	var diagnostic bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&diagnostic, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&diagnostic, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	file := filepath.Join(t.TempDir(), "r8c-settings-server.log")
 	level := logger.GetLevel()
-	logger.SetLevel(logger.WARN)
+	logger.SetLevel(logger.DEBUG)
 	require.NoError(t, logger.EnableFileLogging(file))
 	t.Cleanup(func() {
 		logger.DisableFileLogging()
 		logger.SetLevel(level)
 	})
+	// Test the instrument at a permissive level; the requirement does not
+	// prescribe which server logger or severity records the private path.
+	slog.Debug("r8c-slog-capture-control")
+	logger.Debug("r8c-file-capture-control")
+	captured, err := os.ReadFile(file)
+	require.NoError(t, err)
+	require.Contains(t, diagnostic.String(), "r8c-slog-capture-control")
+	require.Contains(t, string(captured), "r8c-file-capture-control")
 
 	body.Clis.ClaudeCode.Path = planted
 	w = f.call(t, http.MethodPut, t8SettingsRoute, body, "person")
