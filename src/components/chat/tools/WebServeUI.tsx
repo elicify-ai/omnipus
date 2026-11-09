@@ -95,6 +95,40 @@ function inferKind(result: WebServeResult): 'static' | 'dev' {
   return 'static'
 }
 
+/**
+ * serve_web returns its payload as a JSON string, so a WebServeBlock receives
+ * one of two transport shapes, never the flat object:
+ *   - live path: the raw JSON STRING (the `tool_call_result` frame carries the
+ *     tool's model-visible text verbatim, pkg/gateway/websocket_forward_hub.go
+ *     ::hubToolExecEnd);
+ *   - reload path: the ENVELOPE `{ text: "<json>" }` the agent loop records
+ *     for every string-returning tool
+ *     (pkg/agent/tool_result_transcript.go::projectRecordedResult).
+ * Same approach as SetGoalToolUI.tsx::unwrapSetGoalResultEnvelope. A string
+ * is decoded only when it parses to an object; an envelope is unwrapped only
+ * when `text` is its sole key and parses to an object. Anything else is
+ * returned unchanged for the guard below to judge (and so still renders the
+ * malformed block).
+ */
+function decodeObjectJSON(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function unwrapServeWebResult(value: unknown): unknown {
+  if (typeof value === 'string') return decodeObjectJSON(value) ?? value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const text = (value as Record<string, unknown>).text
+  if (Object.keys(value).length !== 1 || typeof text !== 'string') return value
+  return decodeObjectJSON(text) ?? value
+}
+
 function isWebServeResult(value: unknown): value is WebServeResult {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
@@ -148,7 +182,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
 
 export function WebServeBlock({
   args,
-  result,
+  result: rawResult,
   isRunning,
   isError,
   isCancelled,
@@ -197,6 +231,7 @@ export function WebServeBlock({
   // B1.3e: when the type guard rejects the result and the tool is no longer
   // running, render the malformed block instead of crashing or rendering nothing.
   // We allow null result while running (tool not done yet — normal state).
+  const result = unwrapServeWebResult(rawResult)
   if (result !== null && result !== undefined && !isRunning && !isWebServeResult(result)) {
     return <MalformedResultBlock raw={result} />
   }
