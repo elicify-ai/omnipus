@@ -353,7 +353,8 @@ func unescapeGo(s string) (string, bool) {
 // as strings, numbers and booleans pass through, the containers log call sites
 // actually pass are walked, and anything else is scrubbed in the JSON form
 // zerolog would have written for it — kept as JSON when the scrubbed text still
-// parses, otherwise written as the scrubbed string.
+// parses, otherwise written as the scrubbed string. A value that cannot be
+// encoded as JSON is returned as it is.
 func scrubFieldValue(r *strings.Replacer, v any) any {
 	switch val := v.(type) {
 	case nil:
