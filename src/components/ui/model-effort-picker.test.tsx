@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ReactElement } from 'react'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { EffortControl, ModelEffortPicker, type EffortValue } from './model-effort-picker'
@@ -459,4 +459,72 @@ describe('EffortControl — remapped stored value shows the note with a Change l
     expect(screen.getByRole('alert')).toHaveTextContent(/SAVE-FAILED-7731|save.*failed/i)
   })
 
+})
+
+// ── Muted chip tooltip on the Radix Tooltip (src/components/ui/tooltip.tsx) ──
+//
+// Traces to: effort-levels-spec-r10.md S-07 (muted "Effort" chip with info
+// icon and the exact tooltip "Omnipus can't change effort for this model.").
+// The old hand-built Tooltip's `interactive` mode kept the chip the one tab
+// stop; under Radix the chip is the TooltipTrigger itself. A disabled-looking
+// chip must stay focusable (aria-disabled, never the disabled attribute) so a
+// keyboard user can reach the explanation. Touch does not open a Radix
+// tooltip (founder Q2 = A).
+
+describe('EffortControl — muted chip tooltip', () => {
+  const MUTED_TEXT = "Omnipus can't change effort for this model."
+
+  beforeEach(() => {
+    vi.mocked(fetchProvidersCatalog).mockResolvedValue(CATALOG)
+    Element.prototype.hasPointerCapture ??= () => false
+  })
+
+  it('keeps the muted chip a focusable, aria-disabled button named "Effort"', async () => {
+    renderWithCatalog(<EffortControl value={effortValue('budget-only-model', 'high')} scope="chat" />)
+    const chip = await screen.findByRole('button', { name: 'Effort' })
+    expect(chip).toHaveAttribute('aria-disabled', 'true')
+    expect(chip).not.toBeDisabled()
+    expect(chip.tabIndex).toBe(0)
+  })
+
+  it('shows the exact muted text in a tooltip when the chip receives keyboard focus, and hides it on blur', async () => {
+    renderWithCatalog(<EffortControl value={effortValue('budget-only-model', 'high')} scope="chat" />)
+    const chip = await screen.findByRole('button', { name: 'Effort' })
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    await userEvent.tab()
+    expect(chip).toHaveFocus()
+    expect(screen.getByRole('tooltip')).toHaveTextContent(MUTED_TEXT)
+    act(() => chip.blur())
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+  })
+
+  it('shows the exact muted text in a tooltip on mouse hover', async () => {
+    renderWithCatalog(<EffortControl value={effortValue('budget-only-model', 'high')} scope="chat" />)
+    const chip = await screen.findByRole('button', { name: 'Effort' })
+    fireEvent.pointerMove(chip, { pointerType: 'mouse', pointerId: 1 })
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(MUTED_TEXT)
+  })
+
+  it('keeps the muted text as the chip accessible description, open or closed', async () => {
+    renderWithCatalog(<EffortControl value={effortValue('budget-only-model', 'high')} scope="chat" />)
+    const chip = await screen.findByRole('button', { name: 'Effort' })
+    expect(chip).toHaveAccessibleDescription(MUTED_TEXT)
+    act(() => chip.focus())
+    expect(chip).toHaveAccessibleDescription(MUTED_TEXT)
+  })
+
+  it('does not open on a touch pointer (founder Q2 = A: Radix ignores touch)', async () => {
+    renderWithCatalog(<EffortControl value={effortValue('budget-only-model', 'high')} scope="chat" />)
+    const chip = await screen.findByRole('button', { name: 'Effort' })
+    fireEvent.pointerMove(chip, { pointerType: 'touch', pointerId: 1 })
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)))
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+  })
+
+  it('shows the muted text as visible text, not a tooltip, on settings surfaces', async () => {
+    renderWithCatalog(<EffortControl value={effortValue('budget-only-model', 'high')} scope="agent-primary" />)
+    expect(await screen.findByText(MUTED_TEXT)).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Effort' })).toBeNull()
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+  })
 })

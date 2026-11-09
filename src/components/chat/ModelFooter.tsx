@@ -1,4 +1,4 @@
-import { Tooltip } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { EffortRecord } from '@/lib/api/generated/asyncapi-types'
 import { effortRecordNote, effortStatsLine, thinkingStatsLine } from '@/lib/effort/chatEffort'
 
@@ -76,17 +76,22 @@ export function ModelFooter({
   )
   if (effort === undefined && turnReasoningTokens === undefined) return slug
   const effortLine = effortStatsLine(effort)
+  // The slug is plain text, so the trigger is a focusable span (the Radix
+  // migration's pattern for non-control triggers) carrying the accessible
+  // name the old Tooltip's `label` gave it.
   return (
-    <Tooltip
-      label={`${model.trim()}, turn statistics`}
-      content={
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} aria-label={`${model.trim()}, turn statistics`} className="inline-flex">
+          {slug}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
         <span className="flex flex-col">
           {effortLine && <span>{effortLine}</span>}
           <span>{thinkingStatsLine(turnReasoningTokens)}</span>
         </span>
-      }
-    >
-      {slug}
+      </TooltipContent>
     </Tooltip>
   )
 }

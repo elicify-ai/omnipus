@@ -40,7 +40,7 @@ import { Button } from './button'
 import { FormError } from './FormError'
 import { Popover, PopoverContent, PopoverTrigger } from './popover'
 import { RadioGroup, RadioGroupItem } from './radio-group'
-import { Tooltip } from './tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from './tooltip'
 
 export interface EffortValue {
   provider: string
@@ -497,6 +497,8 @@ export function EffortControl(props: EffortControlProps) {
   } = props
   const { catalog, status, retry } = useServedCatalog()
   const [open, setOpen] = useState(false)
+  // Muted chip only: whether its Radix tooltip is open (see the muted branch).
+  const [mutedTipOpen, setMutedTipOpen] = useState(false)
   const cancelledRef = useRef(false)
   const contentRef = useRef<HTMLDivElement>(null)
   const descriptionId = useId()
@@ -587,21 +589,29 @@ export function EffortControl(props: EffortControlProps) {
     }
     return (
       <span className={cn('inline-flex items-center', className)}>
-        <Tooltip content={MUTED_EFFORT_TEXT} interactive>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-disabled="true"
-            tabIndex={tabIndex}
-            aria-label={name}
-            aria-describedby={descriptionId}
-            data-testid={props['data-testid']}
-            className="gap-[var(--space-1)] text-[var(--color-muted)]"
-          >
-            <Info size={12} aria-hidden="true" />
-            Effort
-          </Button>
+        {/* The chip is the TooltipTrigger itself and stays focusable
+            (aria-disabled, never disabled) so keyboard focus shows the text.
+            Radix adds the open bubble's id to the trigger's aria-describedby,
+            so the sr-only copy describes the chip only while the bubble is
+            closed: the text is read once either way. */}
+        <Tooltip onOpenChange={setMutedTipOpen}>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-disabled="true"
+              tabIndex={tabIndex}
+              aria-label={name}
+              aria-describedby={mutedTipOpen ? undefined : descriptionId}
+              data-testid={props['data-testid']}
+              className="gap-[var(--space-1)] text-[var(--color-muted)]"
+            >
+              <Info size={12} aria-hidden="true" />
+              Effort
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{MUTED_EFFORT_TEXT}</TooltipContent>
         </Tooltip>
         <span id={descriptionId} className="sr-only">
           {MUTED_EFFORT_TEXT}
