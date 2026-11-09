@@ -1147,7 +1147,8 @@ func isMCPHeaderRefsReadKey(segs []string) bool {
 // headers map of every MCP server entry it reaches. A missing level (an
 // install with no MCP section at all) or a non-map level ends the walk. v is
 // the throwaway configToMap copy dotGet resolved the read from, so the
-// in-place header redaction never touches live config.
+// in-place header redaction never touches live config. It always returns v,
+// the requested subtree, never a descendant.
 func redactMCPHeaderAncestorSubtree(v any, remaining []string) any {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -1164,7 +1165,11 @@ func redactMCPHeaderAncestorSubtree(v any, remaining []string) any {
 		return v
 	}
 	if child, ok := m[remaining[0]]; ok {
-		return redactMCPHeaderAncestorSubtree(child, remaining[1:])
+		// Redact in place inside the child, but answer with v itself: the
+		// caller returns this value as the subtree AT the requested key, so
+		// returning the child would replace a "tools" or "tools.mcp" read
+		// with the deeper servers map (SEC906 fix round, F3).
+		redactMCPHeaderAncestorSubtree(child, remaining[1:])
 	}
 	return v
 }

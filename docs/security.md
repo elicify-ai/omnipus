@@ -705,6 +705,20 @@ Three named exceptions:
 - **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
 - **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk: God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
 
+## Web addresses that need a sign-in
+
+Some gateway addresses used to answer anyone who could reach the gateway. They now check who is asking:
+
+| Address | Who can use it |
+|---|---|
+| Files attached to chats, `/api/v1/uploads/…` | A signed-in browser (its session cookie) or a valid bearer token. Anyone else gets status 401 and none of the file's bytes. Images and files in your own chats keep loading as before. A copied link no longer opens for someone who is not signed in |
+| Workspace pictures and media, `/api/v1/media/workspace/…` | The same: signed in, or a valid bearer token; otherwise 401 |
+| Older media links, `/api/v1/media/<id>` | Still open without signing in, so existing links keep working. The long random id in the link is what protects the file: anyone who has the full link can open it. Treat such a link like a password and share it only with people who may see the file |
+| Configuration reload, `POST /reload` | Only a bearer token: an account's token or the gateway's command-line token, sent as `Authorization: Bearer <token>`. A browser session cookie, the `OMNIPUS_BEARER_TOKEN` environment fallback and development bypass are not accepted. Anything else gets 401 and no reload happens. An installation with no accounts and no command-line token refuses every reload request |
+| Health checks, `/health` and `/ready` | Open, unchanged, so monitoring and container health checks keep working |
+
+While development bypass (`gateway.dev_mode_bypass`) is on, the uploads and workspace-media addresses treat every caller as signed in, as other signed-in routes do. Keep it off on any installation other people can reach.
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.

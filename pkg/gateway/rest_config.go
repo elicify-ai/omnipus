@@ -491,16 +491,110 @@ func isLiteralMCPServerHeaderDotPath(p string, val any) bool {
 	if !ok || s == "" || s == redactedHeaderValue {
 		return false
 	}
+	// Segments are compared with jsonFoldKey (SEC906 fix round, F1): the
+	// config loader binds "HEADERS" or "Tools" to the same fields as the
+	// lowercase spelling, so an exact comparison let a case variant through.
+	// Over-matching can only refuse a write.
 	segs := strings.Split(p, ".")
-	if len(segs) < 4 || segs[0] != "tools" || segs[1] != "mcp" || segs[2] != "servers" {
+	if len(segs) < 4 ||
+		jsonFoldKey(segs[0]) != jsonFoldKey("tools") ||
+		jsonFoldKey(segs[1]) != jsonFoldKey("mcp") ||
+		jsonFoldKey(segs[2]) != jsonFoldKey("servers") {
 		return false
 	}
 	for _, seg := range segs[3 : len(segs)-1] {
-		if seg == "headers" {
+		if jsonFoldKey(seg) == jsonFoldKey("headers") {
 			return true
 		}
 	}
 	return false
+}
+
+// errAmbiguousConfigKey reports a PUT /api/v1/config body that spells one
+// MCP config field twice (for example "servers" and "SERVERS" in one object).
+var errAmbiguousConfigKey = errors.New("ambiguous key spelling")
+
+// canonicalizeFoldKey renames, in place, the one key of m that encoding/json
+// would bind to the field named canonical (jsonFoldKey equality) to that
+// canonical spelling, and returns its value and whether it was present. Two keys that
+// both fold to canonical are ambiguous — which one the config loader keeps
+// depends on key order — and return errAmbiguousConfigKey.
+func canonicalizeFoldKey(m map[string]any, canonical string) (any, bool, error) {
+	want := jsonFoldKey(canonical)
+	found := ""
+	for k := range m {
+		if jsonFoldKey(k) != want {
+			continue
+		}
+		if found != "" {
+			return nil, false, fmt.Errorf("%w: %q and %q name the same setting", errAmbiguousConfigKey, found, k)
+		}
+		found = k
+	}
+	if found == "" {
+		return nil, false, nil
+	}
+	v := m[found]
+	if found != canonical {
+		delete(m, found)
+		m[canonical] = v
+	}
+	return v, true, nil
+}
+
+// canonicalizeMCPConfigKeys rewrites the nested tools / mcp / servers keys and
+// each server's headers / header_refs keys of a decoded PUT /api/v1/config
+// body to their canonical config.json spelling (SEC906 fix round, F1 and F2).
+//
+// config.json is loaded with encoding/json, which binds object keys to struct
+// fields case-insensitively: {"tools":{"mcp":{"servers":{"s1":{"HEADERS":…}}}}}
+// fills MCPServerConfig.Headers exactly like "headers". The MCP guards and the
+// header_refs preservation below navigate the canonical lowercase keys, so
+// without this step a case variant slipped a literal header value past the
+// #638 refusal, and a "SERVERS" map dropped the stored header refs of the
+// servers it kept. Canonicalizing once, before every MCP guard, makes each of
+// them see what the loader will read, and saves canonical keys only. Server
+// names and header names are map keys (matched exactly by the loader) and are
+// left alone. Dot-path keys are not rewritten here: the loader never splits
+// them, and the dot-path guards fold their segments themselves.
+func canonicalizeMCPConfigKeys(body map[string]any) error {
+	toolsV, _, err := canonicalizeFoldKey(body, "tools")
+	if err != nil {
+		return err
+	}
+	tools, ok := toolsV.(map[string]any)
+	if !ok {
+		return nil
+	}
+	mcpV, _, err := canonicalizeFoldKey(tools, "mcp")
+	if err != nil {
+		return err
+	}
+	mcp, ok := mcpV.(map[string]any)
+	if !ok {
+		return nil
+	}
+	serversV, _, err := canonicalizeFoldKey(mcp, "servers")
+	if err != nil {
+		return err
+	}
+	servers, ok := serversV.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, srv := range servers {
+		srvMap, ok := srv.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, _, err := canonicalizeFoldKey(srvMap, "headers"); err != nil {
+			return err
+		}
+		if _, _, err := canonicalizeFoldKey(srvMap, mcpHeaderRefsKey); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // mcpHeaderRefsKey is the config.json key of config.MCPServerConfig.HeaderRefs.
@@ -604,20 +698,13 @@ func preserveMCPServerHeaderRefs(m map[string]any, refs map[string]any) {
 	}
 }
 
-// dropRedactedMCPServerHeaderValues removes placeholder header entries
-// (exactly redactedHeaderValue) from tools.mcp.servers.<name>.headers in a
-// decoded PUT /api/v1/config body, deleting the headers key once empty. The
-// companion to findLiteralMCPServerHeaderValue: a whole-config read-modify-
-// write round-trip (GET /config → PUT) always carries the placeholders GET
-// served, and persisting them would replace nothing but put literal
-// "[redacted]" junk into config.json — the live secret lives under
-// header_refs and must stay there untouched.
-func dropRedactedMCPServerHeaderValues(v any) {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return
-	}
-	for _, srv := range mcpServersSection(m) {
+// snapshotMCPServerLiteralHeaders returns the stored literal header values
+// (non-empty strings other than redactedHeaderValue) of every
+// tools.mcp.servers.<name>.headers in the on-disk config map, keyed by server
+// name, then header name. Used by resolveRedactedMCPServerHeaderValues.
+func snapshotMCPServerLiteralHeaders(m map[string]any) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for name, srv := range mcpServersSection(m) {
 		srvMap, ok := srv.(map[string]any)
 		if !ok {
 			continue
@@ -627,7 +714,44 @@ func dropRedactedMCPServerHeaderValues(v any) {
 			continue
 		}
 		for h, hv := range headers {
-			if s, ok := hv.(string); ok && s == redactedHeaderValue {
+			if s, ok := hv.(string); ok && s != "" && s != redactedHeaderValue {
+				if out[name] == nil {
+					out[name] = map[string]string{}
+				}
+				out[name][h] = s
+			}
+		}
+	}
+	return out
+}
+
+// resolveRedactedMCPServerHeaderValues resolves every redaction placeholder
+// (exactly redactedHeaderValue) under tools.mcp.servers.<name>.headers of a
+// decoded, canonicalized PUT /api/v1/config body (the whole body, so the
+// nested tools → mcp → servers walk matches its shape; SEC906 fix round, F4).
+// A whole-config read-modify-write round trip (GET /config → PUT) carries the
+// placeholders GET served, and the placeholder means "unchanged": when stored
+// holds a value for that server and header, it is put back; otherwise the
+// entry is removed, so "[redacted]" never becomes an active header value. A
+// headers map left empty is deleted. Ref-backed credentials live under
+// header_refs and are carried by preserveMCPServerHeaderRefs, not here.
+func resolveRedactedMCPServerHeaderValues(body map[string]any, stored map[string]map[string]string) {
+	for name, srv := range mcpServersSection(body) {
+		srvMap, ok := srv.(map[string]any)
+		if !ok {
+			continue
+		}
+		headers, ok := srvMap["headers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for h, hv := range headers {
+			if s, ok := hv.(string); !ok || s != redactedHeaderValue {
+				continue
+			}
+			if prev, ok := stored[name][h]; ok {
+				headers[h] = prev
+			} else {
 				delete(headers, h)
 			}
 		}
@@ -1079,6 +1203,16 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SEC906 fix round (F1, F2): bring every spelling the config loader binds
+	// to tools / mcp / servers / headers / header_refs to its canonical key
+	// before the MCP guards below, so they judge exactly what the loader will
+	// read, and the merge saves canonical keys only. Two spellings of one of
+	// these fields in the same object are refused as ambiguous.
+	if err := canonicalizeMCPConfigKeys(typedBody); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Issue #638: a literal value under tools.mcp.servers.<name>.headers is a
 	// request credential; the generic config write must never persist it. The
 	// dedicated MCP routes are the only sanctioned writers — they route the
@@ -1143,18 +1277,18 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		// them, and the guard above refuses them in a body) — carry them
 		// across the merge for servers that still exist.
 		headerRefs := snapshotMCPServerHeaderRefs(m)
-		for k, v := range updates {
-			var parsed any
-			if err := json.Unmarshal(v, &parsed); err != nil {
-				return fmt.Errorf("invalid value for %q: %w", k, err)
-			}
-			// Issue #638: strip GET round-trip placeholders from any
-			// tools.mcp.servers.<name>.headers in this write, so a
-			// whole-config read-modify-write never persists "[redacted]" as a
-			// literal (the live value stays under header_refs). Runs after the
-			// literal-value guard above, so anything still standing here is a
-			// placeholder or an empty string.
-			dropRedactedMCPServerHeaderValues(parsed)
+		// Issue #638 / SEC906 fix round F4: resolve GET round-trip
+		// placeholders under tools.mcp.servers.<name>.headers on the whole
+		// body (the shape the walk expects), so "[redacted]" is never saved
+		// as a header value: it keeps the stored value, or is dropped. Runs
+		// after the literal-value guard above, so anything else still
+		// standing there is an empty string.
+		resolveRedactedMCPServerHeaderValues(typedBody, snapshotMCPServerLiteralHeaders(m))
+		// The merge reads the canonicalized typedBody (canonicalizeMCPConfigKeys),
+		// not the raw top-level updates, so the keys the guards judged are
+		// the keys that are saved. Both decode each value with json.Unmarshal
+		// into any, so values are unchanged.
+		for k, parsed := range typedBody {
 			// Deep merge maps; replace scalars/arrays.
 			if existingMap, ok := m[k].(map[string]any); ok {
 				if newMap, ok := parsed.(map[string]any); ok {

@@ -226,6 +226,8 @@ Server tools carry the server's name, so you can tell where a tool came from. In
 
 From a script, `GET /api/v1/mcp-servers` answers to the gateway's command-line token (sent as `Authorization: Bearer <token>`) as well as to a signed-in session; without either it answers 401.
 
+Request headers for a network-address server, such as `Authorization`, are stored encrypted in the credential vault, not in `config.json`. Set or change them in the server's dialog, or with `POST` or `PATCH /api/v1/mcp-servers`. The general configuration endpoint, `PUT /api/v1/config`, refuses header values and does not return them; see [settings](settings.md#connected-server-headers-and-the-general-configuration-endpoint).
+
 ### Loaded tools stay with the conversation
 
 When an agent loads a tool on demand, its definition stays advertised for that

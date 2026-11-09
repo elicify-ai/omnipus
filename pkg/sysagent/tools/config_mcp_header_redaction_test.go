@@ -155,3 +155,67 @@ func TestConfigGet_MCPHeaderRefs_NotReturned(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigGet_MCPAncestorRead_ReturnsRequestedSubtree is the SEC906 fix-round
+// F3 regression (security review 45e960009): get_config's value is the subtree
+// AT the requested key. An ancestor read ("tools", "tools.mcp") must return
+// that ancestor, with its sibling settings and the nested mcp/servers levels,
+// and only redact the header values inside it; it must never replace the
+// answer with the deeper servers map. Derived from the reviewer's reproduction
+// (sec906-review-probes/sysagent_proofs_test.go) and get_config's key/value
+// contract.
+func TestConfigGet_MCPAncestorRead_ReturnsRequestedSubtree(t *testing.T) {
+	cases := []struct {
+		key     string
+		sibling string // a non-server field that lives next to the MCP level
+	}{
+		{key: "tools", sibling: "exec"},
+		{key: "tools.mcp", sibling: "discovery"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			deps, cfg := newTestDeps(t)
+			seedMCPLiteralHeader(cfg)
+
+			result := systools.NewConfigGetTool(deps).Execute(context.Background(), map[string]any{"key": tc.key})
+
+			if result.IsError {
+				t.Fatalf("read %s: %s", tc.key, result.ForLLM)
+			}
+			if strings.Contains(result.ForLLM, ancestorLeakSecret) {
+				t.Fatalf("secret escaped from %s read: %s", tc.key, result.ForLLM)
+			}
+			got := parseSuccess(t, result.ForLLM)
+			value, ok := got["value"].(map[string]any)
+			if !ok {
+				t.Fatalf("value must be an object: %s", result.ForLLM)
+			}
+			if _, present := value[tc.sibling]; !present {
+				t.Fatalf("%s read lost its sibling field %q; the value is not the requested subtree: %s",
+					tc.key, tc.sibling, result.ForLLM)
+			}
+			mcp := value
+			if tc.key == "tools" {
+				mcp, ok = value["mcp"].(map[string]any)
+				if !ok {
+					t.Fatalf("tools read lost the mcp child: %s", result.ForLLM)
+				}
+			}
+			servers, ok := mcp["servers"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s read lost the servers level: %s", tc.key, result.ForLLM)
+			}
+			remote, ok := servers["remote"].(map[string]any)
+			if !ok {
+				t.Fatalf("server remote must remain visible: %s", result.ForLLM)
+			}
+			headers, ok := remote["headers"].(map[string]any)
+			if !ok {
+				t.Fatalf("server remote must keep its header names: %s", result.ForLLM)
+			}
+			if headers["Authorization"] != "[REDACTED]" {
+				t.Fatalf("Authorization must be served redacted, got %v", headers["Authorization"])
+			}
+		})
+	}
+}

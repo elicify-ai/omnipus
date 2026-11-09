@@ -329,6 +329,24 @@ Three protections are fixed in the code on purpose. They guard against malformed
 - When it checks who may steer a session, it climbs at most **64** ancestors — again a guard against a corrupt or looping chain, far beyond any real delegation depth.
 - The side panel holds at most **50** pending status updates for children whose "started" signal has not arrived yet, so a gap in the stream cannot grow memory without bound.
 
+## Connected-server headers and the general configuration endpoint
+
+A connected (MCP) server reached over a network address can send extra request headers, such as `Authorization: Bearer …`. A header value is treated as a credential. Set or change headers only in **Skills & Tools → MCP Servers**, or from a script with `POST` or `PATCH /api/v1/mcp-servers`. Those routes store each value encrypted in the credential vault; `config.json` keeps only an internal pointer to it.
+
+The general configuration endpoint, `PUT /api/v1/config`, protects these headers:
+
+| What you send | What happens |
+|---|---|
+| A real header value under `tools.mcp.servers.<name>.headers` | Refused with status 403 and a message pointing to `/api/v1/mcp-servers`. Nothing in that body is saved. This holds for every way of writing the key: nested objects, dotted keys such as `"tools.mcp.servers.s1.headers.Authorization"`, and any letter case, such as `Headers` or `SERVERS` |
+| The internal header pointers (`header_refs`) | Refused with status 403 in any shape or letter case. They are never returned by `GET /api/v1/config` either |
+| The placeholder `[redacted]` as a header value | Accepted. `GET /api/v1/config` shows a header value kept in `config.json` (for example from an older install) as `[redacted]` and leaves out headers stored in the vault, so a script that reads the configuration and saves it back sends the placeholder. It means "unchanged": a value saved earlier stays as it is, and the placeholder itself is never saved as a header |
+| A server without its headers, for example a read-modify-write that changes only `enabled` | Accepted. The server keeps its stored header credentials. Removing the server removes them too |
+| The same setting spelled twice in one object, for example both `servers` and `SERVERS` | Refused with status 400. Nothing is saved, because it is unclear which spelling should win |
+
+Keys are saved in their standard lower-case spelling. A body that writes `"TOOLS"` or `"Servers"` is saved as `tools` and `servers`.
+
+Agents read the same section through the `get_config` tool. A read of `tools`, `tools.mcp` or a server returns that section with each server, and any header kept in `config.json` with its value replaced by `[REDACTED]`; the internal pointers are left out, and a read that asks for them directly is refused. Agents cannot change the MCP section with `set_config`; they use the MCP server tools (see [tools](tools.md#tools-from-connected-servers)).
+
 ## Limits and things to watch
 
 - Usage is measured in tokens. If a provider bill surprises you, the Usage screen tells you which agent and which model drove it, not what it cost.
