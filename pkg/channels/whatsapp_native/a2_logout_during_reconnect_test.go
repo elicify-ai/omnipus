@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,6 +48,20 @@ import (
 //  3. the state must match what case (a) leaves: same running flag, same reason,
 //     same stored-device outcome.
 //
+// Round 12 adds a fourth clause (CHECK4 finding F1, the round-12 brief from
+// team-lead): the logout is handled once. Clauses 1-3 look at the end state, and
+// a second repair attempt for the same logout fails exactly as the first one
+// does (open issue #1705: the attempt always ends start_failed), so it leaves
+// that state unchanged and no end-state clause can see it. CHECK4's mutant
+// "handle logout twice" (endReconnect runs the logout handling a second time)
+// ran two real repair attempts and every clause above stayed green. Clause 4
+// therefore counts what the logout did, against case (a) counted the same way:
+//
+//	4a. the repair attempts the logout started (distinct attempt ids on the
+//	    manager's attempt observer) and the repair attempts the manager's
+//	    attempt store admitted;
+//	4b. the pairing events those attempts reported, in order.
+//
 // The user documentation says the same in words (docs/connectors/whatsapp_native.md,
 // "After pairing": after a phone logout "reconnecting cannot repair the link").
 //
@@ -56,7 +71,11 @@ import (
 // test, on its own fixture, and the outcome it leaves is the expectation for
 // case (b). Case (a) additionally pins two properties of itself (the device is
 // removed from the store; no re-established text) so the baseline is known to
-// be a real logout outcome and not an empty one.
+// be a real logout outcome and not an empty one. Clause 4 follows the same
+// rule: nothing is written down for case (b). Case (a) pins that one logout
+// starts exactly one repair attempt (the round-12 brief names two attempts for
+// one logout as the defect) and that the attempt store admitted it, so the
+// counts compared are real counts and not two zeros.
 //
 // Cases.
 //
@@ -72,8 +91,11 @@ import (
 // availability state and reason the manager reports (the only status surface
 // that carries a reason), the channel's own NotRunningReason, the connect
 // attempts made after the logout, whether the reconnect/repair flag is still
-// set, and the linked devices left in the on-disk store (read after the
-// channel has stopped, so no writer and no reader overlap).
+// set, the repair attempts the logout started, the pairing events they
+// reported and the admissions the attempt store accepted (all three read before
+// the channel stops, because a stop reports events of its own), and the linked
+// devices left in the on-disk store (read after the channel has stopped, so no
+// writer and no reader overlap).
 //
 // Fixture wiring. The production factory (init.go) sets the channel's
 // originConfig to its config snapshot; the bare test fixture leaves it nil, and
@@ -86,19 +108,27 @@ import (
 // refused dial that opens the failing window; the stored-device reader sees
 // the seeded device in a fresh store; before the logout the failing window
 // shows the re-established text, so a change after it is the logout's doing;
-// the loop is running (c.reconnecting) when the logout is delivered.
+// the loop is running (c.reconnecting) when the logout is delivered; the pairing
+// recorder sees the idle logout's one repair attempt and the attempt store
+// admits it (case (a) pins both), so equal counts in the two cases are not two
+// unread zeros.
 //
 // What would break this (mutations for CHECK): keep dropping the logout while
 // c.reconnecting is set (this test is red today); handle the logout but leave
 // reconnectFailing set (the reason clauses fail); stop the dials but leave the
 // device in the store (the stored-device clause fails); delete the device but
-// let the loop dial once more (the dial clause fails).
+// let the loop dial once more (the dial clause fails); run the logout handling
+// a second time after the loop's hand-off, CHECK4's "handle logout twice"
+// (clauses 1-3 stay green, clause 4 fails; the round-12 report shows the run).
 //
 // Known gaps, deliberately not covered here: the loop asleep in its backoff
 // wait when the logout arrives; the logout that arrives during the reconnect's
 // own dial (OnConnect true); the library's own store deletion on a logout
 // (connectionevents.go deletes the store itself in both logout paths, which
-// this test does not simulate); a Stop racing the logout.
+// this test does not simulate); a Stop racing the logout; a duplicate that
+// neither admits an attempt nor reports an event (a second Disconnect or store
+// delete is idempotent and leaves no trace at this level); a duplicate that
+// lands later than the quiet window.
 //
 // What the baseline (a) leaves for the running flag and the availability state
 // is observed at run time, not assumed; see the round-11 report for what it was.
@@ -171,6 +201,89 @@ type a2Outcome struct {
 	dialsSince    int32  // connect attempts made after the logout was delivered
 	loopActive    bool   // the reconnect/repair flag (c.reconnecting) is still set
 	storedDevices int    // linked devices left in the on-disk store
+	repairs       a2Repairs
+}
+
+// a2Repairs counts what a logout's handling did to the pairing machinery. The
+// end state cannot show it: a second repair attempt for the same logout fails
+// like the first one (open issue #1705) and leaves the same state behind.
+type a2Repairs struct {
+	// attempts is the number of distinct pairing attempts that reported an event
+	// after the logout.
+	attempts int
+	// events is those events in order, "<status>: <message>". Attempt ids and QR
+	// codes are left out: they differ on every run.
+	events []string
+	// admissions is the number of repair attempts the manager's attempt store
+	// admitted after the logout.
+	admissions uint64
+}
+
+// a2PairingEvent is one pairing event as the manager's attempt observer gets it.
+type a2PairingEvent struct {
+	channelID string
+	attemptID string
+	status    channels.PairingStatus
+	message   string
+}
+
+// a2PairingRecorder is the manager's pairing-attempt observer. It keeps, in
+// order, every pairing event a channel reports through the manager, which is the
+// stream the gateway turns into the whatsapp_pairing frames the SPA shows. The
+// QR payload is not kept.
+type a2PairingRecorder struct {
+	mu     sync.Mutex
+	events []a2PairingEvent
+}
+
+func (r *a2PairingRecorder) record(channelID, attemptID string, status channels.PairingStatus, _, message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, a2PairingEvent{channelID: channelID, attemptID: attemptID, status: status, message: message})
+}
+
+func (r *a2PairingRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.events)
+}
+
+// after returns a copy of the events recorded after the first skip ones.
+func (r *a2PairingRecorder) after(skip int) []a2PairingEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]a2PairingEvent(nil), r.events[skip:]...)
+}
+
+// a2AdmissionStamp is the generation stamp of the latest pairing attempt the
+// manager's attempt store holds for the channel, zero while it holds none. The
+// store advances its stamp once for every repair it admits
+// (pairing_attempts.go::ActivateRepair), so the difference between two readings
+// counts the admissions between them while nothing else touches the store.
+func a2AdmissionStamp(m *channels.Manager) uint64 {
+	latest, ok := m.PairingAttempts().Latest(a2Instance)
+	if !ok {
+		return 0
+	}
+	return latest.Generation
+}
+
+// a2WatchRepairs marks the moment before the logout is delivered and returns
+// the reader of what the logout's handling did to the pairing machinery since.
+func a2WatchRepairs(rec *a2PairingRecorder, m *channels.Manager) func() a2Repairs {
+	mark, stamp0 := rec.count(), a2AdmissionStamp(m)
+	return func() a2Repairs {
+		attempts := make(map[string]struct{})
+		events := make([]string, 0)
+		for _, ev := range rec.after(mark) {
+			if ev.channelID != a2Instance {
+				continue
+			}
+			attempts[ev.attemptID] = struct{}{}
+			events = append(events, string(ev.status)+": "+ev.message)
+		}
+		return a2Repairs{attempts: len(attempts), events: events, admissions: a2AdmissionStamp(m) - stamp0}
+	}
 }
 
 // a2StoredDevices counts the linked devices in the store file under storeDir.
@@ -195,8 +308,9 @@ func a2WireLikeTheFactory(ch *WhatsAppNativeChannel) {
 }
 
 // a2RegisterWithManager registers the channel on a real manager, whose
-// Availability is the only status surface that carries a reason.
-func a2RegisterWithManager(t *testing.T, ch *WhatsAppNativeChannel) *channels.Manager {
+// Availability is the only status surface that carries a reason, and returns the
+// recorder that receives every pairing event the channel reports through it.
+func a2RegisterWithManager(t *testing.T, ch *WhatsAppNativeChannel) (*channels.Manager, *a2PairingRecorder) {
 	t.Helper()
 	mb := bus.NewMessageBus()
 	t.Cleanup(mb.Close)
@@ -207,8 +321,12 @@ func a2RegisterWithManager(t *testing.T, ch *WhatsAppNativeChannel) *channels.Ma
 	t.Cleanup(cancelStart)
 	require.NoError(t, m.StartAll(startCtx))
 	t.Cleanup(func() { _ = m.StopAll(context.Background()) })
+	// The observer goes in before the channel does: the manager hands it to a
+	// channel only at the moment it wires that channel in.
+	rec := &a2PairingRecorder{}
+	m.SetPairingAttemptObserver(rec.record)
 	m.RegisterChannel(a2Instance, ch)
-	return m
+	return m, rec
 }
 
 // a2DeliverLogout hands the channel a phone-initiated logout through the
@@ -245,8 +363,9 @@ func a2Await(bound time.Duration, cond func() bool) bool {
 }
 
 // a2Measure records the channel's state, then stops the channel so the store
-// file can be read with no writer open.
-func a2Measure(t *testing.T, f *nativeFixture, m *channels.Manager, dialsSince func() int32) a2Outcome {
+// file can be read with no writer open. The repair counts are read with the rest
+// of the state, before the stop, because a stop reports pairing events of its own.
+func a2Measure(t *testing.T, f *nativeFixture, m *channels.Manager, dialsSince func() int32, repairsSince func() a2Repairs) a2Outcome {
 	t.Helper()
 	avail := m.Availability(a2Instance)
 	out := a2Outcome{
@@ -256,6 +375,7 @@ func a2Measure(t *testing.T, f *nativeFixture, m *channels.Manager, dialsSince f
 		ownReason:   f.ch.NotRunningReason(),
 		dialsSince:  dialsSince(),
 		loopActive:  w2ReconnectingUnderLock(f.ch),
+		repairs:     repairsSince(),
 	}
 	stopCtx, cancelStop := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelStop()
@@ -263,6 +383,7 @@ func a2Measure(t *testing.T, f *nativeFixture, m *channels.Manager, dialsSince f
 	out.storedDevices = a2StoredDevices(t, f.ch.storePath)
 	t.Logf("outcome: running=%v availability=%s/%q ownReason=%q dialsSince=%d loopActive=%v storedDevices=%d",
 		out.running, out.availState, out.availReason, out.ownReason, out.dialsSince, out.loopActive, out.storedDevices)
+	t.Logf("repairs: attempts=%d admissions=%d events=%q", out.repairs.attempts, out.repairs.admissions, out.repairs.events)
 	return out
 }
 
@@ -274,16 +395,17 @@ func a2RunIdleLogout(t *testing.T) a2Outcome {
 	refused := a2NewDialCounter(t)
 	captured.SetProxy(http.ProxyURL(refused.proxyURL))
 	a2WireLikeTheFactory(f.ch)
-	m := a2RegisterWithManager(t, f.ch)
+	m, rec := a2RegisterWithManager(t, f.ch)
 	require.True(t, f.ch.IsRunning(), "instrument: the linked channel is running before the logout")
 	require.False(t, w2ReconnectingUnderLock(f.ch), "instrument: no reconnect runs when the logout arrives")
 	before := refused.total(server)
+	repairsSince := a2WatchRepairs(rec, m)
 
 	a2DeliverLogout(t, f.ch)
 	settled := a2Await(a2SettleBound, func() bool { return !w2ReconnectingUnderLock(f.ch) })
 	time.Sleep(a2QuietWindow)
 	t.Logf("case (a): settled=%v before the quiet window", settled)
-	return a2Measure(t, f, m, func() int32 { return refused.total(server) - before })
+	return a2Measure(t, f, m, func() int32 { return refused.total(server) - before }, repairsSince)
 }
 
 // a2RunLogoutDuringReconnect is case (b): a logout while the reconnect loop is
@@ -295,7 +417,7 @@ func a2RunLogoutDuringReconnect(t *testing.T) a2Outcome {
 	refused := a2NewDialCounter(t)
 	captured.SetProxy(http.ProxyURL(refused.proxyURL))
 	a2WireLikeTheFactory(f.ch)
-	m := a2RegisterWithManager(t, f.ch)
+	m, rec := a2RegisterWithManager(t, f.ch)
 
 	w7EnterFailingReconnectWindow(t, f, captured, remote)
 	require.GreaterOrEqual(t, refused.accepts.Load(), int32(1),
@@ -313,6 +435,7 @@ func a2RunLogoutDuringReconnect(t *testing.T) a2Outcome {
 	}
 	require.True(t, w2ReconnectingUnderLock(f.ch), "instrument: the reconnect loop is running when the logout arrives")
 	before := refused.total(server)
+	repairsSince := a2WatchRepairs(rec, m)
 
 	a2DeliverLogout(t, f.ch)
 	release() // the loop now has its chance to act
@@ -321,7 +444,7 @@ func a2RunLogoutDuringReconnect(t *testing.T) a2Outcome {
 	})
 	time.Sleep(a2QuietWindow)
 	t.Logf("case (b): settled=%v before the quiet window", settled)
-	return a2Measure(t, f, m, func() int32 { return refused.total(server) - before })
+	return a2Measure(t, f, m, func() int32 { return refused.total(server) - before }, repairsSince)
 }
 
 // TestLogout_ArrivingDuringAReconnectEndsInTheSameStateAsAnIdleLogout is the
@@ -344,6 +467,14 @@ func TestLogout_ArrivingDuringAReconnectEndsInTheSameStateAsAnIdleLogout(t *test
 			"case (a): the availability reason after an idle logout must not say the connection is being re-established")
 		assert.NotContains(t, strings.ToLower(idle.ownReason), a2ReconnectPhrase,
 			"case (a): the channel's own reason after an idle logout must not say the connection is being re-established")
+		// Instruments for clause 4 (round 12). One logout starts one repair
+		// attempt; two attempts for one logout is the defect CHECK4 found (F1).
+		// The pins also show the recorder and the attempt store read real
+		// activity, so equal counts in case (b) are not two unread zeros.
+		assert.Equal(t, 1, idle.repairs.attempts,
+			"case (a): one logout must start exactly one repair attempt on the manager's attempt observer (events seen: %q)", idle.repairs.events)
+		assert.GreaterOrEqual(t, idle.repairs.admissions, uint64(1),
+			"instrument: the manager's attempt store must have admitted the idle logout's repair attempt, or case (b)'s admission count has nothing to be compared with")
 	})
 	if !idleRan {
 		t.Fatal("instrument: case (a) did not complete, so case (b) has no baseline to compare with")
@@ -386,6 +517,22 @@ func TestLogout_ArrivingDuringAReconnectEndsInTheSameStateAsAnIdleLogout(t *test
 		t.Run("clause_3b_stored_device_matches_an_idle_logout", func(t *testing.T) {
 			assert.Equal(t, idle.storedDevices, during.storedDevices,
 				"the stored-device outcome must be what an idle logout leaves (%d linked devices in the store)", idle.storedDevices)
+		})
+
+		// Clause 4 (round 12, CHECK4 F1): the logout is handled once. The end state
+		// cannot show a second repair attempt, so the attempts are counted, against
+		// what an idle logout makes (case (a), counted the same way).
+		t.Run("clause_4a_repair_attempts_match_an_idle_logout", func(t *testing.T) {
+			assert.Equal(t, idle.repairs.attempts, during.repairs.attempts,
+				"the logout must start as many repair attempts as an idle logout does (%d there); events seen here: %q",
+				idle.repairs.attempts, during.repairs.events)
+			assert.Equal(t, idle.repairs.admissions, during.repairs.admissions,
+				"the attempt store must admit as many repair attempts as after an idle logout (%d there)", idle.repairs.admissions)
+		})
+
+		t.Run("clause_4b_pairing_events_match_an_idle_logout", func(t *testing.T) {
+			assert.Equal(t, idle.repairs.events, during.repairs.events,
+				"the pairing events the logout reports must be what an idle logout reports (%q)", idle.repairs.events)
 		})
 	})
 }
