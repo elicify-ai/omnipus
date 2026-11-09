@@ -46,17 +46,16 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const original = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...original,
-    Link: (props: {
+    Link: ({ to, params, search, children, ...rest }: {
       to?: unknown
       params?: Record<string, unknown>
       search?: Record<string, unknown>
       children?: ReactNode
     } & Record<string, unknown>) => {
-      let href = typeof props.to === 'string' ? props.to : ''
-      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      let href = typeof to === 'string' ? to : ''
+      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
       const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      const { to: _to, params: _params, search: _search, children, ...rest } = props
       return (
         <a href={href + qs} {...rest}>
           {children}
@@ -319,5 +318,66 @@ describe('D9 — a repeating schedule with an end date reads run time and zone f
     expect(line.match(/\d{1,2}:\d{2}/g) ?? []).toEqual(['09:00'])
     expect(line).not.toMatch(/ends[^.]*\bat\b/)
     expect(line).toMatch(/ends November 10, 2026\.$/)
+  })
+})
+
+// ── Round 6 / R3-3 — a full stop closes every schedule line, whatever the rule ─────────────────────
+//
+// Team-lead decision (round 6, 2026-11-09): EVERY schedule line ends with a full stop, a once schedule
+// included ("Runs once — <date/time>."). CHECK3 (R3-3, mutant m11) took the full stop off a repeating
+// line that has NO end date and the whole suite stayed green: the D9 rows above pin the end-dated
+// sentence, and the regex rows at the top of this file pin the words of the no-end lines but never their
+// last character. Oracles, none read off the card's output:
+//  - repeating, no end date: D9's sentence form with its end clause removed (D9 puts the end clause
+//    last) — "Repeats … at 09:00 (Auckland time)." — for every frequency the recurrence helper words;
+//  - once: the task detail panel's own string, in the viewer's zone (founder C1 B, taskFormFields.ts::
+//    scheduledTriggerSummary: `Runs once — ${new Date(at).toLocaleString()}`), plus the full stop.
+// The end-dated line keeps its exact D9 pins above (ordering and date example unchanged). The viewer
+// zone is the repo-wide vitest pin (TZ UTC, en-US; vite.config.ts::test.env).
+describe('Round 6 / R3-3 — a full stop closes every schedule line at card level', () => {
+  // Mon 2026-11-09 09:00 Europe/Berlin = 08:00 UTC (a once schedule's instant).
+  const ONCE_AT_MS = Date.UTC(2026, 10, 9, 8, 0, 0)
+
+  function scheduleLineFor(trigger: Record<string, unknown>): string {
+    render(
+      <TaskToolCardBlock
+        toolName="create_task"
+        args={{ title: 'Schedule line', trigger }}
+        result={JSON.stringify({ task_id: 'task_1', status: 'inbox' })}
+        status={{ type: 'complete' }}
+      />,
+    )
+    return (screen.getByTestId('task-tool-schedule').textContent ?? '').trim()
+  }
+
+  it('a once schedule reads "Runs once — <date and time in the viewer zone>." with one closing full stop', () => {
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe('UTC')
+    const line = scheduleLineFor({ type: 'once', config: { at_ms: ONCE_AT_MS, tz: 'Europe/Berlin' } })
+    // Generic invariant first (a single closing full stop, never none and never two), then the exact line.
+    expect(line, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)
+    expect(line).toBe(`Runs once — ${new Date(ONCE_AT_MS).toLocaleString()}.`)
+  })
+
+  it.each([
+    { label: 'daily', rrule: 'FREQ=DAILY' },
+    { label: 'weekly', rrule: 'FREQ=WEEKLY;BYDAY=TU' },
+    { label: 'monthly', rrule: 'FREQ=MONTHLY' },
+    { label: 'yearly', rrule: 'FREQ=YEARLY' },
+  ])('a $label repeating schedule with no end date ends "at 09:00 (Auckland time)." — one closing full stop', ({ rrule }) => {
+    const line = scheduleLineFor({
+      type: 'recurring',
+      config: { rrule, dtstart_ms: DTSTART_AUCKLAND_MS, tz: TRIGGER_ZONE },
+    })
+    expect(line, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)
+    expect(line, 'D9 form: the run time and zone close a line that has no end date').toMatch(/^Repeats .* at 09:00 \(Auckland time\)\.$/)
+  })
+
+  it('control: a repeating schedule WITH an end date still ends with the end date and one full stop', () => {
+    const line = scheduleLineFor({
+      type: 'recurring',
+      config: { rrule: 'FREQ=DAILY;UNTIL=20261111T105959Z', dtstart_ms: Date.UTC(2026, 10, 10, 20, 0, 0), tz: TRIGGER_ZONE },
+    })
+    expect(line, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)
+    expect(line).toBe('Repeats every day at 09:00 (Auckland time), ends November 11, 2026.')
   })
 })

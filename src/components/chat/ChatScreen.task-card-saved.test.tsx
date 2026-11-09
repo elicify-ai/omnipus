@@ -78,17 +78,16 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }),
   useSearch: () => ({}),
-  Link: (props: {
+  Link: ({ to, params, search, children, ...rest }: {
     to?: unknown
     params?: Record<string, unknown>
     search?: Record<string, unknown>
     children?: React.ReactNode
   } & Record<string, unknown>) => {
-    let href = typeof props.to === 'string' ? props.to : ''
-    for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
-    const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+    let href = typeof to === 'string' ? to : ''
+    for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
+    const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
     const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-    const { to: _to, params: _params, search: _search, children, ...rest } = props
     return (
       <a href={href + qs} {...rest}>
         {children}
@@ -489,4 +488,155 @@ describe('Round 5b / Q2 C — a saved task call that names no workspace, on the 
       expect(screen.queryByTestId('tool-call-badge')).toBeNull()
     },
   )
+})
+
+// ── Round 6 / R3-2 — a saved failed call that names a workspace offers "Open tasks" only, on the real ChatScreen ──
+//
+// CHECK3 (R3-2, mutant m08): switching the failure view's calendar link on left every test green,
+// because the calendar-absence checks above sit on calls that name NO workspace, where the card's own
+// workspace guard hides the link whatever the failure view asks for. The accepted failure view is the
+// alert followed by ONE action — dev2-report.md, "Two choices, accepted by the coordinator" (12:59Z):
+// "A failed call shows only 'Open tasks', with no 'Open calendar', even when it names a workspace" —
+// reaffirmed in the CHECK3 dispatch and the round-6 brief. Every call here names workspace_id
+// (create_task and update_task take it as an optional parameter). The rows fail for ANY second
+// action, not just a link with one test id.
+describe('Round 6 / R3-2 — a saved failed task call that names a workspace offers "Open tasks" only, on the real ChatScreen', () => {
+  /** The one action a failed call offers: "Open tasks" at `href`, alone in its group, no calendar link or text anywhere. */
+  function expectOnlyOpenTasksAction(href: string): void {
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', href)
+    const actions = Array.from(open.parentElement?.children ?? []).map((el) => (el.textContent ?? '').trim())
+    expect(actions, 'R3-2: "Open tasks" is the only action a failed call offers').toEqual(['Open tasks'])
+    expect(screen.queryByTestId('task-tool-link-calendar'), 'R3-2: a failed call has no calendar link').toBeNull()
+    expect(screen.queryByText(/open calendar/i), 'R3-2: a failed call says nothing about opening the calendar').toBeNull()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  }
+
+  const NAMED_WORKSPACE_ROWS: Array<{ tool: string; verb: string; params: Record<string, unknown>; reason: string }> = [
+    {
+      tool: 'create_task',
+      verb: 'create',
+      params: { title: 'Weekly report', ...WORKSPACE_ARGS, trigger: RECURRING_TRIGGER },
+      reason: 'agent "agent_zz" is not a member of this workspace.',
+    },
+    {
+      tool: 'update_task',
+      verb: 'update',
+      params: { task_id: 'task_99', title: 'Weekly report', ...WORKSPACE_ARGS },
+      reason: 'task not found: task_99',
+    },
+  ]
+
+  // The places a saved call keeps its reason: the stored error field and a {text} result.
+  const REASON_CARRIERS: Array<{ carrier: string; shape: (reason: string) => { result?: unknown; error?: string } }> = [
+    { carrier: 'the stored error field', shape: (reason) => ({ error: reason }) },
+    { carrier: 'a {text} result', shape: (reason) => ({ result: { text: reason } }) },
+  ]
+  const WITH_REASON_ROWS = NAMED_WORKSPACE_ROWS.flatMap((row) =>
+    REASON_CARRIERS.map((carrier) => ({ ...row, carrier: carrier.carrier, outcome: carrier.shape(row.reason) })),
+  )
+
+  it.each(WITH_REASON_ROWS)(
+    '$tool, reason in $carrier: the D8 sentence, then "Open tasks" alone',
+    async ({ tool, verb, params, reason, outcome }) => {
+      seedSavedCall(tool, params, { status: 'error', ...outcome })
+      await renderScreen()
+      const sentence = screen.getByText(reason, { exact: false })
+      expect(ownText(sentence), 'D8 wording').toBe(`I couldn't ${verb} the task. ${reason}`)
+      expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D7/D8)').not.toBeNull()
+      expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+    },
+  )
+
+  it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', async ({ tool, verb, params }) => {
+    seedSavedCall(tool, params, { status: 'error' })
+    await renderScreen()
+    const sentence = screen.getByText(`I couldn't ${verb} the task, and no reason was given. Try again.`)
+    expect(sentence.closest('[role="alert"]'), 'the sentence sits in the catalogued error region (D5/D7)').not.toBeNull()
+    expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+  })
+
+  it('a structured delegation_denied failure that names a workspace offers "Open tasks" alone', async () => {
+    // Built from the GENERATED DelegationFailure type (asyncapi-types.ts), as in the D5 + D8 describe above.
+    const denial: DelegationFailure = {
+      error: 'delegation_denied',
+      reason: 'Scout is not in your trust set, so you cannot start its task.',
+      policy: 'trust_set',
+      tool: 'run_task',
+      target_agent_id: 'scout',
+    }
+    seedSavedCall('run_task', { task_id: 'task_1', ...WORKSPACE_ARGS }, { status: 'error', result: { ...denial }, error: denial.reason })
+    await renderScreen()
+    const sentence = screen.getByText(denial.reason, { exact: false })
+    expect(ownText(sentence), 'D8 wording').toBe(`I couldn't start the task. ${denial.reason}`)
+    expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+  })
+
+  it('control: the SAME create call, once it succeeded, does offer "Open calendar" — the rows above can see the link', async () => {
+    seedSavedCall(
+      'create_task',
+      { title: 'Weekly report', ...WORKSPACE_ARGS, trigger: RECURRING_TRIGGER },
+      { result: { text: JSON.stringify({ task_id: 'task_1', status: 'inbox' }) } },
+    )
+    await renderScreen()
+    const card = screen.getByTestId('task-tool-card')
+    expect(within(card).getByTestId('task-tool-link-calendar')).toHaveAttribute('href', '/workspaces/ws_1/calendar')
+    expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
+  })
+})
+
+// ── Round 6 / R3-3 — a full stop closes every schedule line, on the real ChatScreen (saved) ─────────
+//
+// Team-lead decision (round 6, 2026-11-09): EVERY schedule line ends with a full stop, a once schedule
+// included ("Runs once — <date/time>."). Oracles, none read off the card's output:
+//  - repeating with an end date: the D9 sentence, verbatim — "Repeats every day at 09:00 (Los Angeles
+//    time), ends November 10, 2026.";
+//  - repeating with no end date: that sentence with its end clause removed (D9 puts the end clause
+//    last) — "Repeats every day at 09:00 (Los Angeles time)."; and the founder's weekly example in the
+//    form the coordinator accepted (dev2-report.md, "Two choices", 12:59Z) — "Repeats every week on
+//    Monday at 09:00 (Berlin time).";
+//  - once: the task detail panel's own string, in the viewer's zone (founder C1 B, taskFormFields.ts::
+//    scheduledTriggerSummary: `Runs once — ${new Date(at).toLocaleString()}`), plus the full stop.
+// The viewer zone is the repo-wide vitest pin (TZ UTC, en-US; vite.config.ts::test.env). The live card
+// and the live-to-saved hand-off are pinned in TaskToolUI.live-wiring and ChatScreen.task-card-live-to-saved.
+describe('Round 6 / R3-3 — a full stop closes every schedule line, saved, on the real ChatScreen', () => {
+  const LA_ZONE = 'America/Los_Angeles'
+  const LA_DTSTART = Date.UTC(2026, 10, 9, 17, 0, 0) // 9 Nov 2026 09:00 in Los Angeles (PST, UTC-8)
+  const SCHEDULE_ROWS: Array<{ label: string; trigger: Record<string, unknown>; line: string }> = [
+    {
+      label: 'a once schedule',
+      trigger: { type: 'once', config: { at_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' } },
+      line: `Runs once — ${new Date(MON_0900_BERLIN_MS).toLocaleString()}.`,
+    },
+    {
+      label: 'a repeating schedule with an end date (the D9 sentence)',
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY;UNTIL=20261111T075959Z', dtstart_ms: LA_DTSTART, tz: LA_ZONE } },
+      line: 'Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026.',
+    },
+    {
+      label: 'a repeating schedule with no end date',
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY', dtstart_ms: LA_DTSTART, tz: LA_ZONE } },
+      line: 'Repeats every day at 09:00 (Los Angeles time).',
+    },
+    {
+      label: "the founder's weekly example (no end date)",
+      trigger: RECURRING_TRIGGER,
+      line: 'Repeats every week on Monday at 09:00 (Berlin time).',
+    },
+  ]
+
+  it.each(SCHEDULE_ROWS)('$label: the saved card line ends with one full stop', async ({ trigger, line }) => {
+    seedSavedCall(
+      'create_task',
+      { title: 'Weekly report', ...WORKSPACE_ARGS, trigger },
+      { result: { text: JSON.stringify({ task_id: 'task_1', status: 'inbox' }) } },
+    )
+    await renderScreen()
+    const schedule = (within(screen.getByTestId('task-tool-card')).getByTestId('task-tool-schedule').textContent ?? '').trim()
+    // Generic invariant first (a single closing full stop, never none and never two), then the exact line.
+    expect(schedule, 'R3-3: one full stop closes the schedule line').toMatch(/[^.]\.$/)
+    expect(schedule).toBe(line)
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
 })

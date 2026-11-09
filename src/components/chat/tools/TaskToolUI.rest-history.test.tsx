@@ -56,17 +56,16 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const original = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...original,
-    Link: (props: {
+    Link: ({ to, params, search, children, ...rest }: {
       to?: unknown
       params?: Record<string, unknown>
       search?: Record<string, unknown>
       children?: ReactNode
     } & Record<string, unknown>) => {
-      let href = typeof props.to === 'string' ? props.to : ''
-      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      let href = typeof to === 'string' ? to : ''
+      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
       const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      const { to: _to, params: _params, search: _search, children, ...rest } = props
       return (
         <a href={href + qs} {...rest}>
           {children}
@@ -327,4 +326,90 @@ describe('Round 5b / Q2 C — a saved task call that names no workspace, on the 
       expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
     },
   )
+})
+
+// ── Round 6 / R3-2 — a saved failed call that names a workspace offers "Open tasks" only, on the REST path ──
+//
+// CHECK3 (R3-2, mutant m08): switching the failure view's calendar link on left every test green,
+// because the calendar-absence checks above sit on calls that name NO workspace, where the card's own
+// workspace guard hides the link whatever the failure view asks for. The accepted failure view is the
+// alert followed by ONE action — dev2-report.md, "Two choices, accepted by the coordinator" (12:59Z):
+// "A failed call shows only 'Open tasks', with no 'Open calendar', even when it names a workspace" —
+// reaffirmed in the CHECK3 dispatch and the round-6 brief. Every call here carries TASK_ARGS, which
+// names workspace_id (create_task and update_task take it as an optional parameter). The rows fail for
+// ANY second action, not just a link with one test id, and they run through the same real path as the
+// R2-1 rows (REST page -> fetchSessionMessages -> rawToToolCall -> renderHistoricalToolCall).
+describe('Round 6 / R3-2 — a saved failed task call that names a workspace offers "Open tasks" only, on the REST path', () => {
+  /** The one action a failed call offers: "Open tasks" at `href`, alone in its group, no calendar link or text anywhere. */
+  function expectOnlyOpenTasksAction(href: string): void {
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', href)
+    const actions = Array.from(open.parentElement?.children ?? []).map((el) => (el.textContent ?? '').trim())
+    expect(actions, 'R3-2: "Open tasks" is the only action a failed call offers').toEqual(['Open tasks'])
+    expect(screen.queryByTestId('task-tool-link-calendar'), 'R3-2: a failed call has no calendar link').toBeNull()
+    expect(screen.queryByText(/open calendar/i), 'R3-2: a failed call says nothing about opening the calendar').toBeNull()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  }
+
+  const NAMED_WORKSPACE_ROWS: Array<{ tool: string; verb: string; reason: string }> = [
+    { tool: 'create_task', verb: 'create', reason: 'agent "agent_zz" is not a member of this workspace.' },
+    { tool: 'update_task', verb: 'update', reason: 'task not found: task_99' },
+  ]
+
+  // The two places a REST page keeps a reason: the call's error field and a {text} result.
+  const REASON_CARRIERS: Array<{ carrier: string; shape: (reason: string) => Partial<WireToolCall> }> = [
+    { carrier: 'the stored error field', shape: (reason) => ({ error: reason }) },
+    { carrier: 'a {text} result', shape: (reason) => ({ result: { text: reason } }) },
+  ]
+  const WITH_REASON_ROWS = NAMED_WORKSPACE_ROWS.flatMap((row) =>
+    REASON_CARRIERS.map((carrier) => ({ ...row, carrier: carrier.carrier, overrides: carrier.shape(row.reason) })),
+  )
+
+  it.each(WITH_REASON_ROWS)(
+    '$tool, reason in $carrier: the D8 sentence, then "Open tasks" alone',
+    async ({ tool, verb, reason, overrides }) => {
+      const tc = await loadThroughRest(wireCall(tool, overrides))
+      renderSaved(tc)
+      expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't ${verb} the task. ${reason}`)
+      expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+    },
+  )
+
+  it.each(NAMED_WORKSPACE_ROWS)('$tool with no reason: the D5 sentence, then "Open tasks" alone', async ({ tool, verb }) => {
+    const tc = await loadThroughRest(wireCall(tool))
+    renderSaved(tc)
+    expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(
+      `I couldn't ${verb} the task, and no reason was given. Try again.`,
+    )
+    expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+  })
+
+  it('a structured delegation_denied failure that names a workspace offers "Open tasks" alone', async () => {
+    // Built from the GENERATED DelegationFailure type (asyncapi-types.ts), as in the D5 describe above.
+    const denial: DelegationFailure = {
+      error: 'delegation_denied',
+      reason: 'Scout is not in your trust set, so you cannot start its task.',
+      policy: 'trust_set',
+      tool: 'run_task',
+      target_agent_id: 'scout',
+    }
+    const tc = await loadThroughRest(wireCall('run_task', { result: { ...denial } }))
+    renderSaved(tc)
+    expect((screen.getByRole('alert').textContent ?? '').trim()).toBe(`I couldn't start the task. ${denial.reason}`)
+    expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+  })
+
+  it('control: the SAME create call, once it succeeded, does offer "Open calendar" — the rows above can see the link', async () => {
+    const tc = await loadThroughRest(
+      wireCall('create_task', {
+        status: 'success',
+        result: { text: JSON.stringify({ task_id: 'task_99', status: 'inbox' }) },
+      }),
+    )
+    renderSaved(tc)
+    const card = screen.getByTestId('task-tool-card')
+    expect(within(card).getByTestId('task-tool-link-calendar')).toHaveAttribute('href', '/workspaces/ws_1/calendar')
+    expect((within(card).getByTestId('task-tool-link-calendar').textContent ?? '').trim()).toBe('Open calendar')
+  })
 })

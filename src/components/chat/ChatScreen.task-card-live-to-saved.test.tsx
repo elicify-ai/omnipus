@@ -120,17 +120,16 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
     ...original,
     useRouter: () => ({ navigate: vi.fn() }),
     useSearch: () => ({}),
-    Link: (props: {
+    Link: ({ to, params, search, children, ...rest }: {
       to?: unknown
       params?: Record<string, unknown>
       search?: Record<string, unknown>
       children?: React.ReactNode
     } & Record<string, unknown>) => {
-      let href = typeof props.to === 'string' ? props.to : ''
-      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      let href = typeof to === 'string' ? to : ''
+      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
       const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      const { to: _to, params: _params, search: _search, children, ...rest } = props
       return (
         <a href={href + qs} {...rest}>
           {children}
@@ -699,4 +698,207 @@ describe('R2-4 / D1 — saved task rows in the virtualized list a modern browser
       })
     },
   )
+})
+
+// ── Round 6 / R3-1 — the call's error field is the ONLY reason (result null), live and saved ─────
+//
+// CHECK3 (R3-1): the refused-call rows above carry the reason in `result` as well as, or instead
+// of, the call's `error`, so dropping the live adapter's hand-over of the recorded error
+// (lib/omnipus-runtime.ts::buildContentParts) left the LIVE row green. A frame can carry the reason
+// in `error` ALONE: the contract allows `result: null` on an error result
+// (contracts/components/schemas/ToolCallResultFrame.yaml) and pkg/gateway/replay.go::
+// buildResultFrame keeps a plain persisted reason in Error without populating Result. D5 names the
+// call's error field as a reason on its own, REST or live. The LIVE row reads that field through the
+// live adapter; the SAVED row it becomes reads it from the baked message through the dispatcher. They
+// are separate tests for the same reason as the D8 pair above; the duplicated-reason rows stay.
+/** A live turn whose update_task came back refused with the reason in the call's error field ALONE (result null). */
+async function startErrorOnlyUpdate(): Promise<void> {
+  seedSession(streamingTurn(), true)
+  await mount()
+  sendFrames([startFrame('update_task', UPDATE_ARGS), resultFrame('update_task', null, 'error', UPDATE_REASON)])
+}
+
+describe('Round 6 / R3-1 — a refused task call whose only reason is the call\'s error field (result null): the live row, and the saved row it becomes', () => {
+  it('update_task, result null + error "task not found: task_99": D8 and the Open tasks link in the LIVE row', async () => {
+    await withVirtualizerMetrics(async () => {
+      await startErrorOnlyUpdate()
+      // Instrument: the live store holds the call as the frame carried it — result null, the reason in `error` alone.
+      expect(useChatStore.getState().sessionsById[SID]?.toolCalls[CALL_ID]).toMatchObject({ status: 'error', result: null, error: UPDATE_REASON })
+
+      const liveText = await screen.findByText(UPDATE_LINE)
+      expectLiveRow(liveText)
+      expect(ownText(liveText), 'R3-1 live wording: the call\'s error field is the reason when result is null (D5/D8)').toBe(UPDATE_SENTENCE)
+      expect(liveText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, live').not.toBeNull()
+      const open = screen.getByTestId('task-tool-link-open')
+      expect((open.textContent ?? '').trim()).toBe('Open tasks')
+      expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
+      expect(screen.queryByText(NO_REASON_RE)).toBeNull()
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    })
+  })
+
+  it('update_task, result null + error: the SAVED row the live row becomes keeps the same D8 sentence and the Open tasks link', async () => {
+    await withVirtualizerMetrics(async () => {
+      await startErrorOnlyUpdate()
+      await screen.findByText(UPDATE_LINE) // the live row exists first
+
+      const watcher = watchForGenericBadge()
+      try {
+        settleTurn()
+        await waitFor(() => {
+          expect(rowOf(screen.getByText(UPDATE_LINE))).toHaveAttribute('data-status', 'complete')
+        })
+        const savedText = screen.getByText(UPDATE_LINE)
+        expectSavedRow(savedText)
+        expect(ownText(savedText), 'R3-1 saved wording (D5/D8)').toBe(UPDATE_SENTENCE)
+        expect(savedText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, saved').not.toBeNull()
+        const open = screen.getByTestId('task-tool-link-open')
+        expect((open.textContent ?? '').trim()).toBe('Open tasks')
+        expect(open).toHaveAttribute('href', WORKSPACE_TASKS_HREF)
+        expect(screen.queryByText(NO_REASON_RE)).toBeNull()
+        expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+        expect(watcher.seen(), 'a generic badge was never added at any point of the hand-off').toBe(false)
+      } finally {
+        watcher.stop()
+      }
+    })
+  })
+})
+
+// ── Round 6 / R3-2 — a refused call that names a workspace offers "Open tasks" only ───────────
+//
+// CHECK3 (R3-2): the accepted failure view is the alert followed by ONE action, "Open tasks"
+// (dev2-report.md, "Two choices, accepted by the coordinator" 12:59Z: "A failed call shows only
+// 'Open tasks', with no 'Open calendar', even when it names a workspace"; reaffirmed in the CHECK3
+// dispatch). The calendar-absence checks above are on calls that name NO workspace, where the
+// card's workspace guard hides the link on its own, so switching the failure view's calendar link
+// on passed unnoticed (CHECK3 mutant m08). update_task takes workspace_id as an optional
+// parameter; UPDATE_ARGS names it. Live row and saved row are separate tests, as above.
+const NO_REASON_UPDATE_SENTENCE = "I couldn't update the task, and no reason was given. Try again."
+
+/** A live turn whose update_task (it names its workspace) came back refused with NO reason anywhere. */
+async function startRefusedUpdateNoReason(): Promise<void> {
+  seedSession(streamingTurn(), true)
+  await mount()
+  sendFrames([startFrame('update_task', UPDATE_ARGS), resultFrame('update_task', '', 'error')])
+}
+
+/** The one action a failed call offers: "Open tasks" at `href`, alone in its group, with no calendar link or text anywhere. */
+function expectOnlyOpenTasksAction(href: string): void {
+  const open = screen.getByTestId('task-tool-link-open')
+  expect((open.textContent ?? '').trim()).toBe('Open tasks')
+  expect(open).toHaveAttribute('href', href)
+  const actions = Array.from(open.parentElement?.children ?? []).map((el) => (el.textContent ?? '').trim())
+  expect(actions, 'R3-2: "Open tasks" is the only action a failed call offers').toEqual(['Open tasks'])
+  expect(screen.queryByTestId('task-tool-link-calendar'), 'R3-2: a failed call has no calendar link').toBeNull()
+  expect(screen.queryByText(/open calendar/i), 'R3-2: a failed call says nothing about opening the calendar').toBeNull()
+}
+
+describe('Round 6 / R3-2 — a refused task call that names a workspace offers "Open tasks" only: the live row, and the saved row it becomes', () => {
+  const STATES: Array<{ label: string; start: () => Promise<void>; locator: RegExp | string; sentence: string }> = [
+    { label: 'a plain-text reason', start: startRefusedUpdate, locator: UPDATE_LINE, sentence: UPDATE_SENTENCE },
+    // The locator is the loose "no reason was given" pattern on purpose: a wrong wording then fails the EXACT
+    // sentence check below with the text that was really rendered, not this lookup with a screen dump.
+    { label: 'no reason', start: startRefusedUpdateNoReason, locator: NO_REASON_RE, sentence: NO_REASON_UPDATE_SENTENCE },
+  ]
+
+  it.each(STATES)('update_task with $label: the LIVE row offers Open tasks only', async ({ start, locator, sentence }) => {
+    await withVirtualizerMetrics(async () => {
+      await start()
+      const liveText = await screen.findByText(locator)
+      expectLiveRow(liveText)
+      expect(ownText(liveText), 'live wording').toBe(sentence)
+      expect(liveText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, live').not.toBeNull()
+      expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    })
+  })
+
+  it.each(STATES)('update_task with $label: the SAVED row the live row becomes offers Open tasks only', async ({ start, locator, sentence }) => {
+    await withVirtualizerMetrics(async () => {
+      await start()
+      await screen.findByText(locator) // the live row exists first
+      settleTurn()
+      await waitFor(() => {
+        expect(rowOf(screen.getByText(locator))).toHaveAttribute('data-status', 'complete')
+      })
+      const savedText = screen.getByText(locator)
+      expectSavedRow(savedText)
+      expect(ownText(savedText), 'saved wording').toBe(sentence)
+      expect(savedText.closest('[role="alert"]'), 'the sentence is in the catalogued error region, saved').not.toBeNull()
+      expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    })
+  })
+})
+
+// ── Round 6 / R3-3 — a full stop closes every schedule line, live and saved ───────────────────
+//
+// Team-lead decision (round 6, 2026-11-09): EVERY schedule line ends with a full stop, a once
+// schedule included ("Runs once — <date/time>."). Oracles, none read off the card:
+//  - repeating with an end date: the D9 sentence, verbatim — "Repeats every day at 09:00 (Los
+//    Angeles time), ends November 10, 2026.";
+//  - repeating with no end date: that sentence with its end clause removed (D9 puts the end clause
+//    last) — "Repeats every day at 09:00 (Los Angeles time).";
+//  - once: the task detail panel's own string, in the viewer's zone (founder C1 B:
+//    `Runs once — ${new Date(at).toLocaleString()}`), plus the full stop.
+// The viewer zone is the repo-wide vitest pin (TZ UTC, en-US; vite.config.ts::test.env). The live
+// card and the saved row it becomes are separate tests, as in the D8 pair above.
+describe('Round 6 / R3-3 — a full stop closes every schedule line, live and saved', () => {
+  const LA_ZONE = 'America/Los_Angeles'
+  const LA_DTSTART = Date.UTC(2026, 10, 9, 17, 0, 0) // 9 Nov 2026 09:00 in Los Angeles (PST, UTC-8)
+  const ROWS: Array<{ label: string; trigger: Record<string, unknown>; line: string }> = [
+    {
+      label: 'a once schedule',
+      trigger: { type: 'once', config: { at_ms: MON_0900_BERLIN_MS, tz: 'Europe/Berlin' } },
+      line: `Runs once — ${new Date(MON_0900_BERLIN_MS).toLocaleString()}.`,
+    },
+    {
+      label: 'a repeating schedule with an end date (the D9 sentence)',
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY;UNTIL=20261111T075959Z', dtstart_ms: LA_DTSTART, tz: LA_ZONE } },
+      line: 'Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026.',
+    },
+    {
+      label: 'a repeating schedule with no end date',
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY', dtstart_ms: LA_DTSTART, tz: LA_ZONE } },
+      line: 'Repeats every day at 09:00 (Los Angeles time).',
+    },
+  ]
+
+  async function startScheduledCreate(trigger: Record<string, unknown>): Promise<void> {
+    seedSession(streamingTurn(), true)
+    await mount()
+    sendFrames([
+      startFrame('create_task', { title: 'Weekly report', workspace_id: 'ws_1', trigger }),
+      resultFrame('create_task', JSON.stringify({ task_id: 'task_1', status: 'inbox' }), 'success'),
+    ])
+  }
+
+  it.each(ROWS)('$label: the LIVE card line ends with one full stop', async ({ trigger, line }) => {
+    await withVirtualizerMetrics(async () => {
+      await startScheduledCreate(trigger)
+      const liveCard = await screen.findByTestId('task-tool-card')
+      expectLiveRow(liveCard)
+      const liveLine = (within(liveCard).getByTestId('task-tool-schedule').textContent ?? '').trim()
+      expect(liveLine, 'R3-3 live: one full stop closes the schedule line').toMatch(/[^.]\.$/)
+      expect(liveLine).toBe(line)
+    })
+  })
+
+  it.each(ROWS)('$label: the SAVED row the live card becomes ends with one full stop', async ({ trigger, line }) => {
+    await withVirtualizerMetrics(async () => {
+      await startScheduledCreate(trigger)
+      await screen.findByTestId('task-tool-card') // the live card exists first
+      settleTurn()
+      await waitFor(() => {
+        expect(rowOf(screen.getByTestId('task-tool-card'))).toHaveAttribute('data-status', 'complete')
+      })
+      const savedCard = screen.getByTestId('task-tool-card')
+      expectSavedRow(savedCard)
+      expect(screen.getAllByTestId('task-tool-card'), 'one card — no live copy left behind').toHaveLength(1)
+      const savedLine = (within(savedCard).getByTestId('task-tool-schedule').textContent ?? '').trim()
+      expect(savedLine, 'R3-3 saved: one full stop closes the schedule line').toMatch(/[^.]\.$/)
+      expect(savedLine).toBe(line)
+    })
+  })
 })

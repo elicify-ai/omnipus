@@ -77,17 +77,16 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const original = await importOriginal<typeof import('@tanstack/react-router')>()
   return {
     ...original,
-    Link: (props: {
+    Link: ({ to, params, search, children, ...rest }: {
       to?: unknown
       params?: Record<string, unknown>
       search?: Record<string, unknown>
       children?: ReactNode
     } & Record<string, unknown>) => {
-      let href = typeof props.to === 'string' ? props.to : ''
-      for (const [k, v] of Object.entries(props.params ?? {})) href = href.replace(`$${k}`, String(v))
-      const searchEntries = Object.entries(props.search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
+      let href = typeof to === 'string' ? to : ''
+      for (const [k, v] of Object.entries(params ?? {})) href = href.replace(`$${k}`, String(v))
+      const searchEntries = Object.entries(search ?? {}).map(([k, v]) => [k, String(v)] as [string, string])
       const qs = searchEntries.length > 0 ? '?' + new URLSearchParams(searchEntries).toString() : ''
-      const { to: _to, params: _params, search: _search, children, ...rest } = props
       return (
         <a href={href + qs} {...rest}>
           {children}
@@ -332,4 +331,135 @@ describe('Round 5b / Q2 C — a live task call that names no workspace', () => {
     expect(open).toHaveAttribute('href', TASKS_INDEX_HREF)
     expect(within(card).queryByTestId('task-tool-link-calendar')).toBeNull()
   })
+})
+
+// ── Round 6 / R3-1 — the call's error field is the ONLY reason (result null) ─────────────────
+//
+// CHECK3 (R3-1): every failing row above supplies the reason in `result` as well as, or instead
+// of, the call's `error` — the gateway's delegation_denied frame carries it in BOTH (result.reason
+// and error), the plain-text row in `result` only — so removing the live adapter's hand-over of
+// the call's recorded error (lib/omnipus-runtime.ts::buildContentParts, the `omnipusToolError`
+// artifact the registered task UI reads) left every row green. A frame can carry the reason in
+// `error` ALONE: the contract allows `result: null` on an error result
+// (contracts/components/schemas/ToolCallResultFrame.yaml) and pkg/gateway/replay.go::
+// buildResultFrame / applyPersistedFailureReason keep a plain persisted reason in Error without
+// populating Result. D5 names the call's error field as a reason on its own, REST or live. The
+// rows below send exactly that frame through the same real chain and pin the D8 sentence, the
+// alert and the task link; the duplicated-reason rows above stay as the realistic controls.
+describe('Round 6 / R3-1 — a live failure whose only reason is the call\'s error field (result null)', () => {
+  const ERROR_ONLY_ROWS: Array<{ tool: string; verb: string; args: Record<string, unknown>; reason: string; href: string }> = [
+    {
+      tool: 'create_task',
+      verb: 'create',
+      args: { title: 'Weekly report', workspace_id: 'ws_1' },
+      reason: 'agent "agent_zz" is not a member of this workspace.',
+      href: WORKSPACE_TASKS_HREF,
+    },
+    {
+      tool: 'update_task',
+      verb: 'update',
+      args: { task_id: 'task_99', title: 'Weekly report', workspace_id: 'ws_1' },
+      reason: 'task not found: task_99',
+      href: WORKSPACE_TASKS_HREF,
+    },
+    {
+      tool: 'run_task',
+      verb: 'start',
+      args: ARGS_REAL_RUN_TASK,
+      reason: 'task "task_99" is blocked on an unmet dependency; it becomes runnable automatically once its blockers complete',
+      href: TASKS_INDEX_HREF,
+    },
+    { tool: 'delete_task', verb: 'delete', args: { task_id: 'task_99' }, reason: 'Task task_99 was already deleted', href: TASKS_INDEX_HREF },
+  ]
+
+  it.each(ERROR_ONLY_ROWS)(
+    '$tool: result null + error = the reason -> the D8 sentence in the alert and the Open tasks link',
+    async ({ tool, verb, args, reason, href }) => {
+      sendFrames([startFrame(tool, args), resultFrame(tool, null, 'error', reason)])
+      // Instrument: the store holds the call exactly as the frame carried it — result null (not
+      // undefined, not a string) and the reason in `error` alone — so what the card shows can
+      // depend on nothing but how the live adapter hands the call's error over.
+      expect(useChatStore.getState().sessionsById[SID]?.toolCalls[CALL_ID]).toMatchObject({ status: 'error', result: null, error: reason })
+
+      await renderLiveThread()
+      const alert = await screen.findByRole('alert')
+      expect(
+        (alert.textContent ?? '').trim(),
+        'R3-1: with result null, the call\'s error field is the reason the card shows (D5/D8)',
+      ).toBe(`I couldn't ${verb} the task. ${reason}`)
+      expectKnownReasonFailure(verb, reason, href)
+    },
+  )
+
+  it('control: the same frame with no error either still gets the no-reason sentence (D5) — the rows above can tell the two apart', async () => {
+    sendFrames([
+      startFrame('update_task', { task_id: 'task_99', title: 'Weekly report', workspace_id: 'ws_1' }),
+      resultFrame('update_task', null, 'error'),
+    ])
+    expect(useChatStore.getState().sessionsById[SID]?.toolCalls[CALL_ID]).toMatchObject({ status: 'error', result: null })
+    await renderLiveThread()
+    const alert = await screen.findByRole('alert')
+    expect((alert.textContent ?? '').trim()).toBe("I couldn't update the task, and no reason was given. Try again.")
+    expect(screen.queryByText(/^I couldn't update the task\. /)).toBeNull()
+  })
+})
+
+// ── Round 6 / R3-2 — a live failed call that names a workspace offers "Open tasks" only ──────
+//
+// CHECK3 (R3-2): the accepted failure view is the alert followed by ONE action, "Open tasks"
+// (dev2-report.md, "Two choices, accepted by the coordinator" 12:59Z: "A failed call shows only
+// 'Open tasks', with no 'Open calendar', even when it names a workspace"; reaffirmed in the
+// CHECK3 dispatch). Every calendar-absence check in this file above is on a call that names NO
+// workspace, where the card's workspace guard hides the link on its own, so switching the failure
+// view's calendar link on passed unnoticed (CHECK3 mutant m08). These rows use calls that DO
+// name a workspace (create_task / update_task take workspace_id as an optional parameter), with
+// a reason and without one.
+describe('Round 6 / R3-2 — a live failed call that names a workspace offers "Open tasks" only', () => {
+  /** The one action a failed call offers: "Open tasks" at `href`, alone in its group, with no calendar link or text anywhere. */
+  function expectOnlyOpenTasksAction(href: string): void {
+    const open = screen.getByTestId('task-tool-link-open')
+    expect((open.textContent ?? '').trim()).toBe('Open tasks')
+    expect(open).toHaveAttribute('href', href)
+    const actions = Array.from(open.parentElement?.children ?? []).map((el) => (el.textContent ?? '').trim())
+    expect(actions, 'R3-2: "Open tasks" is the only action a failed call offers').toEqual(['Open tasks'])
+    expect(screen.queryByTestId('task-tool-link-calendar'), 'R3-2: a failed call has no calendar link').toBeNull()
+    expect(screen.queryByText(/open calendar/i), 'R3-2: a failed call says nothing about opening the calendar').toBeNull()
+  }
+
+  const NAMED_WORKSPACE_ROWS: Array<{ tool: string; verb: string; args: Record<string, unknown>; reason: string }> = [
+    {
+      tool: 'create_task',
+      verb: 'create',
+      args: { title: 'Weekly report', workspace_id: 'ws_1' },
+      reason: 'agent "agent_zz" is not a member of this workspace.',
+    },
+    {
+      tool: 'update_task',
+      verb: 'update',
+      args: { task_id: 'task_99', title: 'Weekly report', workspace_id: 'ws_1' },
+      reason: 'task not found: task_99',
+    },
+  ]
+
+  it.each(NAMED_WORKSPACE_ROWS)(
+    '$tool with a reason: the D8 sentence, then "Open tasks" alone',
+    async ({ tool, verb, args, reason }) => {
+      sendFrames([startFrame(tool, args), resultFrame(tool, reason, 'error')])
+      await renderLiveThread()
+      const alert = await screen.findByRole('alert')
+      expect((alert.textContent ?? '').trim()).toBe(`I couldn't ${verb} the task. ${reason}`)
+      expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+    },
+  )
+
+  it.each(NAMED_WORKSPACE_ROWS)(
+    '$tool with no reason: the D5 sentence, then "Open tasks" alone',
+    async ({ tool, verb, args }) => {
+      sendFrames([startFrame(tool, args), resultFrame(tool, '', 'error')])
+      await renderLiveThread()
+      const alert = await screen.findByRole('alert')
+      expect((alert.textContent ?? '').trim()).toBe(`I couldn't ${verb} the task, and no reason was given. Try again.`)
+      expectOnlyOpenTasksAction(WORKSPACE_TASKS_HREF)
+    },
+  )
 })
