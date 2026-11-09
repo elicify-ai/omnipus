@@ -16,10 +16,11 @@ import (
 // test order. Without it the first office-preview test in a process would run
 // its converter unconfined and any confinement assertion would be vacuous.
 // It fails the test when real Seatbelt is unavailable — it never skips.
-func PrimeKernelSandbox(t *testing.T) {
+// macOS confines only spawned children, so the test continues in this process.
+func PrimeKernelSandbox(t *testing.T) bool {
 	t.Helper()
 	if backend := sandbox.CurrentSeatbeltBackend(); backend != nil && backend.Available() {
-		return
+		return true
 	}
 	backend := sandbox.NewSeatbeltBackend()
 	require.True(t, backend.Available(),
@@ -32,4 +33,5 @@ func PrimeKernelSandbox(t *testing.T) {
 	require.NoError(t, backend.Apply(sandbox.SandboxPolicy{
 		FilesystemRules: []sandbox.PathRule{{Path: base, Access: sandbox.AccessRead | sandbox.AccessWrite | sandbox.AccessExecute}},
 	}), "instrument: the priming Apply must succeed so the preview hooks find an active backend")
+	return true
 }

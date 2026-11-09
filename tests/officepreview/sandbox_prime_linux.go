@@ -4,34 +4,52 @@ package officepreview
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/stretchr/testify/require"
 )
 
-// PrimeKernelSandbox boots a real Landlock backend for this process, the way
-// the gateway boot does, so preview spawns run confined regardless of test
-// order. Without it the first office-preview test in a process would run its
-// converter unconfined and any confinement assertion would be vacuous. It
-// fails the test when Landlock is unavailable — it never skips.
-func PrimeKernelSandbox(t *testing.T) {
+// PrimeKernelSandbox runs the entire confinement-dependent test in a fresh
+// process. Callers must return when it returns false: only the child executes
+// the assertions with a real enforcing backend. Irreversible Landlock policy
+// and process-wide backend state must never contaminate the parent test runner.
+func PrimeKernelSandbox(t *testing.T) bool {
 	t.Helper()
-	if lb := sandbox.CurrentLinuxBackend(); lb != nil && lb.EnforcingChildren() {
-		return
+	const marker = "OMNIPUS_TEST_OFFICEPREVIEW_LANDLOCK_CHILD"
+	if os.Getenv(marker) != t.Name() {
+		self, err := os.Executable()
+		require.NoError(t, err)
+		cmd := exec.Command(self, "-test.v", "-test.count=1", "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+		cmd.Env = append(os.Environ(), marker+"="+t.Name())
+		output, runErr := cmd.CombinedOutput()
+		t.Logf("isolated Landlock test process:\n%s", output)
+		require.NoError(t, runErr, "the isolated process must pass the unchanged confinement assertions")
+		require.Contains(t, string(output), "--- PASS: "+t.Name()+" (",
+			"instrument: the exact child test must have run, not an empty test selection")
+		require.Nil(t, sandbox.CurrentLinuxBackend(), "instrument: only the child installs a backend")
+		require.NoError(t, os.WriteFile(filepath.Join(t.TempDir(), "parent-writable"), []byte("parent"), 0600))
+		null, openErr := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		require.NoError(t, openErr, "instrument: the parent retains /dev/null access")
+		require.NoError(t, null.Close())
+		return false
 	}
+
 	lb, ok := sandbox.NewLinuxBackend()
 	require.True(t, ok,
 		"BLOCKED: Landlock is unavailable on this kernel — required by this row; an unconfined converter proves nothing (spec §3.4 D1, FR-051)")
-	// Apply registers the backend as the process-wide current one and marks it
-	// enforcing; the preview hooks build each spawn's own policy from the
-	// call's confinement, so this render never reaches a converter.
-	base := filepath.Join(t.TempDir(), "prime")
-	require.NoError(t, os.MkdirAll(base, 0o700))
+	// Only the isolated gateway harness gets this broad bootstrap policy so it
+	// can prepare fixtures and orchestrate children. The real preview hooks
+	// still apply each converter's restrictive policy at its locked-thread
+	// spawn; the unchanged confinement and output assertions must still pass.
 	require.NoError(t, lb.Apply(sandbox.SandboxPolicy{
-		FilesystemRules: []sandbox.PathRule{{Path: base, Access: sandbox.AccessRead | sandbox.AccessWrite | sandbox.AccessExecute}},
-	}), "instrument: the priming Apply must succeed so the preview hooks find an enforcing backend")
+		FilesystemRules:  []sandbox.PathRule{{Path: "/", Access: sandbox.AccessRead | sandbox.AccessWrite | sandbox.AccessExecute}},
+		NetworkUnhandled: true,
+	}), "instrument: real enforcing Apply succeeds only in the isolated gateway")
 	require.True(t, lb.EnforcingChildren(),
-		"instrument: the primed backend must report enforcing children, or the hooks disclose an unconfined run")
+		"instrument: the primed backend must enforce the converter policy, or the test is vacuous")
+	return true
 }

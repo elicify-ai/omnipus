@@ -12,17 +12,19 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/preview"
 	"github.com/elicify-ai/omnipus/tests/officepreview"
+	"github.com/elicify-ai/omnipus/tests/officepreview/realprograms"
 	"github.com/stretchr/testify/require"
 )
 
 // T-10 / B-05: real Office conversion, real pdfium/extractor, stale source
 // cache independently checked before conversion. No workbook writeback.
 //
-// The confinement state is made explicit and deterministic: the kernel
-// sandbox is primed HERE, in this order-independent first statement, so the
-// converter always runs confined where the platform supports it — running
-// this test alone used to leave the process unprimed and the converter
-// unconfined, and the test passed while checking nothing about confinement.
+// Check real-program roots before priming, so only the explicitly listed
+// normal-job handover can skip without touching a kernel backend. With roots
+// present, the whole test runs with a real enforcing backend: in an isolated
+// child on Linux, where Landlock is irreversible, or in this process on macOS,
+// where Seatbelt confines only children. An unprimed parent must never run
+// the converter assertions after its isolated child has finished.
 // result.Unconfined must stay empty (an unconfined run is not a pass).
 // The context carries the spec's per-call deadline (preview.CallTimeout, the
 // 120 s the tools use) so a LibreOffice stuck on a startup dialog fails the
@@ -32,7 +34,10 @@ import (
 // look-up issue D8d is ruling on); that is the open spec issue, not this
 // test's defect.
 func TestPreviewOffice_RealStaleFormulaCacheRecalculatesToTwo(t *testing.T) {
-	officepreview.PrimeKernelSandbox(t)
+	realprograms.Roots(t, true, true)
+	if !officepreview.PrimeKernelSandbox(t) {
+		return
+	}
 	source := officepreview.StaleWorkbook(t)
 	zr, err := zip.NewReader(bytes.NewReader(source), int64(len(source)))
 	require.NoError(t, err)
