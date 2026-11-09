@@ -28,12 +28,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 )
 
 // writeScript writes an executable shell script and returns its path.
 func writeScript(t *testing.T, body string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "fakecli")
+	p := filepath.Join(t11combined.TrustedProgramDir(t), "fakecli")
 	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}

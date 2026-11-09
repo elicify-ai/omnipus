@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +52,7 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 	})
 	t.Run("9.2 replacement and 9.6 entered link preserved", func(t *testing.T) {
 		f := t8SettingsAPI(t)
-		dir := t.TempDir()
+		dir := t11combined.TrustedProgramDir(t)
 		program := t8Program(t, dir, "codex-v1", 0o755)
 		link := filepath.Join(dir, "codex")
 		require.NoError(t, os.Symlink(program, link))
@@ -92,7 +93,7 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 	})
 	t.Run("9.21 all rows validate before any save and fixed validation order", func(t *testing.T) {
 		f := t8SettingsAPI(t)
-		program := t8Program(t, t.TempDir(), "codex", 0o755)
+		program := t8Program(t, t11combined.TrustedProgramDir(t), "codex", 0o755)
 		clis := map[string]any{"codex": map[string]any{"path": program, "preset_args": "--model ok"}, "opencode": map[string]any{"path": "relative", "preset_args": "bad\nline"}}
 		body := map[string]any{"clis": clis}
 		f.expectRejected(t, body, "opencode", "path", "cli_path_invalid", "not_absolute", "relative", "The program path for OpenCode was not saved: it must be an absolute path.")
@@ -125,8 +126,8 @@ func TestThirdPartySettings_PathPresetAndPersonOnly(t *testing.T) {
 	})
 	t.Run("9.27 audit old and new path and preset", func(t *testing.T) {
 		f := t8SettingsAPI(t)
-		oldProgram := t8Program(t, t.TempDir(), "codex-old", 0o755)
-		newProgram := t8Program(t, t.TempDir(), "codex-new", 0o755)
+		oldProgram := t8Program(t, t11combined.TrustedProgramDir(t), "codex-old", 0o755)
+		newProgram := t8Program(t, t11combined.TrustedProgramDir(t), "codex-new", 0o755)
 		for _, v := range []struct{ path, preset string }{{oldProgram, "--model prior"}, {newProgram, "--model chosen"}} {
 			w := f.call(t, http.MethodPut, t8SettingsRoute, t8SettingsBody("codex", v.path, v.preset), "person")
 			require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
@@ -175,7 +176,7 @@ func TestThirdPartySettings_D6_Dataset(t *testing.T) {
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			f := t8SettingsAPI(t)
-			dir := t8CanonicalFixtureRoot(t, t.TempDir())
+			dir := t8CanonicalFixtureRoot(t, t11combined.TrustedProgramDir(t))
 			entered := t8Program(t, dir, "program", 0o755)
 			at := entered
 			switch tc.kind {

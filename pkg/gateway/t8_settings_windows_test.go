@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +28,7 @@ func TestThirdPartySettings_D6_WindowsPaths(t *testing.T) {
 	} {
 		t.Run(tc.check+"_"+tc.name, func(t *testing.T) {
 			f := t8SettingsAPI(t)
-			path := filepath.Join(t.TempDir(), tc.name)
+			path := filepath.Join(t11combined.TrustedProgramDir(t), tc.name)
 			// Real on-disk file / NTFS stream: a missing-file rejection must not
 			// stand in for any of the three Windows-specific checks.
 			require.NoError(t, os.WriteFile(path, []byte("T8 path validator fixture"), 0o600))
@@ -37,7 +38,7 @@ func TestThirdPartySettings_D6_WindowsPaths(t *testing.T) {
 	for _, ext := range []string{".exe", ".EXE", ".cmd", ".CMD", ".bat", ".BAT"} {
 		t.Run("accepted-"+ext, func(t *testing.T) {
 			f := t8SettingsAPI(t)
-			path := filepath.Join(t.TempDir(), "program"+ext)
+			path := filepath.Join(t11combined.TrustedProgramDir(t), "program"+ext)
 			require.NoError(t, os.WriteFile(path, []byte("T8 not executed"), 0o600))
 			w := f.call(t, http.MethodPut, t8SettingsRoute, t8SettingsBody("codex", path, ""), "person")
 			require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())

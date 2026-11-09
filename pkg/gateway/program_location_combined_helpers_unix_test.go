@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const t11cRunCheckPattern = `\(([a-z_]+)(?:\)| at )`
+
 func t11cCanonicalDir(t *testing.T) string {
 	t.Helper()
 	p, err := filepath.EvalSymlinks(t11combined.TrustedProgramDir(t))
@@ -80,7 +82,7 @@ func t11cSaveRefused(t *testing.T, f *t8SettingsFixture, program, check, at stri
 	if check == "agent_writable_location" {
 		at = t11CanonicalFailureElement(t, at)
 	}
-	assert.Equal(t, at, (*out.Details)["at"])
+	t8AssertNoProgramPath(t, w.Body.Bytes(), program, at)
 	reasons := map[string]string{
 		"agent_writable_location": "it is inside a folder agents can write to.",
 		"location_unverifiable":   t11combined.LocationUnverifiableReason,
@@ -152,11 +154,15 @@ func t11cRunDecision(t *testing.T, f *t8SettingsFixture, program, wantCheck stri
 		return ""
 	}
 	assert.Empty(t, resolved, "refusal never returns a file to launch")
-	assert.Contains(t, refusal, "("+wantCheck+" at ", "R7: run must name the same independently expected check")
+	assert.Regexp(t, `(?i)claude[ -]code`, refusal, "Q48: keep the program identity")
+	assert.Regexp(t, `\b`+wantCheck+`\b`, refusal, "R7: run must name the same independently expected check")
 	if refusal == "" {
 		return "accepted"
 	}
-	return t11cReadCheck(t, refusal, `\(([a-z_]+) at `)
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		t11bAssertNoProgramDiagnostics(t, refusal, program)
+	})
+	return t11cReadCheck(t, refusal, t11cRunCheckPattern)
 }
 
 func t11cReadCheck(t *testing.T, text, pattern string) string {

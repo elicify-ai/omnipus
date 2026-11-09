@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +42,7 @@ import (
 // an editor or tool round-trip. The planted programs are never launched.
 func TestSharedProgramPath_PortedUnicodeEquivalentSpellingOfForbiddenRoot(t *testing.T) {
 	check, rootsFn := loadT11CLITrust(t)
-	base := t.TempDir()
+	base := t11combined.TrustedProgramDir(t)
 	root := filepath.Join(base, "Caf\u00e9")            // composed NFC: 43 61 66 c3 a9
 	decomposed := filepath.Join(base, "Cafe\u0301")     // canonically equivalent NFD: 43 61 66 65 cc 81
 	decomposedCaps := filepath.Join(base, "CAFE\u0301") // decomposed NFD with case varied: 43 41 46 45 cc 81

@@ -28,8 +28,34 @@ import (
 // CheckFailedText in the implementation under test.
 const t11bCodexNoPath = "This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex."
 
-func t11bMissingProgramText(name, path string) string {
-	return fmt.Sprintf("This agent cannot run: the program set for %s in Settings → Third-party agents does not pass its checks (not_found at %s). A person can fix it there.", name, path)
+func t11bMissingProgramText(name string) string {
+	return fmt.Sprintf("This agent cannot run: the program set for %s in Settings → Third-party agents does not pass its checks (not_found). A person can fix it there.", name)
+}
+
+// Q48 A / wide R5: diagnostic text never carries a checked file, its directory,
+// or OS cause. Keep these checks nonfatal so no-start assertions still run.
+func t11bAssertNoProgramDiagnostics(t *testing.T, text string, paths ...string) {
+	t.Helper()
+	private := []string{"fork/exec"}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		private = append(private, path)
+		if dir := filepath.Dir(path); dir != "." && dir != string(filepath.Separator) {
+			private = append(private, dir)
+		}
+	}
+	r5AssertClean(t, text, private...)
+}
+
+func t11bAssertCLIRefusalCopy(t *testing.T, text string, paths ...string) {
+	t.Helper()
+	t.Run("classified_copy_Q48", func(t *testing.T) {
+		assert.Equal(t, "not allowed: claude-code: check agent_writable_location failed", text,
+			"Q48 / B1 R10: retain the exact failed class, never the failed file/link")
+		t11bAssertNoProgramDiagnostics(t, text, paths...)
+	})
 }
 
 func t11bCodexOnPath(t *testing.T) string {
@@ -91,7 +117,10 @@ func TestPostAgentsExecutorPreview_InvalidSavedPath_RefusedWithRepairMessage(t *
 	require.Equal(t, http.StatusBadRequest, w.Code, "the saved file is rechecked on every preview")
 	var refusal gen.ErrorResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &refusal))
-	assert.Equal(t, t11bMissingProgramText("Codex", program), refusal.Error)
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		assert.Equal(t, t11bMissingProgramText("Codex"), refusal.Error)
+		t11bAssertNoProgramDiagnostics(t, refusal.Error, program)
+	})
 }
 
 // Only the external process edge is faked, so a broken refusal cannot launch a
@@ -164,7 +193,10 @@ func TestPostAgentsExecutorSmokeTest_InvalidSavedPath_RefusedWithRepairMessage(t
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, refusal.Ok)
 	require.NotNil(t, refusal.Error)
-	assert.Equal(t, t11bMissingProgramText("Codex", program), *refusal.Error)
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		assert.Equal(t, t11bMissingProgramText("Codex"), *refusal.Error)
+		t11bAssertNoProgramDiagnostics(t, *refusal.Error, program)
+	})
 	assert.Nil(t, refusal.ResponseText)
 	assert.Equal(t, 1, *calls, "the invalid saved path is refused before any additional driver creation")
 }
