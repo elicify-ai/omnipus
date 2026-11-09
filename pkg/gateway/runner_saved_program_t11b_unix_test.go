@@ -59,14 +59,14 @@ func t11bConnectionAPI(t *testing.T, legacy string) *restAPI {
 }
 
 func TestRunnerTestEndpoint_SavedProgramActuallyRuns_S4(t *testing.T) {
-	legacy, legacyMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "legacy-claude", "legacy version")
-	saved, savedMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "saved-claude", "claude-code saved-test-version")
+	legacy, legacyMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "legacy-claude", "claude-code 9.9.9")
+	saved, savedMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "saved-claude", "claude-code 1.2.3")
 	api := t11bConnectionAPI(t, legacy)
 	t11bSaveProgram(t, api, "claude-code", saved)
 	code, resp := postRunnerTest(t, api, "ext-claude")
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, resp.Ok, "instrument: harmless saved program and synthetic auth satisfy the real check: %+v", resp)
-	assert.Equal(t, "claude-code saved-test-version", deref(resp.CliVersion))
+	assert.Equal(t, "1.2.3", deref(resp.CliVersion))
 	got, err := os.ReadFile(savedMarker)
 	require.NoError(t, err, "S4: the actual saved file, not merely its check, must run")
 	assert.Equal(t, "--version\n", string(got))

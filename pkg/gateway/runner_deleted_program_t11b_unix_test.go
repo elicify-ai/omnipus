@@ -18,13 +18,14 @@ import (
 )
 
 func TestRunnerTestEndpoint_DeletedSavedProgramDoesNotFallBack_S4(t *testing.T) {
-	program, marker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "saved-claude", "claude-code saved-version")
-	fallback, fallbackMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "legacy-claude", "claude-code legacy-version")
+	program, marker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "saved-claude", "claude-code 1.2.3")
+	fallback, fallbackMarker := t11bConnectionProgram(t, t11combined.TrustedProgramDir(t), "legacy-claude", "claude-code 9.9.9")
 	api := t11bConnectionAPI(t, program)
 	t11bSaveProgram(t, api, "claude-code", program)
 	code, control := postRunnerTest(t, api, "ext-claude")
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, control.Ok, "instrument: the same real saved program works before deletion")
+	require.Equal(t, "1.2.3", deref(control.CliVersion), "Q59: the saved program reports a parsed version before deletion")
 	before, err := os.ReadFile(marker)
 	require.NoError(t, err)
 	require.Equal(t, "--version\n", string(before))

@@ -1,5 +1,5 @@
 // useCommandPreview.test.ts — executor-command-preview UI. Covers: debounce
-// (>=400ms, mirrors useCliPathValidation's F-17), re-fetch on field-VALUE
+// (>=400ms), re-fetch on field-VALUE
 // change (not on every re-render/new-object-literal), cancel-in-flight on a
 // rapid subsequent change, idle when no `cli` is selected, success/error
 // states, and the retry() affordance.
@@ -32,7 +32,7 @@ function req(overrides: Partial<ExecutorCommandPreviewRequest> = {}): ExecutorCo
 
 // Advances fake timers past the debounce window, then drains microtasks so
 // the resulting fetchExecutorPreview().then()/.catch() has a chance to
-// settle — mirrors useCliPathValidation.test.ts's `advanceAndFlush`.
+// settle before assertions inspect the hook state.
 async function advanceAndFlush(ms: number) {
   await act(async () => {
     vi.advanceTimersByTime(ms)

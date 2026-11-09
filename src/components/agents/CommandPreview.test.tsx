@@ -5,13 +5,11 @@
 // explains prompt_delivery, and fails soft with a retryable degraded state —
 // same resilience contract as the AutoAppliedFlags block it replaces.
 //
-// Fake timers drive the 400ms debounce (`advanceAndFlush`, mirroring
-// `useCliPathValidation.test.ts`). Deliberately does NOT mix `waitFor` with
-// fake timers — `waitFor`'s internal polling relies on real timer
-// progression, so combining the two hangs until the test's own timeout
-// (`useCliPathValidation.test.ts`'s "fake timers + waitFor don't mix well"
-// note). `advanceAndFlush` already drains the state update inside `act`, so
-// assertions run synchronously right after it.
+// Fake timers drive the 400ms debounce through `advanceAndFlush`.
+// Deliberately does NOT mix `waitFor` with fake timers — `waitFor`'s internal
+// polling relies on real timer progression, so combining the two hangs until
+// the test's own timeout. `advanceAndFlush` drains the state update inside
+// `act`, so assertions run synchronously right after it.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
@@ -436,7 +434,7 @@ describe('CommandPreview — smoke test button', () => {
   })
 })
 
-// ── agent_id threading (AgentProfile edit view vs. create wizard) ──────────
+// ── agent_id threading (with and without an existing agent context) ──────
 
 describe('CommandPreview — agentId prop threading into the smoke-test request', () => {
   it('includes agent_id in the smoke-test request when the agentId prop is provided (AgentProfile edit view)', async () => {
@@ -454,7 +452,7 @@ describe('CommandPreview — agentId prop threading into the smoke-test request'
     )
   })
 
-  it('omits agent_id from the smoke-test request when no agentId prop is provided (create wizard)', async () => {
+  it('omits agent_id from the smoke-test request when no agentId prop is provided (no agent context)', async () => {
     vi.mocked(fetchExecutorSmokeTest).mockResolvedValue(okSmokeTestResult())
     render(<CommandPreview req={req()} testId="cp" />)
 
