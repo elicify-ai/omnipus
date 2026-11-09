@@ -181,6 +181,17 @@ if want 8 && mutant_tree 8 ci-cluster.sh 's/-gt 1 \]/-gt 99 ]/'; then
     "selfcheck FAIL: (20b) mixed-attempt evidence was accepted as verified"
 fi
 
+echo "Test 9: the whole selfcheck passes when it inherits RUNCI_AS_CI=1 (as inside the Fly lint gate)"
+if want 9; then
+  RUNCI_AS_CI=1 GIT_DIR="$GIT_DIR_ABS" bash "$GUARD" >"$TMP_DIR/inherit.out" 2>&1; rc=$?
+  check "inherited-RUNCI_AS_CI" 0 "$rc"
+fi
+
+echo "Test 10: a selfcheck that does not clear RUNCI_AS_CI is caught when the variable is inherited"
+if want 10 && RUNCI_AS_CI=1 mutant_tree 10 ci-cluster-selfcheck.sh '/^unset RUNCI_AS_CI$/d;s/env -u RUNCI_AS_CI //'; then
+  expect_named 10 mutant10-inherited-env "selfcheck FAIL: (19) fixture: a prologue run announced no RUNLOG"
+fi
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ] || exit 1

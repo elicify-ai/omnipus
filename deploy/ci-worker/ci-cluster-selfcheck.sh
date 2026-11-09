@@ -35,6 +35,11 @@
 #
 # Usage: bash deploy/ci-worker/ci-cluster-selfcheck.sh   (exit 0 = all cases behave)
 set -uo pipefail
+# runci.sh sets RUNCI_AS_CI=1 for its non-root re-exec child, and that child runs
+# the lint gate -> scripts/guards.sh -> this selfcheck. Inherited here it makes the
+# real runner's logging prologue (cases 18, 19) skip its root-log block, so no case
+# may depend on the caller's value: start from a clean environment.
+unset RUNCI_AS_CI
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER="${CI_CLUSTER_UNDER_TEST:-$HERE/ci-cluster.sh}"   # override only to prove the checks bite an older script
@@ -578,7 +583,7 @@ sed -n '1,/^# --- whole-run mutex/p' "$RL/runci-relocated.sh" > "$RL/prologue.sh
 run_prologue() { # $1 tag $2 attempt $3 verdict-line
   local s="$RL/run-$1.sh"
   { cat "$RL/prologue.sh"; printf 'echo "HEAD: %s selfcheck"\n%s\n' "$FAKE_SHORT" "$3"; } > "$s"
-  PATH="$RL/bin:$PATH" bash "$s" selfcheck-ref gofmt "$2" > "$RL/out-$1.txt" 2>&1
+  env -u RUNCI_AS_CI PATH="$RL/bin:$PATH" bash "$s" selfcheck-ref gofmt "$2" > "$RL/out-$1.txt" 2>&1
   sleep 0.3 # let the tee flush
   sed -n 's/^RUNLOG: //p' "$RL/out-$1.txt" | head -1
 }
