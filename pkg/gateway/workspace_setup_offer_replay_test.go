@@ -47,22 +47,25 @@ func TestWorkspaceSetupOffer_AttachedSessionReceivesReplayMessageAndJournal(t *t
 		"the offer line belongs to the chat view, so snapshot replay includes it")
 	want := replayFrameForEntry(t, h.mainID, offer)
 
+	seq, hasSeq := decodeSeq(t, hub.journal[0].bytes)
+	require.True(t, hasSeq, "a journaled frame carries a seq so a cursor can name it")
+	// Live and journaled frames carry the hub-assigned seq; the snapshot
+	// replay frame (want) does not, so the seq is the only difference.
+	wantLive := frameWithSeq(want, seq)
+
 	got := decodeReplayMessages(t, live.snapshot())
-	require.Equal(t, []generated.ReplayMessageFrame{want}, got,
+	require.Equal(t, []generated.ReplayMessageFrame{wantLive}, got,
 		"an already-attached session must receive one replay_message for the saved offer entry")
 
 	require.Len(t, hub.journal, 1, "the offer frame must be journaled exactly once")
 	journaled := decodeReplayMessages(t, [][]byte{hub.journal[0].bytes})
-	require.Equal(t, []generated.ReplayMessageFrame{want}, journaled,
+	require.Equal(t, []generated.ReplayMessageFrame{wantLive}, journaled,
 		"the journaled frame is the same replay_message the attached session received")
-
-	seq, hasSeq := decodeSeq(t, hub.journal[0].bytes)
-	require.True(t, hasSeq, "a journaled frame carries a seq so a cursor can name it")
 
 	late := newFakeHubConn("incremental")
 	inc := hub.bind(late, i64p(int64(head)), hubStrp(reg.bootID), reg.bootID)
 	require.True(t, inc.Servable, "a cursor from before the offer is inside the journal")
-	require.Equal(t, []generated.ReplayMessageFrame{want}, decodeReplayMessages(t, inc.Tail),
+	require.Equal(t, []generated.ReplayMessageFrame{wantLive}, decodeReplayMessages(t, inc.Tail),
 		"incremental re-attach delivers the journaled offer frame once")
 
 	caughtUp := newFakeHubConn("caught-up")
@@ -102,14 +105,18 @@ func TestWorkspaceSetupOffer_FailureNotePublishedToAttachedSession(t *testing.T)
 	wantOffer := replayFrameForEntry(t, h.mainID, offer)
 	wantNote := replayFrameForEntry(t, h.mainID, note)
 
-	require.Equal(t, []generated.ReplayMessageFrame{wantOffer, wantNote}, decodeReplayMessages(t, live.snapshot()),
-		"the attached session receives the offer line and then the failure note")
 	require.Len(t, hub.journal, 2, "both saved lines are journaled, each once")
+	offerSeq, okOffer := decodeSeq(t, hub.journal[0].bytes)
+	noteSeq, okNote := decodeSeq(t, hub.journal[1].bytes)
+	require.True(t, okOffer && okNote, "journaled frames carry a hub-assigned seq")
+	liveOffer, liveNote := frameWithSeq(wantOffer, offerSeq), frameWithSeq(wantNote, noteSeq)
+	require.Equal(t, []generated.ReplayMessageFrame{liveOffer, liveNote}, decodeReplayMessages(t, live.snapshot()),
+		"the attached session receives the offer line and then the failure note")
 
 	late := newFakeHubConn("incremental")
 	inc := hub.bind(late, i64p(int64(head)), hubStrp(reg.bootID), reg.bootID)
 	require.True(t, inc.Servable)
-	require.Equal(t, []generated.ReplayMessageFrame{wantOffer, wantNote}, decodeReplayMessages(t, inc.Tail),
+	require.Equal(t, []generated.ReplayMessageFrame{liveOffer, liveNote}, decodeReplayMessages(t, inc.Tail),
 		"incremental re-attach delivers both journaled lines once, in order")
 
 	snapshot := replayFramesOf(t, h.mainID, readMainTranscript(t, h))
@@ -153,6 +160,13 @@ func readMainTranscript(t *testing.T, h *l1WU10SetupHarness) []session.Transcrip
 	entries, err := h.store.ReadTranscript(h.mainID)
 	require.NoError(t, err)
 	return entries
+}
+
+// frameWithSeq returns f with the hub-assigned seq set, as live and journaled
+// frames carry it (snapshot replay frames do not).
+func frameWithSeq(f generated.ReplayMessageFrame, seq int64) generated.ReplayMessageFrame {
+	f.Seq = &seq
+	return f
 }
 
 func replayFrameForEntry(t *testing.T, sessionID string, entry session.TranscriptEntry) generated.ReplayMessageFrame {
