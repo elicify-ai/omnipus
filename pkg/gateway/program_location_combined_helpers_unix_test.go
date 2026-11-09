@@ -82,7 +82,7 @@ func t11cSaveRefused(t *testing.T, f *t8SettingsFixture, program, check, at stri
 	if check == "agent_writable_location" {
 		at = t11CanonicalFailureElement(t, at)
 	}
-	assert.Equal(t, at, (*out.Details)["at"])
+	t8AssertNoProgramPath(t, w.Body.Bytes(), program, at)
 	reasons := map[string]string{
 		"agent_writable_location": "it is inside a folder agents can write to.",
 		"location_unverifiable":   t11combined.LocationUnverifiableReason,

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,7 +77,7 @@ func TestSharedProgramPath_PortedCaseSpellingOfForbiddenRoot(t *testing.T) {
 	})
 
 	t.Run("program outside the roots is allowed", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := t11combined.TrustedProgramDir(t)
 		require.NoError(t, os.Chmod(dir, 0o700))
 		outside := t11WriteExe(t, dir, "fakecli", 0o755)
 		final, err := filepath.EvalSymlinks(outside)

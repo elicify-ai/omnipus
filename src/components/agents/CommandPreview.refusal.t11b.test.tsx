@@ -32,7 +32,7 @@ afterEach(() => {
 describe('T11-B actual preview refusal presentation (F7)', () => {
   it.each([
     'This agent cannot run: no program path is set for Codex. A person can set it in Settings → Third-party agents → Codex.',
-    'This agent cannot run: the program set for Codex in Settings → Third-party agents does not pass its checks (not_found at /tmp/t11b-deleted-program). A person can fix it there.',
+    'This agent cannot run: the program set for Codex in Settings → Third-party agents does not pass its checks (not_found). A person can fix it there.',
   ])('shows the run refusal without a value-validation wrapper: %s', async (refusal) => {
     vi.mocked(fetchExecutorPreview).mockRejectedValue(new ApiError(400, refusal))
     render(<CommandPreview req={{ cli: 'codex' }} testId="t11b-preview" />)
@@ -45,6 +45,7 @@ describe('T11-B actual preview refusal presentation (F7)', () => {
     const block = screen.getByTestId('t11b-preview')
     expect(block).toHaveAttribute('data-preview-status', 'error')
     expect(block).toHaveTextContent(refusal)
+    expect(block).not.toHaveTextContent(/\/(?:tmp|var|Users)\//)
     expect(block).not.toHaveTextContent("This value couldn't be validated")
     expect(block).not.toHaveTextContent('check it before saving')
     expect(block).not.toHaveTextContent('the settings below still apply')
