@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -298,32 +297,14 @@ func (t *PreviewDocumentTool) storeThumbnail(ctx context.Context, name string, p
 		policy = media.CleanupPolicyDeleteOnCleanup
 		scope = fmt.Sprintf("tool:inline:preview_document:%s:%s", ToolChannel(ctx), ToolChatID(ctx))
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return DocumentPreviewThumbnail{}, err
-	}
-	f, err := os.CreateTemp(dir, "tool-preview_document-*.png")
-	if err != nil {
-		return DocumentPreviewThumbnail{}, err
-	}
-	tmp := f.Name()
-	if _, err = f.Write(p.PNG); err == nil {
-		err = f.Close()
-	} else {
-		_ = f.Close()
-	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		return DocumentPreviewThumbnail{}, err
-	}
 	filename := fmt.Sprintf("page-%d.png", p.Number)
-	ref, err := t.mediaStore.Store(tmp, media.MediaMeta{
+	ref, err := media.StoreBytes(t.mediaStore, dir, "tool-preview_document-*.png", p.PNG, media.MediaMeta{
 		Filename:      filename,
 		ContentType:   "image/png",
 		Source:        "tool:inline:preview_document",
 		CleanupPolicy: policy,
 	}, scope)
 	if err != nil {
-		_ = os.Remove(tmp)
 		return DocumentPreviewThumbnail{}, err
 	}
 	return DocumentPreviewThumbnail{
