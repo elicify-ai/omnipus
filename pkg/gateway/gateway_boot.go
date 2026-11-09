@@ -60,6 +60,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
@@ -341,6 +342,23 @@ func setupAndStartServices(
 		return nil, err
 	}
 
+	// Founder decision 2026-11-08 (Q8 B): workspaces whose delegation store
+	// saved an explicit edge depth of 3 under the OLD shipped default (raised
+	// to 10 by the founder ruling of 2026-10-27) are migrated ONCE to 10. It
+	// runs HERE, before startSchedulers/startPlanEngine start any autonomous
+	// producer (a due scheduled turn reads workspace.ReadDelegation) and before
+	// the REST listener and the agent loop — so no reader sees a pre-migration
+	// 3 and no operator write can interleave (round-5 CHECK R3). The store
+	// cannot tell an old-default 3 from a deliberate 3 — the founder accepted
+	// rewriting both, once; a ledger inside the agent-unreachable store
+	// directory guarantees a 3 saved after a record's migration is never
+	// rewritten (pkg/workspace/delegation_depth_migration.go states the rules
+	// and risks). Best-effort: a failure is logged and boot continues; the next
+	// boot resumes only the unfinished records.
+	if _, mErr := workspace.MigrateDelegationDepthDefaultOnce(stg.homePath); mErr != nil {
+		slog.Error("gateway: delegation depth default migration failed", "error", mErr)
+	}
+
 	// Boot recovery of interrupted task work, all of it BEFORE any task
 	// producer of this process (drain, cron engines, trigger engine, plan
 	// engine, REST listener) starts, so every in_progress claim it sees is the
@@ -363,6 +381,10 @@ func setupAndStartServices(
 	// startPlanEngine, buildRESTAPI). Mark it expected so the queued-task drain
 	// and owed trigger fires wait for it instead of dispatching unwired.
 	agent.GetTaskExecutor(stg.agentLoop).ExpectSessionPlane()
+
+	if hook := beforeStartSchedulersHookForTest.Load(); hook != nil {
+		(*hook)(stg.agentLoop)
+	}
 
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
@@ -436,6 +458,23 @@ func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
 		return
 	}
 	afterStartSchedulersHookForTest.Store(&fn)
+}
+
+// beforeStartSchedulersHookForTest, when set, runs inside setupAndStartServices
+// immediately before startSchedulers starts the first autonomous producers
+// (cron engine, queued-task drain, trigger scheduler). Nil in production; set
+// only by tests through SetBeforeStartSchedulersHookForTest, e.g. to pin that
+// boot-time store migrations completed before any scheduled work can read.
+var beforeStartSchedulersHookForTest atomic.Pointer[func(*agent.AgentLoop)]
+
+// SetBeforeStartSchedulersHookForTest installs fn as the hook run right before
+// startSchedulers (nil removes it). For tests only.
+func SetBeforeStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
+	if fn == nil {
+		beforeStartSchedulersHookForTest.Store(nil)
+		return
+	}
+	beforeStartSchedulersHookForTest.Store(&fn)
 }
 
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.

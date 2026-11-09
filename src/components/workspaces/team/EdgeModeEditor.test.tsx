@@ -11,7 +11,11 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { EdgeModeEditor, EdgeLabelChip, MODE_LABEL } from './EdgeModeEditor'
 import type { TeamEdgeModel } from './teamGraphModel'
 
-const DEFAULT_DEPTH = 3
+// DEFAULT_DEPTH mirrors the backend's shipped delegation-depth default
+// (defaultMaxSubTurnDepth — 10 since the founder ruling of 2026-10-27; it was
+// 3). It stands in for the workspace's resolved default_depth, which the
+// Team tab passes down as the editor's defaultDepth prop.
+const DEFAULT_DEPTH = 10
 
 function edge(over: Partial<TeamEdgeModel> = {}): TeamEdgeModel {
   return {
