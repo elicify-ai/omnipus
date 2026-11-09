@@ -46,6 +46,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -304,6 +306,62 @@ func assertScheduledTurnLiveView(t *testing.T, h *schedLiveViewHarness, sid stri
 	assert.Empty(t, otherFrames, "a viewer of another session must receive none of the scheduled turn's frames (no cross-session leak)")
 }
 
+// promptPersistenceObserver is a hubConn bound to the session hub. The moment
+// the hub hands it a user_message frame (inside the publish critical section,
+// i.e. at publication time) it reads the transcript and records whether an
+// entry with the frame's id and content is ALREADY persisted. This is the
+// persistence-before-publication oracle (#1442 review F1): a prompt published
+// before AppendTranscript is a ghost message if the append then fails.
+type promptPersistenceObserver struct {
+	mu        sync.Mutex
+	store     *session.UnifiedStore
+	sid       string
+	published int
+	persisted int // user_message frames whose id+content were already in the transcript
+}
+
+func (o *promptPersistenceObserver) enqueue(frame []byte) bool {
+	var f generated.UserMessageFrame
+	if json.Unmarshal(frame, &f) != nil || f.Type != "user_message" {
+		return true
+	}
+	entries, _ := o.store.ReadTranscript(o.sid)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.published++
+	for _, e := range entries {
+		if e.Role == "user" && e.ID == f.Id && e.Content == f.Content {
+			o.persisted++
+			break
+		}
+	}
+	return true
+}
+
+func (o *promptPersistenceObserver) counts() (published, persisted int) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.published, o.persisted
+}
+
+// observePromptPersistence binds a promptPersistenceObserver to sid's hub.
+func (h *schedLiveViewHarness) observePromptPersistence(t *testing.T, sid string) *promptPersistenceObserver {
+	t.Helper()
+	obs := &promptPersistenceObserver{store: h.store, sid: sid}
+	_, ok := h.handler.hubs.getOrCreate(sid).bindLive(obs)
+	require.True(t, ok, "the persistence observer must bind to the session hub")
+	return obs
+}
+
+// assertPromptPersistedAtPublication requires exactly one prompt publication
+// and that it saw the entry already persisted at that instant.
+func assertPromptPersistedAtPublication(t *testing.T, obs *promptPersistenceObserver) {
+	t.Helper()
+	published, persisted := obs.counts()
+	require.Equal(t, 1, published, "expected exactly one user_message publication observed at the hub")
+	assert.Equal(t, 1, persisted, "the scheduled prompt must already be persisted in the transcript at the instant its user_message frame is published (persist-before-publish) - #1442 F1")
+}
+
 // derefStringForTest dereferences an optional string field, "" when nil.
 func derefStringForTest(p *string) string {
 	if p == nil {
@@ -326,6 +384,7 @@ func TestScheduledTurnLiveView_RecurringTask_StreamsPromptAndAnswerToSessionHub(
 	require.NoError(t, err)
 	otherViewer := h.bindViewer(t, "sched-other-viewer-chat", otherMeta.ID)
 
+	persistObs := h.observePromptPersistence(t, sched.ID)
 	runner := h.newRunner(t)
 	job := &cron.CronJob{
 		ID:          "j-live-view-recurring",
@@ -341,6 +400,7 @@ func TestScheduledTurnLiveView_RecurringTask_StreamsPromptAndAnswerToSessionHub(
 	require.NoError(t, err, "the scheduled run itself must succeed — the bug is the missing live view, not the turn")
 
 	assertScheduledTurnLiveView(t, h, sched.ID, viewer, otherViewer)
+	assertPromptPersistedAtPublication(t, persistObs)
 }
 
 // TestScheduledTurnLiveView_Heartbeat_StreamsPromptAndAnswerToSessionHub is the
@@ -356,6 +416,7 @@ func TestScheduledTurnLiveView_Heartbeat_StreamsPromptAndAnswerToSessionHub(t *t
 	require.NoError(t, err)
 	otherViewer := h.bindViewer(t, "sched-other-viewer-hb", other.ID)
 
+	persistObs := h.observePromptPersistence(t, main.ID)
 	runner := h.newRunner(t)
 	job := &cron.CronJob{
 		ID:          "j-live-view-heartbeat",
@@ -369,6 +430,37 @@ func TestScheduledTurnLiveView_Heartbeat_StreamsPromptAndAnswerToSessionHub(t *t
 	require.NoError(t, err, "the heartbeat run itself must succeed — the bug is the missing live view, not the turn")
 
 	assertScheduledTurnLiveView(t, h, main.ID, viewer, otherViewer)
+	assertPromptPersistedAtPublication(t, persistObs)
+}
+
+// TestScheduledTurnLiveView_AppendFailure_PublishesNoPrompt: when the prompt
+// cannot be appended to the transcript the scheduled run returns an error and
+// NO user_message frame is published (no ghost message) - #1442 review F1.
+// The append is made to fail by occupying the session's current-day transcript
+// file path with a directory, so the session itself still resolves.
+func TestScheduledTurnLiveView_AppendFailure_PublishesNoPrompt(t *testing.T) {
+	h := newSchedLiveViewHarness(t)
+
+	sched, err := h.store.NewScheduledSession("mia")
+	require.NoError(t, err)
+	viewer := h.bindViewer(t, "sched-append-fail-viewer", sched.ID)
+	persistObs := h.observePromptPersistence(t, sched.ID)
+
+	transcriptPath := filepath.Join(h.store.BaseDir(), sched.ID, "transcript.jsonl")
+	require.NoError(t, os.RemoveAll(transcriptPath))
+	require.NoError(t, os.MkdirAll(transcriptPath, 0o755), "make the transcript path unwritable as a file")
+
+	_, err = h.loop.ProcessScheduled(context.Background(), "mia", sched.ID, schedLivePrompt, "", "")
+	require.Error(t, err, "a failed prompt append must fail the scheduled run")
+	assert.Contains(t, err.Error(), "transcript write failed", "the error must be the transcript append failure")
+
+	published, _ := persistObs.counts()
+	assert.Zero(t, published, "no user_message may be published when the transcript append failed (ghost message) - #1442 F1")
+	for _, raw := range drainAllFrames(viewer.sendCh) {
+		assert.NotEqual(t, "user_message", schedLiveFrameKind(t, raw), "a viewer must not receive a prompt that was never persisted")
+	}
+	streamed, plain := h.provider.counts()
+	assert.Zero(t, streamed+plain, "the agent turn must not run after a failed prompt append")
 }
 
 // TestScheduledTurnLiveView_InteractiveTurnUnchanged is the control: the SAME
