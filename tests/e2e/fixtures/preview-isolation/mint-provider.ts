@@ -5,11 +5,13 @@ import type { BundleFiles } from './webserve-bundle'
 /**
  * Scripted model for the preview-isolation shard. Only the external model HTTP
  * edge is scripted; the gateway, the agent loop, the file tool, serve_web, the
- * registry and the preview handlers are all real. The spec has no live-model
- * dependence: a mint is one chat message carrying a directive, and this
- * provider answers it with the same tool calls the prompt used to ask a model
- * for (write each file, then serve_web), in rounds, so serve_web only runs
- * after every file exists.
+ * registry and the preview handlers are all real. A mint is one chat message
+ * carrying a directive, and this provider answers it in rounds: first a
+ * write_file call per file (plus ToolSearch for serve_web when it is not yet
+ * offered), then serve_web, then a final text. It advances to serve_web once
+ * the history after the directive holds an assistant write_file call; it does
+ * NOT check that the writes succeeded -- a failed write surfaces as a failed
+ * serve_web or a missing file in the row itself.
  */
 
 const DIRECTIVE_PREFIX = 'E2E-MINT-DIRECTIVE '

@@ -41,8 +41,10 @@
  * MINT MECHANISM: serve_web registrations are tool-only (no REST endpoint
  * creates one), so a real agent turn writes the fixture files with the real
  * file tool and calls the real serve_web. The model edge of that turn is
- * scripted (fixtures/preview-isolation/mint-provider.ts): this shard calls no
- * live model. Each test runs on its own private gateway (canonical-history
+ * scripted (fixtures/preview-isolation/mint-provider.ts), so these rows'
+ * minting turns make no live-model call (the suite's global setup still
+ * preflights the live keys and onboards the shared shard gateway, which these
+ * rows do not use). Each test runs on its own private gateway (canonical-history
  * fixture, loopback public_url so Mode 1 mints), so no row shares a preview
  * registry, dev server or workspace with another. The fixture content lives in
  * tests/e2e/fixtures/preview-isolation/webserve-bundle.ts (unit-checked by

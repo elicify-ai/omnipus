@@ -5,7 +5,8 @@ import { startMintProvider } from './mint-provider'
 /**
  * The real owned canonical-history gateway (a private gateway per test, the
  * fixture S-8.1's transcript seeding requires) with only its model edge
- * scripted. No row of the preview-isolation shard needs a live model.
+ * scripted: these rows' minting turns make no live-model call (the suite's
+ * global setup still preflights the live keys for the shared shard gateway).
  */
 export const test = canonicalTest.extend<{ mintProvider: Awaited<ReturnType<typeof startMintProvider>> }>({
   mintProvider: async ({ browserName }, use) => {
