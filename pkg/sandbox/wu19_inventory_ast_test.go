@@ -151,6 +151,11 @@ func (f *wu19Function) callIdentity(e ast.Expr) string {
 func (p *wu19Inventory) scan() (int, []wu19Finding) {
 	var count int
 	var findings []wu19Finding
+	if p.officePreviewRelevant() {
+		if reason := p.officePreviewClosedEnvironment(); reason != "" {
+			findings = append(findings, wu19Finding{"pkg/preview/launcher", "Q62.closed-environment", reason})
+		}
+	}
 	for _, list := range p.funcs {
 		for _, fn := range list {
 			ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
@@ -226,6 +231,9 @@ func wu19EnclosingBlock(body *ast.BlockStmt, node ast.Node) *ast.BlockStmt {
 }
 
 func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) string {
+	if candidate, reason := p.officePreviewConstructor(fn); candidate {
+		return reason
+	}
 	cmd := wu19AssignedObject(fn, call)
 	if cmd == nil {
 		return "exec constructor has no verifiable command identity/environment assignment"

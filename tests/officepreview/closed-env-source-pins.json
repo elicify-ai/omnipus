@@ -1,0 +1,26 @@
+{
+  "reviewed_source": "59855878df8af4bace58de6a48604a9041f35010",
+  "files": {
+    "cmd/omnipus/main.go": "28671cb1a4852150965f10fbedd25e1b54bf3635225436e22a425c5d723d8cbc",
+    "pkg/app/app.go": "d4f3eee6b528c9266d9775f5a39e731d591b00e5ddce617a238531f80dfc1532",
+    "pkg/preview/confine.go": "654f5e39048d38c46aefbdbdb11dd059af2fd49f6081c410f83284bbe06583b2",
+    "pkg/preview/confine_darwin.go": "cad025cd345b0c8b37161d8246a64da8f3176862e9836b8601f9c1c9b6029d41",
+    "pkg/preview/confine_linux.go": "43ac72c369ac2f9bdee12b672c840735f6792513277e732b8740b6b142294459",
+    "pkg/preview/confine_unix.go": "da7682067e9685af55ec5bbe86fdd291a531a1bc0a002c9db33014afdfb8f0a6",
+    "pkg/preview/confine_windows.go": "df39522a13d411d407f5ac3799a61b71fac96c5e716cc00fa5e87182f686a079",
+    "pkg/preview/launcher/child_darwin.go": "f3c2a4adde5cf775421c037dcb141e5694265dde5054c78cddd0c6f15330420b",
+    "pkg/preview/launcher/child_linux.go": "aa422eb2c16e52ccbb0add0dac2bcddf739271ac34cb0064cd9bcf3ad2ac0716",
+    "pkg/preview/launcher/child_unix.go": "ae2aabaee9b74b7f630e8094a53c1554a28cb334e9b58effa6933695067db3d7",
+    "pkg/preview/launcher/child_windows.go": "aa1d1f20b0016cc82a00667ff801cd294ca0f0a7de12ea256a4905c38fe112f4",
+    "pkg/preview/launcher/launcher.go": "3d4fa2838b9bdbb2894369629e15ed6e61cf3a8dd7e6c8429bdfd648e1fb6c7f",
+    "pkg/preview/launcher/proc_darwin.go": "9582f210721c43f021077bc3ccb0f4f403322e43e40e170388723f1dda666171",
+    "pkg/preview/launcher/proc_linux.go": "4c0fa7ea6094b36879b91f5c8b11c32d64cb9282d7a8f26dcd4e42dc933227be",
+    "pkg/preview/launcher/proc_unix.go": "9cc249981170611c33b47e7afdee606e71fd3b8aea7927ad082aa56ee42f7174",
+    "pkg/preview/launcher/proc_windows.go": "4ebe674d35661904b741022c95ee8916776efcf77d0a615a3508d511516f9491",
+    "pkg/preview/launcher/watchdog_darwin.go": "12bb65cad428c19b8d29fa9f2738903ae14d12e35b193e513b9c59593550bd20",
+    "pkg/preview/launcher/watchdog_other.go": "506d069297c39eba3f475e880e1f09458a67014165b6a916886b320c4a2a3ade",
+    "pkg/preview/programs.go": "79a2238e524ee02439e43b6005d91e79ae47671529812d23d47d79903e058db7",
+    "pkg/sandbox/backend_darwin_seatbelt.go": "374f77036eed30ccb597851fe3c51f8df6b898b060490f80f114f443e83fbd16",
+    "pkg/sandbox/hardened_exec_held.go": "b52abe1db4edbab04ab013bdf4e66e6af6aefd280842cfb027a8f4d8a7a026ab"
+  }
+}
