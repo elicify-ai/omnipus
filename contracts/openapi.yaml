@@ -5193,8 +5193,9 @@ paths:
         before anything is written, in the order claude-code, codex,
         opencode, path before preset_args; the first failing row and field is
         returned as 400 (code cli_path_invalid or cli_preset_invalid, field
-        clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check,
-        details.at for paths) and nothing is written, valid rows included.
+        clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check;
+        never the path, which goes to the server log only) and nothing is
+        written, valid rows included.
         An unknown CLI key or field gets the request-schema 400. No revision
         and no 409: the last save wins. Signed-in person only
         (RequirePersonSession): no session 401, an agent or tool token 403;
