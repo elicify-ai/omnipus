@@ -470,7 +470,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 
 // redactionRecordingSite names one place in pkg/gateway that writes a request path into
 // a log record or an audit entry. This inventory is the FR-003e claim written
-// down: eight sites, all redacted.
+// down: nine sites, all redacted.
 type redactionRecordingSite struct {
 	file string
 	what string
@@ -487,6 +487,7 @@ var expectedRedactionSites = []redactionRecordingSite{
 	// WU-24 (PLAN-omnipus-L1-v2-20261013.md §10): Copilot CLI model
 	// provider and its sign-in handler are deleted, including its log sink.
 	{file: "rest_knowledge.go", what: "allowKnowledgeRetrieval: knowledge rate-limit 429 warning (2026-09-14 limiter fix)"},
+	{file: "rest_reload_write_deadline.go", what: "reloadWaitWriteDeadlineMiddleware: write-deadline extension failure warning"},
 }
 
 // redactionImplFile is where redactRequestPath is DEFINED. Its own call
@@ -497,7 +498,7 @@ const redactionImplFile = "preview_path_redact.go"
 // scanned so a new raw site in either package fails the build.
 var redactionScannedDirs = []string{".", "middleware"}
 
-// TestRequestPathRedaction_SourceInventory fails when a ninth recording site
+// TestRequestPathRedaction_SourceInventory fails when a tenth recording site
 // appears, and fails when an existing one stops redacting.
 //
 // Two independent properties, because each catches what the other misses:
@@ -532,11 +533,11 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_eight_sites", func(t *testing.T) {
-		// WU-24 retired the Copilot sign-in sink; the person-session refusal
-		// (r17 Settings endpoint) added one redacted site: an exact eight-site set.
-		assert.Len(t, expectedRedactionSites, 8,
-			"WU-24 removes the Copilot sink; all eight recording sites must stay redacted")
+	t.Run("inventory_is_nine_sites", func(t *testing.T) {
+		// The eight existing sites plus the reload-wait write-deadline warning
+		// form an exact nine-site set; the per-file equality check stays strict.
+		assert.Len(t, expectedRedactionSites, 9,
+			"all nine recording sites, including the reload-wait warning, must stay redacted")
 	})
 }
 
