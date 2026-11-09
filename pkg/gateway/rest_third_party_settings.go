@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -229,7 +230,9 @@ func writeThirdPartyRefusal(w http.ResponseWriter, ce *thirdpartycli.CheckError)
 	if ce.IsPresetCheck() {
 		code, field = codeCLIPresetInvalid, "clis."+ce.CLI+".preset_args"
 	} else {
-		details["at"] = ce.At
+		// The response names the check, never the path (founder Q58 A).
+		slog.Warn("third-party settings: the program path is refused",
+			"cli", ce.CLI, "check", ce.Check, "path", ce.At, "detail", ce.Detail)
 	}
 	writeJSON(w, http.StatusBadRequest, gen.ErrorResponse{
 		Error:   ce.SaveRefusal(),

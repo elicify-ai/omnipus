@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -294,23 +295,25 @@ func probeVersion(ctx context.Context, binPath string, args []string) (string, e
 	return v, nil
 }
 
+// versionToken is a dotted number with an optional pre-release or build suffix
+// ("1.2.3", "10.20.30-rc", "1.2.3+build", "1.2.3rc1"). A file name with a digit
+// and a dot ("report-2026.txt", "1.2.txt") does not match.
+var versionToken = regexp.MustCompile(`^[0-9]+(\.[0-9]+)+(?:[-+][0-9A-Za-z.+-]*|[a-z]+[0-9]*)?$`)
+
 // extractVersion pulls a version-looking token out of `--version` output.
 // CLIs print things like "claude 1.2.3", "codex-cli 0.4.0", "opencode v0.1.7".
-// We return the first token that contains a digit and a dot, stripped of a
-// leading 'v'. If none matches, return the whole first line (still a valid
-// handshake signal — the binary ran).
+// It returns the first version-shaped token on the first line, without
+// surrounding punctuation or a leading 'v'. With none it returns "", never the
+// program's output (founder Q59 A): that output is not a version and would
+// otherwise reach the client as one.
 func extractVersion(text string) string {
-	if text == "" {
-		return ""
-	}
-	line := firstLine(text)
-	for _, tok := range strings.Fields(line) {
-		t := strings.TrimPrefix(tok, "v")
-		if strings.ContainsAny(t, "0123456789") && strings.Contains(t, ".") {
+	for _, tok := range strings.Fields(firstLine(text)) {
+		t := strings.TrimPrefix(strings.Trim(tok, "(),;:"), "v")
+		if versionToken.MatchString(t) {
 			return t
 		}
 	}
-	return line
+	return ""
 }
 
 func firstLine(s string) string {
