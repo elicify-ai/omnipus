@@ -446,18 +446,6 @@ func TestProbeProviderID_Validation(t *testing.T) {
 			status: http.StatusBadRequest, field: "model",
 			errContains: "256",
 		},
-		// ── Outline: internal-CIDR api_base, nothing contacted ──
-		// newProbeAPI pins the hosted edition, where an endpoint override on
-		// a catalog id is refused (400, field api_base) unless the operator
-		// allow list names its host; only loopback is named, so 10.0.0.5 is
-		// refused before the SSRF gate is consulted. The SSRF 422 itself is
-		// pinned by TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint.
-		{
-			name:   "internal-CIDR api_base is refused on a catalog id",
-			body:   `{"id":"openrouter","auth":"api_key","api_key":"k","api_base":"http://10.0.0.5/v1"}`,
-			status: http.StatusBadRequest, field: "api_base",
-			errMsg: onboardingCatalogEndpointRefusedMsg,
-		},
 	}
 
 	for _, tc := range cases {
@@ -514,6 +502,35 @@ func TestProbeProviderID_Validation(t *testing.T) {
 					"the SSRF gate must fire before any outbound call")
 			}
 		})
+	}
+}
+
+// TestProbeProviderID_InternalCIDRRefusedOnCatalogID is the internal-CIDR
+// api_base row of the Validation outline, split out to keep that function
+// within its size budget. It runs the same request through the same helper
+// and asserts what the table loop asserts for a 400 row.
+func TestProbeProviderID_InternalCIDRRefusedOnCatalogID(t *testing.T) {
+	// ── Outline: internal-CIDR api_base, nothing contacted ──
+	// newProbeAPI pins the hosted edition, where an endpoint override on
+	// a catalog id is refused (400, field api_base) unless the operator
+	// allow list names its host; only loopback is named, so 10.0.0.5 is
+	// refused before the SSRF gate is consulted. The SSRF 422 itself is
+	// pinned by TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint.
+	body := `{"id":"openrouter","auth":"api_key","api_key":"k","api_base":"http://10.0.0.5/v1"}`
+	api := newProbeAPI(t)
+	w := postProbe(t, api, body)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+
+	raw := w.Body.String()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
+	assert.Equal(t, "api_base", m["field"], "body=%s", raw)
+	assert.Equal(t, onboardingCatalogEndpointRefusedMsg, m["error"])
+	// CRIT-003: the 400 body never enumerates provider ids the caller did
+	// not type.
+	for _, leak := range []string{"zai-coding-plan", "openai-chatgpt"} {
+		assert.NotContains(t, raw, leak,
+			"the 400 body must never enumerate provider ids")
 	}
 }
 
