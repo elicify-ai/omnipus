@@ -14,25 +14,26 @@ import (
 // Oracles: Q62 A, security F1 and the seven environment-exception requirement rows.
 func TestWU19_OfficePreviewClosedEnvironment(t *testing.T) {
 	base := wu19LoadInventory(t, filepath.Join("..", ".."))
+	wu19OfficeMaybeUpdatePins(t, base)
 	const program = "pkg/preview/programs.go"
 	const command = "pkg/preview/launcher/launcher.go"
-	cases := []struct{ name, file, old, replacement string }{
-		{"reviewed_closed_lists", "", "", ""},
-		{"added_converter_key", program, `"LANG=en_US.UTF-8",`, `"LANG=en_US.UTF-8", "Q62_EXTRA=x",`},
-		{"raw_renderer_inheritance", program, `Env:     []string{},`, `Env: os.Environ(),`},
-		{"generic_renderer_inheritance", program, `Env:     []string{},`, `Env: sandbox.ScrubGatewayEnv(),`},
-		{"runner_renderer_inheritance", program, `Env:     []string{},`, `Env: sandbox.ScrubGatewayEnvForRunner(),`},
-		{"nil_inheriting_assignment", command, `cmd.Env = append([]string{}, spec.Env...)`, `cmd.Env = spec.Env`},
-		{"duplicate_assignment", command, `cmd.Env = append([]string{}, spec.Env...)`, `cmd.Env = append([]string{}, spec.Env...); cmd.Env = os.Environ()`},
-		{"widening_prepare_hook", "pkg/preview/confine_darwin.go", `return backend.ApplyToCmd(cmd, policy)`, `cmd.Env = append(cmd.Env, "Q62_EXTRA=x"); return backend.ApplyToCmd(cmd, policy)`},
-		{"duplicate_windows_override", program, `"SystemRoot="+os.Getenv("SystemRoot")`, `"SystemRoot="+os.Getenv("SystemRoot"), "SYSTEMROOT=override"`},
-		{"unix_forwarding_enrichment", "pkg/preview/launcher/child_unix.go", `unix.Exec(target[0], target, os.Environ())`, `unix.Exec(target[0], target, append(os.Environ(), "Q62_EXTRA=x"))`},
-		{"windows_forwarding_enrichment", "pkg/preview/launcher/child_windows.go", `cmd.Env = os.Environ()`, `cmd.Env = append(os.Environ(), "Q62_EXTRA=x")`},
-		{"before_hidden_dispatch", "pkg/app/app.go", `if code, handled := runHiddenMode(os.Args); handled {`, `os.Setenv("Q62_EXTRA", "x"); if code, handled := runHiddenMode(os.Args); handled {`},
-		{"unreviewed_start_caller", "pkg/q62probe/extra.go", "", `package q62probe; import "github.com/elicify-ai/omnipus/pkg/preview/launcher"; func extra(s launcher.Spec) { launcher.Start(s) }`},
-		{"unreviewed_command_caller", "pkg/q62probe/extra.go", "", `package q62probe; import "github.com/elicify-ai/omnipus/pkg/preview/launcher"; func extra(s launcher.Spec) { launcher.Command(s) }`},
-		{"new_launcher_initialization", "pkg/preview/launcher/q62_extra.go", "", `package launcher; import "os"; func init() { os.Setenv("Q62_EXTRA", "x") }`},
-		{"other_package_initialization", "pkg/q62probe/extra.go", "", `package q62probe; import "os"; func init() { enrich() }; func enrich() { os.Setenv("Q62_EXTRA", "x") }`},
+	cases := []struct{ name, file, old, replacement, declaration, want string }{
+		{"reviewed_closed_lists", "", "", "", "", ""},
+		{"added_converter_key", program, `"LANG=en_US.UTF-8",`, `"LANG=en_US.UTF-8", "Q62_EXTRA=x",`, "officeConversion.run", ""},
+		{"raw_renderer_inheritance", program, `Env:     []string{},`, `Env: os.Environ(),`, "protocolProgram.run", ""},
+		{"generic_renderer_inheritance", program, `Env:     []string{},`, `Env: sandbox.ScrubGatewayEnv(),`, "protocolProgram.run", ""},
+		{"runner_renderer_inheritance", program, `Env:     []string{},`, `Env: sandbox.ScrubGatewayEnvForRunner(),`, "protocolProgram.run", ""},
+		{"nil_inheriting_assignment", command, `cmd.Env = append([]string{}, spec.Env...)`, `cmd.Env = spec.Env`, "Command", ""},
+		{"duplicate_assignment", command, `cmd.Env = append([]string{}, spec.Env...)`, `cmd.Env = append([]string{}, spec.Env...); cmd.Env = os.Environ()`, "Command", ""},
+		{"widening_prepare_hook", "pkg/preview/confine_darwin.go", `return backend.ApplyToCmd(cmd, policy)`, `cmd.Env = append(cmd.Env, "Q62_EXTRA=x"); return backend.ApplyToCmd(cmd, policy)`, "hooksFor", ""},
+		{"duplicate_windows_override", program, `"SystemRoot="+os.Getenv("SystemRoot")`, `"SystemRoot="+os.Getenv("SystemRoot"), "SYSTEMROOT=override"`, "officeConversion.run", ""},
+		{"unix_forwarding_enrichment", "pkg/preview/launcher/child_unix.go", `unix.Exec(target[0], target, os.Environ())`, `unix.Exec(target[0], target, append(os.Environ(), "Q62_EXTRA=x"))`, "Main", ""},
+		{"windows_forwarding_enrichment", "pkg/preview/launcher/child_windows.go", `cmd.Env = os.Environ()`, `cmd.Env = append(os.Environ(), "Q62_EXTRA=x")`, "Main", ""},
+		{"before_hidden_dispatch", "pkg/app/app.go", `if code, handled := runHiddenMode(os.Args); handled {`, `os.Setenv("Q62_EXTRA", "x"); if code, handled := runHiddenMode(os.Args); handled {`, "Main", ""},
+		{"unreviewed_start_caller", "pkg/q62probe/extra.go", "", `package q62probe; import "github.com/elicify-ai/omnipus/pkg/preview/launcher"; func extra(s launcher.Spec) { launcher.Start(s) }`, "", "unreviewed boundary reference " + wu19PreviewLauncher + ".Start from github.com/elicify-ai/omnipus/pkg/q62probe.extra"},
+		{"unreviewed_command_caller", "pkg/q62probe/extra.go", "", `package q62probe; import "github.com/elicify-ai/omnipus/pkg/preview/launcher"; func extra(s launcher.Spec) { launcher.Command(s) }`, "", "unreviewed boundary reference " + wu19PreviewLauncher + ".Command from github.com/elicify-ai/omnipus/pkg/q62probe.extra"},
+		{"new_launcher_initialization", "pkg/preview/launcher/q62_extra.go", "", `package launcher; import "os"; func init() { os.Setenv("Q62_EXTRA", "x") }`, "", "unreviewed launcher file"},
+		{"other_package_initialization", "pkg/q62probe/extra.go", "", `package q62probe; import "os"; func init() { enrich() }; func enrich() { os.Setenv("Q62_EXTRA", "x") }`, "", "initialization enriches environment in"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -47,16 +48,35 @@ func TestWU19_OfficePreviewClosedEnvironment(t *testing.T) {
 				}
 				return
 			}
-			if !strings.HasPrefix(reason, "closed preview contract drift:") {
-				t.Fatalf("unsafe fixture %s must fail the closed-contract proof, got %q", tc.name, reason)
+			location, err := filepath.Abs(filepath.Join("..", "..", filepath.FromSlash(tc.file)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := tc.want
+			if tc.declaration != "" {
+				want = "reviewed declaration " + location + "::" + tc.declaration + " changed"
+			} else if tc.name == "new_launcher_initialization" || tc.name == "other_package_initialization" {
+				want += " " + location
+			}
+			if !strings.Contains(reason, want) {
+				t.Fatalf("unsafe fixture %s must report specific rule %q, got %q", tc.name, want, reason)
+			}
+			t.Logf("rejected for specific rule: %s", want)
+			if tc.name == "added_converter_key" {
+				t.Logf("actionable diagnostic: %s", reason)
+			}
+			for _, instruction := range []string{"Office preview closed-environment boundary", "security-lead review", "OMNIPUS_OFFICE_UPDATE_ENV_PINS=1", "closed-env-source-pins.json", "CLOSED-ENV-PINS.md"} {
+				if !strings.Contains(reason, instruction) {
+					t.Fatalf("unsafe fixture %s lacks actionable instruction %q: %s", tc.name, instruction, reason)
+				}
 			}
 			_, findings := p.scan()
 			found := false
 			for _, finding := range findings {
-				found = found || strings.Contains(finding.reason, "closed preview contract drift:")
+				found = found || strings.Contains(finding.reason, want)
 			}
 			if !found {
-				t.Fatalf("unsafe fixture %s must fail the actual inventory, findings=%v", tc.name, findings)
+				t.Fatalf("unsafe fixture %s must fail actual inventory for specific rule %q, findings=%v", tc.name, want, findings)
 			}
 		})
 	}
@@ -111,7 +131,7 @@ func wu19OfficeFixture(t *testing.T, base *wu19Inventory, name, old, replacement
 	if err != nil {
 		t.Fatalf("fixture must parse: %v", err)
 	}
-	p.addFile(name, "github.com/elicify-ai/omnipus/"+path.Dir(name), file, fset)
+	p.addFile(name, "github.com/elicify-ai/omnipus/"+path.Dir(name), file, fset, []byte(source))
 	return &p
 }
 

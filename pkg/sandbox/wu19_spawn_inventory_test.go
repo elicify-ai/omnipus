@@ -54,8 +54,12 @@ func wu19LoadInventory(t *testing.T, root string) *wu19Inventory {
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
+			source, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
 			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			file, err := parser.ParseFile(fset, path, source, parser.SkipObjectResolution)
 			if err != nil {
 				return err
 			}
@@ -63,7 +67,7 @@ func wu19LoadInventory(t *testing.T, root string) *wu19Inventory {
 			if err != nil {
 				return err
 			}
-			p.addFile(path, "github.com/elicify-ai/omnipus/"+filepath.ToSlash(rel), file, fset)
+			p.addFile(path, "github.com/elicify-ai/omnipus/"+filepath.ToSlash(rel), file, fset, source)
 			return nil
 		})
 		if err != nil {

@@ -17,6 +17,9 @@ type wu19File struct {
 	identities     *types.Info
 	declarations   map[types.Object]ast.Node
 	identityErrors []error
+	// W3: retain original token offsets/bytes; boundary pins never use go/format.
+	source []byte
+	tokens *token.File
 }
 
 type wu19Function struct {
@@ -41,8 +44,11 @@ func wu19NewInventory() *wu19Inventory {
 	return &wu19Inventory{funcs: map[string][]*wu19Function{}, unresolved: map[string]bool{}, types: map[string]ast.Expr{}, typeOwners: map[ast.Expr]*wu19File{}, globals: map[string]wu19Reference{}, globalObjects: map[types.Object]bool{}}
 }
 
-func (p *wu19Inventory) addFile(name, pkg string, file *ast.File, fset *token.FileSet) {
-	s := &wu19File{path: name, pkg: pkg, ast: file, imports: map[string]string{}}
+func (p *wu19Inventory) addFile(name, pkg string, file *ast.File, fset *token.FileSet, source ...[]byte) {
+	s := &wu19File{path: name, pkg: pkg, ast: file, imports: map[string]string{}, tokens: fset.File(file.Pos())}
+	if len(source) == 1 {
+		s.source = append([]byte(nil), source[0]...)
+	}
 	s.resolveObjects(fset)
 	for _, imp := range file.Imports {
 		actual, err := strconv.Unquote(imp.Path.Value)

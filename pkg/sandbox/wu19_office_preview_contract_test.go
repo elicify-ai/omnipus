@@ -1,16 +1,11 @@
 package sandbox
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go/ast"
-	"go/format"
 	"go/token"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -21,42 +16,20 @@ const wu19PreviewLauncher = wu19PreviewPackage + "/launcher"
 // security-reviewed source; comments are not an environment-safety proof.
 // Runtime final-target goldens independently check the specification's values.
 func (p *wu19Inventory) officePreviewClosedEnvironment() string {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "officepreview", "closed-env-source-pins.json"))
+	raw, err := os.ReadFile(wu19OfficeLocation(wu19OfficePinFile))
 	if err != nil {
-		return "closed preview contract drift: cannot read reviewed pins: " + err.Error()
+		return wu19OfficeDrift("cannot read reviewed pin manifest: %v", err)
 	}
-	var pins struct {
-		Reviewed string            `json:"reviewed_source"`
-		Files    map[string]string `json:"files"`
+	var pins wu19OfficePinManifest
+	if err := json.Unmarshal(raw, &pins); err != nil {
+		return wu19OfficeDrift("invalid reviewed pin manifest: %v", err)
 	}
-	if err = json.Unmarshal(raw, &pins); err != nil || len(pins.Files) != 21 || pins.Reviewed != "59855878df8af4bace58de6a48604a9041f35010" {
-		return "closed preview contract drift: invalid reviewed pin manifest"
+	current, reason := p.officePreviewCurrentPins()
+	if reason != "" {
+		return reason
 	}
-	seen := map[string]bool{}
-	for _, file := range p.files {
-		name := wu19OfficeFileName(file)
-		want, pinned := pins.Files[name]
-		if file.pkg == wu19PreviewLauncher && !pinned {
-			return "closed preview contract drift: unreviewed launcher file " + name
-		}
-		if !pinned {
-			continue
-		}
-		if seen[name] {
-			return "closed preview contract drift: duplicate source identity " + name
-		}
-		seen[name] = true
-		var normalized bytes.Buffer
-		if err = format.Node(&normalized, token.NewFileSet(), file.ast); err != nil {
-			return "closed preview contract drift: cannot normalize " + name
-		}
-		digest := sha256.Sum256(normalized.Bytes())
-		if hex.EncodeToString(digest[:]) != want {
-			return "closed preview contract drift: reviewed declarations changed in " + name
-		}
-	}
-	if len(seen) != len(pins.Files) {
-		return "closed preview contract drift: a reviewed source file is missing"
+	if reason := wu19OfficeComparePins(pins, current); reason != "" {
+		return reason
 	}
 	if reason := p.officePreviewBoundaryReferences(); reason != "" {
 		return reason
@@ -86,7 +59,12 @@ func (p *wu19Inventory) officePreviewRelevant() bool {
 }
 
 func wu19OfficeDrift(format string, args ...any) string {
-	return "closed preview contract drift: " + fmt.Sprintf(format, args...)
+	return "closed preview contract drift: " + fmt.Sprintf(format, args...) +
+		". This is the Office preview closed-environment boundary; security-lead review is required before accepting the change. " +
+		"After that review, from " + wu19OfficeLocation("") +
+		" use the shared slot runner for: OMNIPUS_OFFICE_UPDATE_ENV_PINS=1 CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run '^TestWU19_OfficePreviewClosedEnvironment$' github.com/elicify-ai/omnipus/pkg/sandbox. " +
+		"Inspect and commit " + wu19OfficeLocation(wu19OfficePinFile) +
+		". New callers/scope also need the approved test lists updated; pin regeneration alone is not approval. Exact procedure: " + wu19OfficeLocation(wu19OfficePinGuide)
 }
 
 func wu19OfficeContext(file *wu19File, decl ast.Decl) *wu19Function {
@@ -112,7 +90,7 @@ func (p *wu19Inventory) officePreviewBoundaryReferences() string {
 	}
 	for _, file := range p.files {
 		if file.imports["."] == wu19PreviewLauncher {
-			return wu19OfficeDrift("unreviewed dot-import boundary in %s", file.path)
+			return wu19OfficeDrift("unreviewed dot-import boundary in %s", wu19OfficeLocation(wu19OfficeFileName(file)))
 		}
 		for _, decl := range file.ast.Decls {
 			fn := wu19OfficeContext(file, decl)
@@ -197,10 +175,10 @@ func (p *wu19Inventory) officePreviewStartupEnvironment() string {
 		for _, decl := range file.ast.Decls {
 			fn := wu19OfficeContext(file, decl)
 			if function, ok := decl.(*ast.FuncDecl); ok && function.Name.Name == "init" && inspect(fn, function.Body, map[string]bool{}) {
-				return wu19OfficeDrift("initialization enriches environment in %s", file.path)
+				return wu19OfficeDrift("initialization enriches environment in %s", wu19OfficeLocation(wu19OfficeFileName(file)))
 			}
 			if group, ok := decl.(*ast.GenDecl); ok && group.Tok == token.VAR && inspect(fn, group, map[string]bool{}) {
-				return wu19OfficeDrift("global initializer enriches environment in %s", file.path)
+				return wu19OfficeDrift("global initializer enriches environment in %s", wu19OfficeLocation(wu19OfficeFileName(file)))
 			}
 		}
 	}
