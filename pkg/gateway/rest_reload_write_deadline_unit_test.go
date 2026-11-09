@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"syscall"
 	"testing"
@@ -135,7 +136,8 @@ func TestReloadWaitConnectionDrop_OnlyEOFOrReset(t *testing.T) {
 		want bool
 	}{
 		{"EOF", io.EOF, true},
-		{"wrapped_EOF", fmt.Errorf("HTTP client: %w", io.EOF), true},
+		// url.Error supplies a real transport wrapper; errors.Is must still see io.EOF.
+		{"wrapped_EOF", &url.Error{Op: "HTTP client", Err: io.EOF}, true},
 		{"reset", syscall.ECONNRESET, true},
 		{"wrapped_reset", fmt.Errorf("read TCP: %w", syscall.ECONNRESET), true},
 		{"nil_is_not_drop", nil, false},
