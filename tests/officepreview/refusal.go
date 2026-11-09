@@ -38,7 +38,7 @@ func AtPackagedExecutable(t *testing.T) bool {
 	require.NoError(t, os.MkdirAll(filepath.Dir(exe), 0700))
 	self, err := os.Executable()
 	require.NoError(t, err)
-	if err := os.Link(self, exe); err != nil {
+	if linkErr := os.Link(self, exe); linkErr != nil {
 		in, openErr := os.Open(self)
 		require.NoError(t, openErr)
 		defer in.Close()
@@ -125,7 +125,7 @@ func RegisteredOfficeExecutable(t *testing.T, home, root, exePath string) string
 	exeName := filepath.Base(exePath)
 	installed := filepath.Join(resolvedRoot, exeName)
 	if installed != exePath {
-		if err := os.Link(exePath, installed); err != nil {
+		if linkErr := os.Link(exePath, installed); linkErr != nil {
 			in, openErr := os.Open(exePath)
 			require.NoError(t, openErr)
 			defer in.Close()

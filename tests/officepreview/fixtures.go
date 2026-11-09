@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
 	"github.com/elicify-ai/omnipus/pkg/preview/extracttext"
 	"github.com/elicify-ai/omnipus/pkg/preview/launcher"
+	"github.com/elicify-ai/omnipus/tests/officepreview/realprograms"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,23 +35,18 @@ func init() {
 // resolver never receives those variables as component-root configuration.
 func Service(t *testing.T, office, renderer bool) *preview.Service {
 	t.Helper()
+	officeRoot, rendererRoot := realprograms.Roots(t, office, renderer)
 	self, err := os.Executable()
 	require.NoError(t, err)
 	home := t.TempDir()
 	opts := component.RegisterOptions{Home: home, Operator: "office-preview-test"}
 	if office {
-		opts.Folder = os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
-		if opts.Folder == "" {
-			t.Fatal("BLOCKED: real LibreOffice fixture unavailable; set OMNIPUS_TEST_OFFICE_ROOT — required by office-preview T-10/T-17/T-30")
-		}
+		opts.Folder = officeRoot
 		_, err = component.RegisterOffice(opts)
 		require.NoError(t, err)
 	}
 	if renderer {
-		opts.Folder = os.Getenv("OMNIPUS_TEST_RENDERER_ROOT")
-		if opts.Folder == "" {
-			t.Fatal("BLOCKED: real renderer fixture unavailable; set OMNIPUS_TEST_RENDERER_ROOT — required by office-preview T-02")
-		}
+		opts.Folder = rendererRoot
 		_, err = component.RegisterRenderer(opts)
 		require.NoError(t, err)
 	}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -209,9 +210,9 @@ func TestRunLimitedLinuxAllocationAndStackBombs(t *testing.T) {
 			if mode == "stack" {
 				var exit *exec.ExitError
 				require.ErrorAs(t, waitErr, &exit)
-				status, ok := exit.Sys().(unix.WaitStatus)
+				status, ok := exit.Sys().(syscall.WaitStatus)
 				require.True(t, ok)
-				require.Equal(t, unix.SIGSEGV, status.Signal())
+				require.Equal(t, syscall.SIGSEGV, status.Signal())
 				require.LessOrEqual(t, limits.StackSoft, uint64(8<<20))
 				return
 			}

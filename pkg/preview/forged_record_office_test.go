@@ -5,10 +5,12 @@ package preview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -100,7 +102,12 @@ func startForgedScratchCall(t *testing.T) forgedScratch {
 
 	socketID, err := randomID(4)
 	require.NoError(t, err)
-	socketDir := "/private/tmp/o-" + socketID
+	socketRoot := os.TempDir()
+	if runtime.GOOS == "darwin" {
+		// Recovery accepts the macOS launcher's short, canonical socket path.
+		socketRoot = "/private/tmp"
+	}
+	socketDir := filepath.Join(socketRoot, "o-"+socketID)
 	require.NoError(t, os.Mkdir(socketDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(socketDir, "decoy"), []byte("must survive"), 0o600))
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
@@ -186,7 +193,7 @@ func retireTrustedGateway(t *testing.T, c *call) int {
 	t.Helper()
 	path := filepath.Join(filepath.Dir(c.dir), ownerFile)
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return 0
 	}
 	require.NoError(t, err)

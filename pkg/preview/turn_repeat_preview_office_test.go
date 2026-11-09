@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/preview/component"
+	"github.com/elicify-ai/omnipus/tests/officepreview/realprograms"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,7 +79,10 @@ import (
 // verified to exist and be readable by the test first); the hook captured
 // zero converter starts (that fails the test, never skips).
 func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
-	primeKernelSandbox(t)
+	officeRoot, rendererRoot := realprograms.Roots(t, true, true)
+	if !primeKernelSandbox(t) {
+		return
+	}
 
 	// The home lies under a symlink so folders computed from unresolved paths
 	// fail visibly (§3.4 D8d risk row): the policy's paths are resolved, and
@@ -96,14 +100,6 @@ func TestPreviewRepeatFromAgentTurnKeepsItsOwnScratch(t *testing.T) {
 	homeReal, linkErr := filepath.EvalSymlinks(home)
 	require.NoError(t, linkErr, "instrument: the data folder resolves to its real prefix")
 
-	officeRoot := os.Getenv("OMNIPUS_TEST_OFFICE_ROOT")
-	if officeRoot == "" {
-		t.Fatal("BLOCKED: real LibreOffice fixture unavailable; set OMNIPUS_TEST_OFFICE_ROOT — required by T-102 (real LibreOffice is missing (fail, never skip))")
-	}
-	rendererRoot := os.Getenv("OMNIPUS_TEST_RENDERER_ROOT")
-	if rendererRoot == "" {
-		t.Fatal("BLOCKED: real renderer fixture unavailable; set OMNIPUS_TEST_RENDERER_ROOT (a built omnipus-pdfium) — required by T-102 (both previews must produce pages, and no built omnipus-pdfium renderer exists on this Mac)")
-	}
 	opts := component.RegisterOptions{Home: home, Operator: "office-preview-test", Folder: officeRoot}
 	_, err := component.RegisterOffice(opts)
 	require.NoError(t, err)
@@ -276,15 +272,15 @@ func (oc *officeCapture) hook(cs converterStart) {
 	laterFile := filepath.Join(later, "later-note.txt")
 	require.NoError(oc.t, os.WriteFile(laterFile, []byte("created after the call started"), 0o600))
 	spec := previewProbeSpec{
-		Receipt:      previewProbeReceiptPath,
-		Lookup:       rec.parents,
-		Planted:      oc.targets.planted,
-		OtherCall:    later,
-		OtherFile:    laterFile,
-		Owner:        filepath.Join(filepath.Dir(workDir), "owner.json"),
-		Workspace:    oc.targets.workspace,
-		Outside:      oc.targets.outside,
-		RegistryFile: oc.registryFile,
+		Receipt:       previewProbeReceiptPath,
+		Lookup:        rec.parents,
+		Planted:       oc.targets.planted,
+		OtherCall:     later,
+		OtherFile:     laterFile,
+		Owner:         filepath.Join(filepath.Dir(workDir), "owner.json"),
+		WorkspaceFile: oc.targets.workspace,
+		Outside:       oc.targets.outside,
+		RegistryFile:  oc.registryFile,
 	}
 	specData, specErr := json.Marshal(spec)
 	if specErr != nil {

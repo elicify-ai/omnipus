@@ -29,15 +29,15 @@ func init() {
 // except the receipt and spec names, which are relative to the probe's
 // working folder (<id>/work).
 type previewProbeSpec struct {
-	Receipt      string   `json:"receipt"`
-	Lookup       []string `json:"lookup"`        // folders above the converter's own
-	Planted      string   `json:"planted"`       // file planted in the data folder
-	OtherCall    string   `json:"other_call"`    // a call folder created after this start
-	OtherFile    string   `json:"other_file"`    // a file inside it
-	Owner        string   `json:"owner"`         // this call's owner record
-	Workspace    string   `json:"workspace"`     // an agent workspace file
-	Outside      string   `json:"outside"`       // <home>/system outside the registry
-	RegistryFile string   `json:"registry_file"` // a file inside the registry folder
+	Receipt       string   `json:"receipt"`
+	Lookup        []string `json:"lookup"`        // folders above the converter's own
+	Planted       string   `json:"planted"`       // file planted in the data folder
+	OtherCall     string   `json:"other_call"`    // a call folder created after this start
+	OtherFile     string   `json:"other_file"`    // a file inside it
+	Owner         string   `json:"owner"`         // this call's owner record
+	WorkspaceFile string   `json:"workspace"`     // an agent workspace file
+	Outside       string   `json:"outside"`       // <home>/system outside the registry
+	RegistryFile  string   `json:"registry_file"` // a file inside the registry folder
 }
 
 // previewProbeReceipt is what the probe found. Empty error strings mean the
@@ -104,7 +104,7 @@ func runPreviewProbeProcess(specPath string) int {
 	if _, err := os.ReadFile(spec.Owner); err != nil {
 		receipt.OwnerReadErr = err.Error()
 	}
-	if _, err := os.ReadFile(spec.Workspace); err != nil {
+	if _, err := os.ReadFile(spec.WorkspaceFile); err != nil {
 		receipt.WorkspaceReadErr = err.Error()
 	}
 	if _, err := os.ReadFile(spec.Outside); err != nil {

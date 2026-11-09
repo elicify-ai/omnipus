@@ -82,7 +82,9 @@ func recordAttackOfficeProcess() int {
 // record is byte-identical to what the gateway published. Confinement being
 // off fails the test — it never skips.
 func TestPreviewRecord_IsOutOfConverterReach(t *testing.T) {
-	primeKernelSandbox(t)
+	if !primeKernelSandbox(t) {
+		return
+	}
 	home := t.TempDir()
 	conv, c := fakeOfficeCall(t, home, "record_attack")
 	t.Cleanup(c.finish)

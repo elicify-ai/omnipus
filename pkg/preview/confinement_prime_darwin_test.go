@@ -18,10 +18,10 @@ import (
 // ("the macOS sandbox is not active") and any confinement assertion would be
 // vacuous. The rows that must see real confinement call this first; it fails
 // the test when real Seatbelt is unavailable — it never skips.
-func primeKernelSandbox(t *testing.T) {
+func primeKernelSandbox(t *testing.T) bool {
 	t.Helper()
 	if backend := sandbox.CurrentSeatbeltBackend(); backend != nil && backend.Available() {
-		return
+		return true
 	}
 	backend := sandbox.NewSeatbeltBackend()
 	require.True(t, backend.Available(),
@@ -34,4 +34,5 @@ func primeKernelSandbox(t *testing.T) {
 	require.NoError(t, backend.Apply(sandbox.SandboxPolicy{
 		FilesystemRules: []sandbox.PathRule{{Path: base, Access: sandbox.AccessRead | sandbox.AccessWrite | sandbox.AccessExecute}},
 	}), "instrument: the priming Apply must succeed so hooksFor finds an active backend")
+	return true
 }

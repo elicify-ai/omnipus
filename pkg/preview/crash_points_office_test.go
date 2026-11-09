@@ -165,6 +165,12 @@ func TestPreviewRecovery_CrashPointsKillHelperGateway(t *testing.T) {
 	exe, err := os.Executable()
 	require.NoError(t, err)
 	selfStart := mustProcessStart(t, os.Getpid())
+	// AD-2: Linux's SIGKILL parent-death signal has already stopped the
+	// launcher; macOS has no parent-death signal and recovery must stop it.
+	wantDuringTargetKilled := 0
+	if runtime.GOOS == "darwin" {
+		wantDuringTargetKilled = 1
+	}
 	for _, stage := range []struct {
 		name                         string
 		targetMayStart               bool
@@ -179,7 +185,7 @@ func TestPreviewRecovery_CrashPointsKillHelperGateway(t *testing.T) {
 		// during the target: on macOS the launcher stays alive until recovery
 		// stops it (no parent-death signal); Linux's parent-death signal ends
 		// it, so recovery removes a dead-identity folder without a kill.
-		{"during_target", true, true, runtime.GOOS != "darwin", 1},
+		{"during_target", true, true, runtime.GOOS != "darwin", wantDuringTargetKilled},
 		// between the two exit-81 starts: the first launcher already exited;
 		// the record reads preparing and nothing is stopped.
 		{"exit81_between", true, false, false, 0},

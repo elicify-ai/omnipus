@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/preview/launcher"
 	"github.com/elicify-ai/omnipus/pkg/preview/protocol"
 	"github.com/elicify-ai/omnipus/tests/officepreview"
+	"github.com/elicify-ai/omnipus/tests/officepreview/realprograms"
 	"github.com/stretchr/testify/require"
 )
 
@@ -111,13 +112,10 @@ func officeStressOne(self, target string, args []string, render bool) (string, e
 }
 
 func TestRunLimitedLinuxThirteenHundredStartsHaveNoRuntimeFatals(t *testing.T) {
+	_, root := realprograms.Roots(t, false, true)
 	self, err := os.Executable()
 	require.NoError(t, err)
 	officeProveFatalClassifier(t, self)
-	root := os.Getenv("OMNIPUS_TEST_RENDERER_ROOT")
-	if root == "" {
-		t.Fatal("BLOCKED: real renderer fixture unavailable; set OMNIPUS_TEST_RENDERER_ROOT — required by office-preview T-77 1000 renderer starts")
-	}
 	home := t.TempDir()
 	_, err = component.RegisterRenderer(component.RegisterOptions{Home: home, Folder: root, Operator: "test-operator"})
 	require.NoError(t, err)
