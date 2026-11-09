@@ -212,8 +212,9 @@ func MaskEnv(env map[string]string) map[string]string {
 // (resolved exactly as the runtime resolves it, through agenthome.Resolve),
 // the sandbox's extra read+write folders (sandbox.allowed_paths, "~"
 // expanded), the per-user temporary folder (runtimeTempRoots), every workspace
-// folder and the host folder of every workspace mount. Every entry is absolute: a relative one is made absolute against
-// the working directory, as the runtime does. It is read on every call, so a
+// folder and the host folder of every workspace mount. Every entry is
+// absolute: a relative one is made absolute against the working directory, as
+// the runtime does. It is read on every call, so a
 // mount or agent added after a program was saved counts at the next check.
 // The Settings save, cli-validate, every run, the read model and the agent
 // tools all use this one list; $OMNIPUS_HOME is added by the check itself.
@@ -222,8 +223,8 @@ func MaskEnv(env map[string]string) map[string]string {
 // home, an entry that cannot be made absolute, a workspace listing that
 // fails, an unsafe workspace id, a temporary folder that cannot be resolved,
 // or a mount record that cannot be read or had entries dropped is an error,
-// never a shorter list: a missing root
-// would silently turn "refuse" into "allow". Callers pass the error to
+// never a shorter list: a missing root would silently turn "refuse" into
+// "allow". Callers pass the error to
 // CheckProgramPath, which refuses as CheckLocationUnverifiable. A missing
 // mount record is an empty list, not an error.
 func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
