@@ -107,7 +107,10 @@ func TestRunnerTestEndpoint_ForbiddenSavedProgramNeverRuns_S4(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, resp.Ok)
 	assert.Equal(t, gen.RunnerTestResponseReasonMissingBinary, resp.Reason)
-	want := fmt.Sprintf("This agent cannot run: the program set for Claude Code in Settings → Third-party agents does not pass its checks (agent_writable_location at %s). A person can fix it there.", program)
-	assert.Equal(t, want, resp.Message, "S4 uses the same actionable run refusal")
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		want := "This agent cannot run: the program set for Claude Code in Settings → Third-party agents does not pass its checks (agent_writable_location). A person can fix it there."
+		assert.Equal(t, want, resp.Message, "S4 uses the same actionable run refusal")
+		t11bAssertNoProgramDiagnostics(t, resp.Message, program)
+	})
 	assert.NoFileExists(t, marker, "an agent-writable executable cannot be used for the diagnostic either")
 }

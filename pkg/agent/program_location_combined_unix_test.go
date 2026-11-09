@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,9 @@ func t11cAssertNativeRefused(t *testing.T, f *t11cNativeFixture, check string) {
 	if assert.Error(t, runErr, "combined root rule must reach actual dispatch") {
 		text := runErr.Error()
 		assert.Regexp(t, `^This agent cannot run: `, text)
-		assert.Contains(t, text, "("+check+" at ", "actual refusal names the failed check")
+		assert.Contains(t, text, "Codex", "Q48: refusal keeps the program identity")
+		assert.Regexp(t, `\b`+check+`\b`, text, "actual refusal names the exact failed check")
+		t11cAssertNoProgramDiagnostics(t, text, f.program)
 		if check == "location_unverifiable" {
 			assert.Contains(t, text, t11combined.LocationUnverifiableCause, "Q37 A: exact approved cause clause")
 			assert.Contains(t, text, "Details are in the server log.")
@@ -80,6 +83,21 @@ func t11cAssertNativeRefused(t *testing.T, f *t11cNativeFixture, check string) {
 	after, err := os.ReadFile(f.marker + ".all")
 	require.NoError(t, err)
 	assert.Equal(t, f.beforeStarts, after, "not even a version probe may start before refusal")
+}
+
+// Q48 A / wide R5: only diagnostic assertions fail on the pre-fix code;
+// the surrounding native no-start and recovery assertions must still execute.
+func t11cAssertNoProgramDiagnostics(t *testing.T, text, program string) {
+	t.Helper()
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		private := []string{program, filepath.Dir(program), "permission denied", "no such file",
+			"not a directory", "read-only file system", "operation not permitted", "is a directory",
+			"no space left", "input/output error", "fork/exec"}
+		for _, fragment := range private {
+			assert.NotContains(t, strings.ToLower(text), strings.ToLower(fragment),
+				"Q48: client refusal must not carry checked-file or OS diagnostics")
+		}
+	})
 }
 
 func t11cNativeRecovery(t *testing.T, f *t11cNativeFixture) {

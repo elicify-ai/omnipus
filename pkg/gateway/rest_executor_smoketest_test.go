@@ -274,8 +274,11 @@ func TestPostAgentsExecutorSmokeTest_MissingBinary(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.False(t, resp.Ok)
 	require.NotNil(t, resp.Error)
-	assert.Equal(t, t11bMissingProgramText("Claude Code", missing), *resp.Error,
-		"this row must exercise a missing configured program, not an absent Settings path")
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		assert.Equal(t, t11bMissingProgramText("Claude Code"), *resp.Error,
+			"this row must exercise a missing configured program, not an absent Settings path")
+		t11bAssertNoProgramDiagnostics(t, *resp.Error, missing)
+	})
 	assert.Nil(t, resp.ResponseText)
 	assert.Zero(t, factoryCalls, "a missing configured binary must fail before runner creation")
 }

@@ -8,7 +8,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,9 +46,12 @@ func TestExternalDispatch_MountAddedAfterSaveRefusesBeforeProcess_S2(t *testing.
 	// The retained continuation still checks current grants BEFORE Resume.
 	ts.opts.ExternalCLIResume = true
 	_, err = runExternalCLISubTurn(ctx, al, ts, "must not execute after writable mount was granted")
-	want := fmt.Sprintf("This agent cannot run: the program set for Codex in Settings → Third-party agents does not pass its checks (agent_writable_location at %s). A person can fix it there.", program)
+	want := "This agent cannot run: the program set for Codex in Settings → Third-party agents does not pass its checks (agent_writable_location). A person can fix it there."
 	if assert.Error(t, err, "S2: mount-host programs are refused before another driver/process start") {
-		assert.Equal(t, want, err.Error())
+		t.Run("classified_copy_Q48", func(t *testing.T) {
+			assert.Equal(t, want, err.Error())
+		})
+		t11cAssertNoProgramDiagnostics(t, err.Error(), program)
 	}
 	assert.Equal(t, before, t11bNativeCalls(t, marker), "S2: there must be no second actual process invocation")
 	allAfter, readErr := os.ReadFile(marker + ".all")

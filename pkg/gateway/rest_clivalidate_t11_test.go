@@ -43,6 +43,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/elicify-ai/omnipus/tests/fixtures/t11combined"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,17 +144,12 @@ func t11DecodeValidate(t *testing.T, w *httptest.ResponseRecorder) gen.CliValida
 	return resp
 }
 
-func t11DetailHasOne(t *testing.T, resp gen.CliValidateResponse, needles ...string) {
+func t11DetailHasOne(t *testing.T, resp gen.CliValidateResponse, check string) {
 	t.Helper()
 	require.NotNil(t, resp.Detail, "spec §3.2: the refusal message names the failed check")
 	require.NotContains(t, *resp.Detail, t11MarkerText, "the message must not carry file contents")
-	low := strings.ToLower(*resp.Detail)
-	for _, n := range needles {
-		if strings.Contains(low, strings.ToLower(n)) {
-			return
-		}
-	}
-	t.Fatalf("spec §3.2: detail %q must name the failed check (one of %v)", *resp.Detail, needles)
+	require.Regexp(t, `\bcheck `+check+` failed\b`, *resp.Detail,
+		"Q48: the exact class comes from the diagnostic, never a word in its private path")
 }
 
 func t11AssertNotSpawned(t *testing.T, marker string, spawns int) {
@@ -206,7 +202,7 @@ func t11CanonicalFailureElement(t *testing.T, element string) string {
 	return final
 }
 
-func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker string, spawns int, needles ...string) {
+func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker string, spawns int, program, check string) {
 	t.Helper()
 	require.Equal(t, http.StatusOK, w.Code,
 		"path-not-allowed is the classified reason on the existing 200 body, not an HTTP error; body=%s", w.Body.String())
@@ -215,8 +211,12 @@ func t11AssertPathRefused(t *testing.T, w *httptest.ResponseRecorder, marker str
 		"body=%s spawns=%d", w.Body.String(), spawns)
 	require.False(t, resp.Ok, "a refused candidate is not ok")
 	require.Nil(t, resp.Version, "nothing ran, so there is no version")
-	t11DetailHasOne(t, resp, needles...)
+	t11DetailHasOne(t, resp, check)
 	t11AssertNotSpawned(t, marker, spawns)
+	t.Run("client_diagnostics_Q48", func(t *testing.T) {
+		assert.Regexp(t, `(?i)claude[ -]code`, *resp.Detail, "Q48: keep the program identity")
+		t11bAssertNoProgramDiagnostics(t, *resp.Detail, program)
+	})
 }
 
 // t11BuildMarkerProgram builds a Go program that writes marker and prints a
@@ -342,27 +342,26 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 	spawns, launched := t11CountSpawns(t)
 	const ip = "198.51.100.70:1"
 
-	refuse := func(t *testing.T, path string, needles ...string) {
+	refuse := func(t *testing.T, path, check string) {
 		t.Helper()
 		t11ClearMarker(t, marker)
 		*spawns = 0
 		w := t11PostValidate(t, mux, cfg, token, path, ip, nil)
-		t11AssertPathRefused(t, w, marker, *spawns, needles...)
+		t11AssertPathRefused(t, w, marker, *spawns, path, check)
 	}
 
-	// B1 A / combine plan R10: the exact check and failing file/link replace
-	// obsolete prose. Keep the real handshake counter and executable marker.
+	// Q48 A / B1 R10: retain the exact check, not the private failed file/link.
+	// Keep the real handshake counter and executable marker.
 	refuseShared := func(t *testing.T, path, at string) {
 		t.Helper()
 		at = t11CanonicalFailureElement(t, at)
 		t11ClearMarker(t, marker)
 		*spawns = 0
 		w := t11PostValidate(t, mux, cfg, token, path, ip, nil)
-		t11AssertPathRefused(t, w, marker, *spawns, "agent_writable_location")
+		t11AssertPathRefused(t, w, marker, *spawns, path, "agent_writable_location")
 		resp := t11DecodeValidate(t, w)
 		require.NotNil(t, resp.Detail)
-		require.Equal(t, "not allowed: claude-code: check agent_writable_location failed at "+at, *resp.Detail,
-			"B1/R10: exact check and failed path element, not any path-not-allowed message")
+		t11bAssertCLIRefusalCopy(t, *resp.Detail, path, at)
 		require.Nil(t, resp.ResolvedPath, "a refused candidate returns no file to launch")
 	}
 
@@ -379,7 +378,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 		require.NoError(t, err)
 		dst := filepath.Join(work, "fakecli")
 		t11CopyExe(t, prog, dst, 0o755)
-		refuse(t, dst, "home", "workspace")
+		refuse(t, dst, "agent_writable_location")
 	})
 
 	t.Run("program inside a workspace mount", func(t *testing.T) {
@@ -406,7 +405,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			require.NoError(t, os.Chmod(outDir, 0o700))
 			link := filepath.Join(outDir, "codex-x")
 			require.NoError(t, os.Symlink(inside, link))
-			refuse(t, link, "link")
+			refuse(t, link, "agent_writable_location")
 		})
 
 		t.Run("middle link of the chain sits in a workspace", func(t *testing.T) {
@@ -491,7 +490,7 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			dir := t11combined.TrustedProgramDir(t)
 			dst := filepath.Join(dir, "fakecli")
 			t11CopyExe(t, prog, dst, 0o644)
-			refuse(t, dst, "executable")
+			refuse(t, dst, "not_executable")
 		})
 	}
 
@@ -508,11 +507,11 @@ func TestCliValidate_SharedCheckBeforeSpawn(t *testing.T) {
 			name = "fakecli.exe"
 			require.NoError(t, os.Rename(dst, filepath.Join(dir, name)))
 		}
-		refuse(t, name, "absolute")
+		refuse(t, name, "not_absolute")
 	})
 
 	t.Run("directory", func(t *testing.T) {
-		refuse(t, t11combined.TrustedProgramDir(t), "regular")
+		refuse(t, t11combined.TrustedProgramDir(t), "not_regular_file")
 	})
 
 	t.Run("allowed program returns the version and the resolved file", func(t *testing.T) {
@@ -607,7 +606,7 @@ func TestCliValidate_IncompleteDiscoveryRefuses(t *testing.T) {
 	token, cfg := t11Person(t, home)
 	spawns, _ := t11CountSpawns(t)
 	w := t11PostValidate(t, mux, cfg, token, dst, "198.51.100.82:1", nil)
-	t11AssertPathRefused(t, w, marker, *spawns, "workspace", "discover", "mount", "incomplete")
+	t11AssertPathRefused(t, w, marker, *spawns, dst, "location_unverifiable")
 }
 
 // TestCliValidate_IncompleteMountRefuses is S6 at the registered route.
@@ -633,7 +632,7 @@ func TestCliValidate_IncompleteMountRefuses(t *testing.T) {
 		t11ClearMarker(t, marker)
 		*spawns = 0
 		w := t11PostValidate(t, mux, cfg, token, dst, ip, nil)
-		t11AssertPathRefused(t, w, marker, *spawns, "mount")
+		t11AssertPathRefused(t, w, marker, *spawns, dst, "location_unverifiable")
 	}
 
 	t.Run("valid mount still runs a program outside it", func(t *testing.T) {
