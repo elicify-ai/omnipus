@@ -39,6 +39,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
@@ -139,6 +140,11 @@ func TestOnboardingCompleteCustomReview_UnreachableStillWarns(t *testing.T) {
 func TestOnboardingCompleteCustomReview_CatalogRebindStillWarns(t *testing.T) {
 	ru := newRecordingUpstream(t, http.StatusOK, okCompletionJSON)
 	api, tmpDir := newCustomOnboardingAPI(t, false)
+	// On the hosted edition an endpoint override on a catalog id is refused
+	// before any key check unless the operator's allow list names its host.
+	// Name it, so this test still reaches the key check it is about.
+	providercommon.SetEndpointAllowlist([]string{"rebind.example.test"})
+	t.Cleanup(func() { providercommon.SetEndpointAllowlist(nil) })
 	checker := security.NewSSRFChecker(nil)
 	checker.SetResolver(&rebindingResolver{})
 	api.ssrfChecker = checker

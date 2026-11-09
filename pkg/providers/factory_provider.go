@@ -16,6 +16,7 @@ import (
 	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/openai_compat"
 )
 
@@ -95,6 +96,15 @@ func resolveRow(cfg *config.ModelConfig) (resolvedRow, error) {
 	if err != nil {
 		return resolvedRow{}, err
 	}
+	if base != "" && common.CatalogBaseOverrideRefused(base) {
+		// Hosted edition: a catalog id keeps the catalog's own endpoint
+		// unless the operator's SSRF allow list names the override's host.
+		// Any other stored override is refused, public host or not: it was
+		// written before the endpoint guard existed and may belong to someone
+		// else, so no client is built for it. createStartupProvider keeps the
+		// gateway booting when such a row backs the default model.
+		return resolvedRow{}, &PlantedEndpointError{ProviderID: id}
+	}
 	if base != "" {
 		ep.API = base
 	}
@@ -103,6 +113,22 @@ func resolveRow(cfg *config.ModelConfig) (resolvedRow, error) {
 		api:      ep.API,
 		locality: row.Locality,
 	}, nil
+}
+
+// PlantedEndpointError refuses a stored api_base on a catalog provider id
+// that the hosted edition will not use: the operator's SSRF allow list does
+// not name its host. A row like this was written before the endpoint guard
+// existed (for example through the old pre-auth onboarding window), so the
+// address may belong to someone else. The owner's next save of the provider
+// clears it. Error() is the person-facing text shown in chat.
+type PlantedEndpointError struct {
+	ProviderID string
+}
+
+func (e *PlantedEndpointError) Error() string {
+	name := DisplayName(e.ProviderID)
+	return fmt.Sprintf("The request to %s was not sent: its saved address is not %s's own. "+
+		"Save %s again in the provider settings to reset the address.", name, name, name)
 }
 
 // EffectiveEndpoint is what a configured provider row resolves to at runtime:
