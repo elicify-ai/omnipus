@@ -37,8 +37,11 @@ properties:
     example: ""
   message:
     type: string
-    description: Human-readable description of the result (success detail or failure reason + remedy).
-    example: '"claude-code" ready: binary /usr/local/bin/claude present, v1.2.3, authenticated'
+    description: >
+      Human-readable description of the result (success detail or failure reason + remedy).
+      Fixed text per reason: it never carries a file path, the program's output or an
+      operating-system error, which go to the server log only.
+    example: '"claude-code" ready: binary present, authenticated'
   cli:
     type: string
     description: The external CLI name that was tested (the agent's executor.cli value).

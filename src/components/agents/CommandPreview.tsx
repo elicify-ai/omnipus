@@ -31,7 +31,7 @@
 //
 // Visual conventions deliberately reused rather than invented:
 //   - Loading/error skeleton shape + retry affordance: `AutoAppliedFlags`.
-//   - Warning/error inline line (icon + amber/error text): `CliPathValidationHint`.
+//   - Warning/error inline line: icons with semantic warning/error text colors.
 //   - Real-command code block styling (`bg-[var(--color-primary)]` +
 //     `text-[var(--color-accent)]` mono block): `GatewaySection`'s
 //     Tailscale/SSH-tunnel command blocks.

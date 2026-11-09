@@ -211,18 +211,20 @@ func MaskEnv(env map[string]string) map[string]string {
 // §3.2, founder Q28 A): the Omnipus home, every agent home cfg configures
 // (resolved exactly as the runtime resolves it, through agenthome.Resolve),
 // the sandbox's extra read+write folders (sandbox.allowed_paths, "~"
-// expanded), every workspace folder and the host folder of every workspace
-// mount. Every entry is absolute: a relative one is made absolute against
-// the working directory, as the runtime does. It is read on every call, so a
+// expanded), the per-user temporary folder (runtimeTempRoots), every workspace
+// folder and the host folder of every workspace mount. Every entry is
+// absolute: a relative one is made absolute against the working directory, as
+// the runtime does. It is read on every call, so a
 // mount or agent added after a program was saved counts at the next check.
 // The Settings save, cli-validate, every run, the read model and the agent
 // tools all use this one list; $OMNIPUS_HOME is added by the check itself.
 //
 // The list is complete or it is an error, and on error it is nil. A blank
 // home, an entry that cannot be made absolute, a workspace listing that
-// fails, an unsafe workspace id, or a mount record that cannot be read or
-// had entries dropped is an error, never a shorter list: a missing root
-// would silently turn "refuse" into "allow". Callers pass the error to
+// fails, an unsafe workspace id, a temporary folder that cannot be resolved,
+// or a mount record that cannot be read or had entries dropped is an error,
+// never a shorter list: a missing root would silently turn "refuse" into
+// "allow". Callers pass the error to
 // CheckProgramPath, which refuses as CheckLocationUnverifiable. A missing
 // mount record is an empty list, not an error.
 func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
@@ -267,6 +269,11 @@ func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 	if absErr != nil {
 		return nil, absErr
 	}
+	tempRoots, err := runtimeTempRoots()
+	if err != nil {
+		return nil, err
+	}
+	roots = append(roots, tempRoots...)
 	ids, err := workspace.ListWorkspaceIDs(home)
 	if err != nil {
 		return nil, fmt.Errorf("the workspaces could not be listed: %w", err)
@@ -289,6 +296,42 @@ func AgentWritableRoots(home string, cfg *config.Config) ([]string, error) {
 		return nil, absErr
 	}
 	return roots, nil
+}
+
+// runtimeTempRoots returns the per-user temporary folder and, when it differs,
+// its symlink-resolved form. It mirrors the kernel policy agents run under:
+// pkg/sandbox/sandbox.go::DefaultPolicyForModel grants os.TempDir() read, write
+// and execute when it is absolute and not /tmp, and
+// pkg/sandbox/derive_from_fspolicy.go::narrowSharedTmpWrite takes write away
+// only on the shared /tmp and /private/tmp. So the shared folder is left out,
+// in either spelling, and everything else is a place an agent can plant a
+// program (macOS $TMPDIR is /var/folders/.../T, resolved under /private).
+//
+// A folder that does not exist has no other spelling. Any other failure to
+// resolve it is an error, because the unresolved spelling alone may not match
+// the real location.
+func runtimeTempRoots() ([]string, error) {
+	temp := filepath.Clean(os.TempDir())
+	if !filepath.IsAbs(temp) || isSharedTemp(temp) {
+		return nil, nil
+	}
+	roots := []string{temp}
+	resolved, err := filepath.EvalSymlinks(temp)
+	switch {
+	case err == nil:
+		if resolved != temp && !isSharedTemp(resolved) {
+			roots = append(roots, resolved)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, fmt.Errorf("the temporary folder %q could not be resolved: %w", temp, err)
+	}
+	return roots, nil
+}
+
+// isSharedTemp reports whether p is the shared /tmp itself, in its declared or
+// resolved spelling (pkg/sandbox/derive_from_fspolicy.go::isSharedTmpPath).
+func isSharedTemp(p string) bool {
+	return p == "/tmp" || p == "/private/tmp"
 }
 
 // expandUserHome expands a leading "~" (alone, or followed by a separator)

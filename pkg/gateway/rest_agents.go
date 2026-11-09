@@ -46,8 +46,8 @@ func setAgentModelProvider(ag *gen.Agent, model *config.AgentModelConfig) {
 // of /api/v1/agents/{id}, reporting whether it handled the request:
 //   - GET  executor-defaults    — static reference data;
 //   - POST executor-preview     — stateless real-command preview
-//     (rest_executor_preview.go), body-driven and agent-agnostic so it works
-//     from the create wizard where no agent id exists yet;
+//     (rest_executor_preview.go), body-driven and agent-agnostic: it needs no
+//     agent id, so it does not depend on an agent being saved;
 //   - POST executor-smoke-test  — runs a bounded, real test prompt through an
 //     external-CLI worker (rest_executor_smoketest.go); it spends real tokens
 //     and enforces its own rate limit and in-flight cap inline, since it shares
@@ -261,7 +261,9 @@ func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentI
 	// the same check and the same refusal, never executor.cli_path or a program
 	// on $PATH (T11 FR-9). The file that passed is the file probed, exactly as
 	// returned by the check (TestConnectionCheckedFile: no trimming, no lookup).
-	// An unsupported cli has no Settings row and gets unknown-cli below.
+	// An unsupported cli has no Settings row and gets unknown-cli below. Every
+	// Message sent here is fixed text naming the class: the path, the program's
+	// output and OS errors are in the server log only (founder Q48 A, Q50 A).
 	resolved := ""
 	if thirdpartycli.IsKnownCLI(cli) {
 		var refusal string

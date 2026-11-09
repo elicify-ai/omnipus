@@ -374,9 +374,8 @@ export function fetchCliValidate(
 // a subagent_3p external-CLI worker with the given settings — argv sourced
 // from the same buildArgs() logic each driver (claude/codex/opencode) uses at
 // real dispatch time, not a hand-maintained static description. Stateless and
-// body-driven (mirrors
-// fetchCliValidate) so it works both from the create wizard, where no agent
-// id exists yet, and from an existing agent's edit form. Any cli_args token
+// body-driven (mirrors fetchCliValidate), so the agent editor can preview
+// unsaved settings without changing the saved agent. Any cli_args token
 // the safety filter would strip at real dispatch time is excluded from the
 // previewed argv and reported instead in the response's dropped_args, so the
 // operator sees before saving that something they typed will be silently
@@ -401,10 +400,9 @@ export function fetchExecutorPreview(
 // subprocess open for up to ~30s (rest_executor_smoketest.go's bounded
 // timeout/turn cap) — an explicit operator action only, never called
 // automatically. Stateless and body-driven (mirrors fetchExecutorPreview and
-// fetchCliValidate) so it works both from the create wizard, where no agent
-// id exists yet, and from an existing agent's edit form. Always resolves
-// (never rejects) for a domain-level failure — a failed run comes back as a
-// 200 with `ok: false` and `error` set, matching fetchCliValidate's
+// fetchCliValidate), so the agent editor can test unsaved executor settings.
+// Always resolves (never rejects) for a domain-level failure — a failed run
+// comes back as a 200 with `ok: false` and `error` set, matching fetchCliValidate's
 // convention of using the body for domain-level failure rather than 4xx/5xx;
 // this only rejects (throws ApiError) for a genuine transport/auth/rate-limit
 // failure. Pass an AbortSignal so the caller can cancel a stale in-flight

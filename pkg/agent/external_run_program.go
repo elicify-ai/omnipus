@@ -15,8 +15,8 @@ import (
 
 // resolveRunProgram applies r17 §3.6 before anything is dispatched: the
 // program is only the Settings clis.<cli>.path, re-checked with
-// ValidateProgramPath; the run execs the returned resolved file. With no
-// saved path the run is refused with NoPath, with a failing path with
+// thirdpartycli.CheckProgramPath; the run execs the returned resolved file.
+// With no saved path the run is refused with NoPath, with a failing path with
 // CheckFailed. The old per-agent cli_path is never read and there is no PATH
 // fallback. The person's preset parameters (§3.7) are read from the same
 // Settings row. A refusal is the error the caller returns as written.

@@ -10,8 +10,9 @@ description: >
   nothing; the result does not gate saving settings or an agent. `detail` is never raw stderr from
   the spawned process: it is a fixed classified message per reason, except
   for "path-not-allowed", where it is "not allowed: <cli>: check <name>
-  failed at <at>", naming the failed check and the path element concerned
-  (never file contents).
+  failed", naming the program and the failed check. It never carries a path,
+  an operating-system error or file contents; the path goes to the server
+  log only.
 type: object
 required:
   - ok
@@ -50,8 +51,9 @@ properties:
       no subprocess is spawned. "path-not-allowed": the shared program-file
       check refused cli_path (not absolute, missing, not a regular file, not
       executable for the gateway user on Linux/macOS, inside or linked
-      through the Omnipus home, an agent home, a workspace, a mount or an
-      extra folder the sandbox lets agents write, or the list of those
+      through the Omnipus home, an agent home, a workspace, a mount, an
+      extra folder the sandbox lets agents write or the per-user temporary
+      folder (unless it is the shared /tmp), or the list of those
       folders could not be read in full); nothing is spawned. Ownership and writability of the program are the
       operator's responsibility and are not checked. Maps
       runner.ReasonOK (empty string) to "ok".
@@ -79,7 +81,8 @@ properties:
       spawned process. One of a small allowlisted set per reason (e.g. "OK",
       "installed; not logged in", "not found", "did not run or returned no
       version", "unsupported cli"); for "path-not-allowed" it is "not
-      allowed: <cli>: check <name> failed at <at>", where <name> is one of
-      the cli_path_invalid check names (for example agent_writable_location
-      or location_unverifiable) and <at> the path element concerned.
+      allowed: <cli>: check <name> failed", where <name> is one of the
+      cli_path_invalid check names (for example agent_writable_location or
+      location_unverifiable). A path is never included; it goes to the
+      server log only.
     example: "OK"

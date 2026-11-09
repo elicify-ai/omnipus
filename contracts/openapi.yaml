@@ -13597,8 +13597,9 @@ paths:
         the shared program-file check (thirdpartycli.CheckProgramPath against
         the folders agents can write to) must accept cli_path: an absolute
         path whose final file, every link and every link's folder lie outside
-        the Omnipus home, agent homes, workspaces, mounts and the extra
-        folders the sandbox lets agents write, under any spelling the volume
+        the Omnipus home, agent homes, workspaces, mounts, the extra
+        folders the sandbox lets agents write and the per-user temporary
+        folder (unless it is the shared /tmp), under any spelling the volume
         treats as the same folder, and whose final file is a regular file
         (executable for the gateway user on Linux/macOS). When the list of
         those folders cannot be read in full, the candidate is refused with
