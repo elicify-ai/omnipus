@@ -32,7 +32,7 @@ func reloadWaitWriteDeadlineMiddleware(next http.Handler) http.Handler {
 				// The server default stays in force, so a save whose reload
 				// runs past 30 seconds would be dropped again: say so.
 				slog.Warn("rest: could not extend write deadline for reload wait",
-					"path", r.URL.Path, "error", err)
+					"path", redactRequestPath(r.URL.Path), "error", err)
 			}
 		}
 		next.ServeHTTP(w, r)
