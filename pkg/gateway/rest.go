@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -404,11 +406,39 @@ type restAPI struct {
 // providers_pkg.ValidateKey / FetchModels on the nil-receiver method call). The
 // NoopChecker makes "no SSRF guard" an explicit, type-safe value.
 func (a *restAPI) ssrfChk() providers_pkg.URLChecker {
-	if a.ssrfChecker == nil {
-		return providers_pkg.NoopChecker{}
+	if c := a.endpointChecker(); c != nil {
+		return c
 	}
-	return a.ssrfChecker
+	return providers_pkg.NoopChecker{}
 }
+
+// endpointChecker is the SSRF checker every provider endpoint this API calls
+// or saves must pass: the configured one (sandbox.ssrf on), else the hosted
+// edition's provider endpoint guard, which is on there whatever sandbox.ssrf
+// says (common.EndpointGuard). nil means no check on this build.
+func (a *restAPI) endpointChecker() *security.SSRFChecker {
+	if a.ssrfChecker != nil {
+		return a.ssrfChecker
+	}
+	return providercommon.EndpointGuard()
+}
+
+// endpointRefusalMessage is the 422 body for a provider endpoint the checker
+// refused. A host that does not resolve is reported as such, not as a blocked
+// address: the operator has a typo or a DNS problem to fix, not an allow list.
+func endpointRefusalMessage(err error) string {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) || strings.Contains(err.Error(), "DNS resolution failed") {
+		return "The provider address was not found: its host name did not resolve. Check the address for typos."
+	}
+	return providerEndpointBlockedMsg
+}
+
+// providerEndpointBlockedMsg is the refusal for a provider address that
+// resolves to a loopback, private or metadata address the endpoint checker
+// blocks. It names neither the address nor the guard.
+const providerEndpointBlockedMsg = "The provider address points at an internal network, " +
+	"which is not reachable from here. Use the provider's public address."
 
 // reauthStoreOrInit returns the lazily-initialized re-auth token store, creating
 // it on first use. Safe for concurrent callers.

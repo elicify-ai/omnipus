@@ -43,7 +43,8 @@ func wu24FreshProviderAPI(t *testing.T) *restAPI {
 }
 
 // Use the real route dispatcher and catalog handler. Only the middleware's
-// trusted config snapshot is injected, as it is in existing REST tests.
+// trusted config snapshot and a signed-in account are injected: on the hosted
+// edition these routes never serve an anonymous caller, onboarding or not.
 func wu24ProviderRequest(t *testing.T, api *restAPI, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var raw []byte
@@ -54,7 +55,7 @@ func wu24ProviderRequest(t *testing.T, api *restAPI, method, path string, body a
 	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
-	r = r.WithContext(context.WithValue(r.Context(), configContextKey{}, api.agentLoop.GetConfig()))
+	r = signedIn(r.WithContext(context.WithValue(r.Context(), configContextKey{}, api.agentLoop.GetConfig())))
 	w := httptest.NewRecorder()
 	if path == "/api/v1/providers/catalog" {
 		api.HandleProvidersCatalog(w, r)
