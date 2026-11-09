@@ -1696,7 +1696,9 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 // is a.endpointChecker(), the same checker the key check dials through: the
 // configured one when sandbox.ssrf.enabled is set, else the hosted edition's
 // always-on endpoint guard (design §6, port note step 2), else none — core
-// with sandbox.ssrf off checks nothing here.
+// with sandbox.ssrf off checks nothing here. The refusal text comes from
+// endpointRefusalMessage, as on PUT /providers/{id}: a host that does not
+// resolve is reported as not found, not as an internal address.
 func (a *restAPI) refuseBlockedCustomEndpoint(
 	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
 ) bool {
@@ -1707,7 +1709,7 @@ func (a *restAPI) refuseBlockedCustomEndpoint(
 	if err := checker.CheckURL(r.Context(), provider.Endpoint); err != nil {
 		slog.Warn("onboarding: SSRF guard refused a custom endpoint",
 			"provider", provider.ID, "error", err)
-		jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
+		jsonErr(w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 		return true
 	}
 	return false
@@ -1742,8 +1744,20 @@ func (a *restAPI) checkOnboardingKey(
 	if provider.Custom {
 		in.ProbeModels = []string{provider.Model}
 	}
+	return a.validateKeyNotingRefusal(ctx, in, provider.Custom)
+}
+
+// validateKeyNotingRefusal runs providers.ValidateKey through the effective
+// endpoint checker (ssrfChk). For a custom row it also reports whether that
+// checker refused an address on policy grounds while the check ran — at
+// connect time or on a redirect — which the result alone reports only as
+// "unreachable". The custom onboarding path and PUT /providers/{id} refuse
+// the save on that report; a catalog row keeps its unreachable warning.
+func (a *restAPI) validateKeyNotingRefusal(
+	ctx context.Context, in providers.ValidateInput, custom bool,
+) (providers.ValidationResult, bool) {
 	checker := a.endpointChecker()
-	if !provider.Custom || checker == nil {
+	if !custom || checker == nil {
 		return providers.ValidateKey(ctx, in, a.ssrfChk()), false
 	}
 	refusals := &addressRefusalRecorder{sc: checker}
@@ -1752,7 +1766,7 @@ func (a *restAPI) checkOnboardingKey(
 }
 
 // addressRefusalRecorder is the providers.URLChecker a custom row's key check
-// runs with (review of #1700). It applies a.endpointChecker() — the same
+// runs with (review of #1700; onboarding and PUT /providers/{id}). It applies a.endpointChecker() — the same
 // checker ssrfChk hands every other key check — unchanged and records
 // whether the guard refused an address on policy grounds — at connect time
 // (the host now resolves to a blocked address) or on a redirect — which the

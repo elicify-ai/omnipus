@@ -919,19 +919,29 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 			}
 		}
 		// Run the centralized key validator. SEC-16: RawDetail is server-debug only.
-		p.putValidationResult = providers_pkg.ValidateKey(p.r.Context(), providers_pkg.ValidateInput{
+		var guardRefused bool
+		p.putValidationResult, guardRefused = a.validateKeyNotingRefusal(p.r.Context(), providers_pkg.ValidateInput{
 			ProviderID:   p.providerID,
 			ProviderName: providers_pkg.DisplayName(p.providerID),
 			BaseURL:      persistedAPIBase,
 			APIKey:       *p.req.ApiKey,
 			ProbeModels:  probeModels,
-		}, a.ssrfChk())
+		}, p.isCustomRow)
 		if orig, ok := bedrockModelOriginal[p.putValidationResult.ProbedModel]; ok {
 			p.putValidationResult.ProbedModel = orig
 		}
 		slog.Debug("rest: PUT provider: key validation result",
 			"provider", p.providerID, "outcome", p.putValidationResult.Outcome,
 			"detail", p.putValidationResult.RawDetail)
+		// A custom row whose address the guard refused DURING the key check
+		// (a redirect to, or a dial-time answer of, a blocked address) is
+		// refused like an address refused up front: nothing is stored.
+		if guardRefused {
+			slog.Warn("rest: PUT provider: SSRF guard refused a custom endpoint during the key check",
+				"provider", p.providerID, "outcome", p.putValidationResult.Outcome)
+			jsonErr(p.w, http.StatusUnprocessableEntity, providerEndpointBlockedMsg)
+			return false
+		}
 		if p.putValidationResult.Blocks() {
 			// InvalidKey — reject the save. The key is NOT stored. SEC-16: message is curated.
 			jsonErr(p.w, http.StatusUnprocessableEntity, p.putValidationResult.Message)

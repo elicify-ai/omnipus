@@ -34,6 +34,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // hostedGuardCustomIDs are four distinct custom spellings: a plain custom
@@ -190,4 +191,93 @@ func TestOnboardingCustomHostedGuard_CoreSSRFOff_RedirectStillFollowed(t *testin
 	require.Len(t, rows, 1)
 	assert.Equal(t, "redirect-box", rows[0]["provider"])
 	assert.True(t, env.api.onboardingMgr.IsComplete())
+}
+
+// hostedGuardDNSNotFoundText is the design's refusal for a custom host that
+// does not resolve (design §6, hosted port note step 2: the custom path uses
+// endpointRefusalMessage, which tells a DNS failure apart from a blocked
+// address).
+const hostedGuardDNSNotFoundText = "The provider address was not found: its host name did not resolve. Check the address for typos."
+
+// installHostedGuardResolver gives this test its own hosted guard (an allow
+// list entry nobody uses forces a fresh checker, so the shared strict guard
+// is never touched) and points that guard's DNS lookups at r.
+func installHostedGuardResolver(t *testing.T, env *onboardAuthEnv, r security.Resolver) {
+	t.Helper()
+	require.Nil(t, env.api.ssrfChecker, "precondition: sandbox.ssrf is off")
+	providercommon.SetEndpointAllowlist([]string{"unused-allow-entry.example.invalid"})
+	t.Cleanup(func() { providercommon.SetEndpointAllowlist(nil) })
+	guard := providercommon.EndpointGuard()
+	require.NotNil(t, guard, "precondition: the hosted guard is active")
+	guard.SetResolver(r)
+}
+
+// TestOnboardingCustomHostedGuard_SSRFOff_DNSFailure_NotFoundText: hosted,
+// sandbox ssrf off, a custom host that does not resolve. The refusal is 422
+// with the "address not found" text, not the internal-network text; nothing
+// is stored, and the response names neither the host nor the resolver's
+// detail.
+func TestOnboardingCustomHostedGuard_SSRFOff_DNSFailure_NotFoundText(t *testing.T) {
+	env := newPlantEnv(t, config.EditionHosted, true)
+	installHostedGuardResolver(t, env, failingResolver{})
+	before := mustRawConfig(t, env.home)
+
+	w := postHostedGuardComplete(t, env, config.EditionHosted, "missing-box",
+		"https://missing-box.example.invalid/v1", nextHostedGuardClientIP())
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, map[string]any{"error": hostedGuardDNSNotFoundText}, decodeResponse(t, w),
+		"a host that does not resolve must get the address-not-found text")
+	for _, secret := range []string{"missing-box.example.invalid", "no such host", "sk-guard-submitted"} {
+		assert.NotContains(t, w.Body.String(), secret, "the refusal must not echo host, resolver detail or key")
+	}
+	assert.Equal(t, string(before), string(mustRawConfig(t, env.home)), "a refused custom endpoint must not change config.json")
+	assertNothingStored(t, env.api, env.home, "missing-box")
+}
+
+// TestOnboardingCustomHostedGuard_UpfrontCheckRefusesOnItsOwn: the up-front
+// address check (refuseBlockedCustomEndpoint) itself refuses a loopback
+// custom endpoint on hosted with sandbox ssrf off. It is called directly, so
+// the key check's refusal recorder cannot stand in for it.
+func TestOnboardingCustomHostedGuard_UpfrontCheckRefusesOnItsOwn(t *testing.T) {
+	env := newPlantEnv(t, config.EditionHosted, true)
+	require.Nil(t, env.api.ssrfChecker, "precondition: sandbox.ssrf is off")
+	canary := startPlantCanary(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", nil)
+
+	refused := env.api.refuseBlockedCustomEndpoint(w, r, onboardingProviderChoice{
+		ID: "upfront-box", Custom: true, Endpoint: canary.URL + "/v1",
+	})
+
+	require.True(t, refused, "the up-front check must refuse the loopback endpoint by itself")
+	requireErrNoField(t, w, http.StatusUnprocessableEntity, msgM8)
+	assert.Equal(t, int64(0), canary.hits.Load(), "the up-front check must not contact the endpoint")
+}
+
+// TestOnboardingCustomHostedGuard_UpfrontCheckRunsBeforeKeyCheck: through the
+// real route, a loopback custom endpoint with a blank (whitespace) key. The
+// design orders the address check before the key check (§2.4), and the key
+// check refuses a blank key with 400 before it consults any address checker,
+// so only the up-front check can produce this 422.
+func TestOnboardingCustomHostedGuard_UpfrontCheckRunsBeforeKeyCheck(t *testing.T) {
+	env := newPlantEnv(t, config.EditionHosted, true)
+	require.Nil(t, env.api.ssrfChecker, "precondition: sandbox.ssrf is off")
+	canary := startPlantCanary(t)
+	before := mustRawConfig(t, env.home)
+	raw, err := json.Marshal(map[string]any{"provider": map[string]any{
+		"auth_method": "api_key",
+		"id":          "upfront-route-box",
+		"protocol":    "openai-compatible",
+		"endpoint":    canary.URL + "/v1",
+		"model":       "guard-model",
+		"api_key":     " \t",
+	}})
+	require.NoError(t, err)
+
+	w := serveViaRealMux(t, env.api, env.cfg,
+		plantRequest(http.MethodPost, "/api/v1/onboarding/complete", string(raw), true), nextHostedGuardClientIP())
+
+	assertHostedGuardRefusedNothingStored(t, env, w, "upfront-route-box", before)
+	assert.Equal(t, int64(0), canary.hits.Load(), "the refused internal address must receive no request")
 }
