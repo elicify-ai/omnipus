@@ -4263,7 +4263,7 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file). */
+            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: exactly `cli` (claude-code, codex or opencode) and `check` (the failed check's name). */
             details?: {
                 [key: string]: unknown;
             };

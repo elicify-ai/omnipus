@@ -18215,7 +18215,7 @@ type ErrorResponse struct {
 	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, location_unverifiable, windows_extension, windows_short_name, windows_stream; the response never carries the path, which goes to the server log only; location_unverifiable means the list of folders agents can write to (the Omnipus home, agent homes, workspace folders, workspace mounts, the extra folders the sandbox lets agents write and the per-user temporary folder) could not be read in full, so the location cannot be checked) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break), and "saved_not_refreshed" on a 500 whose write reached disk but whose running settings could not be refreshed.
 	Code *string `json:"code,omitempty"`
 
-	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file).
+	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: exactly `cli` (claude-code, codex or opencode) and `check` (the failed check's name).
 	Details *map[string]interface{} `json:"details,omitempty"`
 
 	// Error Human-readable error message.
