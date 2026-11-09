@@ -124,10 +124,12 @@ Only the agent that created a task may change what it asks for — its instructi
 ```
 I scheduled the task
 Weekly report
-Repeats every week on Monday at 09:00 (Berlin time)
+Repeats every week on Monday at 09:00 (Berlin time).
 ```
 
-When the agent's call names its workspace, the card also offers **Open tasks** (that workspace's Tasks panel) and **Open calendar**. If the task was saved but its schedule could not be activated, the card says so: "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again." A call that fails or is refused shows the reason when one came back, instead of a card. When none did, it reads "I couldn't create the task, and no reason was given. Try again." — with "update", "start" or "delete" in place of "create" for the other actions.
+A schedule with an end date names the run time first and the end date last, with no clock time on the end date: "Repeats every day at 09:00 (Los Angeles time), ends November 10, 2026."
+
+Every card offers **Open tasks**. When the agent's call names its workspace, it opens that workspace's Tasks panel, and the card also offers **Open calendar**. When the call names no workspace (for example a start or delete, which names only the task), **Open tasks** opens the Tasks page, which shows your default workspace's Board, and there is no **Open calendar**. If the task was saved but its schedule could not be activated, the card says so: "I saved the task, but its schedule isn't active. The saved schedule is still the one to use. Open Calendar and save it again." A call that fails or is refused shows a short alert instead of a card, followed by **Open tasks**. When a reason came back, the alert names the action and then gives that reason as it was received, for example "I couldn't update the task. task not found: task_99". When none did, it reads "I couldn't create the task, and no reason was given. Try again." The action word is "create", "update", "start" or "delete". This is the same live and when you reopen the chat later.
 
 ## Task statuses
 
