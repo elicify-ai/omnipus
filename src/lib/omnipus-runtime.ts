@@ -211,7 +211,14 @@ function buildContentParts(
 function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): ThreadMessageLike["status"] {
   if (msg.isStreaming) return { type: "running" };
   if (msg.status === "error") return { type: "incomplete", reason: "error" };
-  if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
+  // #1671: a stopped answer is incomplete whichever signal carries the Stop —
+  // the local freeze (`status: 'interrupted'`) or the server's cancelled
+  // truncation (live done, REST reload, snapshot replay). Same two signals as
+  // getMessageStatusSuffix, so the "(interrupted)" label and the runtime
+  // status never disagree.
+  if (msg.status === "interrupted" || msg.truncationReason === "cancelled") {
+    return { type: "incomplete", reason: "cancelled" };
+  }
   return { type: "complete", reason: "stop" };
 }
 
