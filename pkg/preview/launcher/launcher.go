@@ -196,10 +196,9 @@ func Command(spec Spec) (*exec.Cmd, error) {
 	argv = append(argv, "--", spec.Target)
 	argv = append(argv, spec.Args...)
 	cmd := exec.Command(spec.Self, argv...)
-	cmd.Env = spec.Env
-	if cmd.Env == nil {
-		cmd.Env = []string{}
-	}
+	// A nil Env would inherit the gateway's environment; the copy is always
+	// non-nil, so the target only ever sees what the caller listed.
+	cmd.Env = append([]string{}, spec.Env...)
 	cmd.Dir = spec.Dir
 	setProcAttr(cmd)
 	return cmd, nil
