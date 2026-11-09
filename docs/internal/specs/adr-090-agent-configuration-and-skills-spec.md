@@ -1,5 +1,7 @@
 # ADR-090 — Agent configuration and skills specification
 
+Status: Implemented
+
 - **Status:** Grill-spec and independent Claude Code Opus reviews passed after corrections; L1 selects original Elicify skills; implementation delivered with verification recorded in the [implementation and verification ledger](adr-090-implementation-status.md) and the [generic environment setup verification record](adr-090-environment-setup-verification.md); release review pending; native Windows explicitly deferred; Linux Office rendering pending UAT.
 - **Date:** 2026-09-17
 - **Authority:** [ADR-090 — Built-in agent configuration, skills, and visual file reading](../architecture/ADR-090-built-in-agents-skills-and-visual-reading.md), decisions D1–D5 and D7.
