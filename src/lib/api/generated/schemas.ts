@@ -9027,7 +9027,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents/:id",
     alias: "getAgent",
-    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Agent detail, update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones, return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method.
+    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones (a malformed mailboxes address is the exception, below), return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve (OPTIONS preflight aside) returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method (OPTIONS preflight aside).
 `,
     requestFormat: "json",
     parameters: [
@@ -9208,7 +9208,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET. The agent is not updated or deleted.
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9257,7 +9257,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET. The agent is not updated or deleted.
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9296,7 +9296,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The agent is not updated or deleted.
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9350,7 +9350,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The agent is not updated or deleted.
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9394,7 +9394,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The agent is not updated or deleted.
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9438,7 +9438,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST. The agent is not updated or deleted.
+        description: `This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9477,7 +9477,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET. The agent is not updated or deleted.
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9521,7 +9521,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The agent is not updated or deleted.
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
@@ -9576,7 +9576,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 405,
-        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The agent is not updated or deleted.
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
 `,
         schema: ErrorResponse,
       },
