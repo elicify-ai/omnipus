@@ -108,8 +108,8 @@ This covers a connection that was working and then dropped. If the server starts
 
 If it does not come back:
 
-1. Check that the server running Omnipus can reach the internet. The reconnect attempts come from that server, not from your phone. Attempts are never more than 5 minutes apart, so a working connection returns within about 5 minutes of the server reaching WhatsApp again.
-2. On your phone, open WhatsApp and make sure the phone is online, then go to **Settings → Linked Devices** and check that this device is still listed. If it is no longer listed, the phone has logged it out, and automatic reconnecting cannot bring it back. A logout also ends the reconnecting and removes the reason, so a status without the reason does not by itself mean the connection came back. Use step 3 to start the connection again and link it by QR code.
+1. Check that the server running Omnipus can reach the internet. The reconnect attempts come from that server, not from your phone. After an attempt fails, Omnipus waits at most 5 minutes before the next one. The attempt itself takes extra time on top of that wait, so the start of one attempt and the next can be more than 5 minutes apart.
+2. On your phone, open WhatsApp and make sure the phone is online, then go to **Settings → Linked Devices** and check that this device is still listed. If it is no longer listed, the phone has logged it out, and automatic reconnecting cannot bring it back. A logout also ends the reconnecting and removes the reason, so a status without the reason does not by itself mean the connection came back. Use step 3 to start the connection again.
 3. To start over, select **Disable** on the WhatsApp card in **Connectors**, then **Enable**. If the phone is still linked, it connects again without a QR code. If not, open **Configure** on the WhatsApp card; if a QR code is shown, scan it as in [Pair in the app](#pair-in-the-app-recommended).
 
 ## Notes
