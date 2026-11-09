@@ -215,17 +215,37 @@ func WithPlantedCookieSessionUsers(users func() []config.UserConfig) PlantedCook
 	return func(o *plantedCookieGuardOptions) { o.sessionUsers = users }
 }
 
-// rawSessionCookieValues returns every non-empty omnipus-session value on the
-// RAW Cookie header lines, in order (same raw scan as
-// plantedReservedDuplicates, for the same reason).
-func rawSessionCookieValues(r *http.Request) []string {
+// plantedResendNow is the clock the genuine-session re-send reads. Tests
+// replace it to control time; production keeps time.Now.
+var plantedResendNow = time.Now
+
+// plantedResendMaxComparisons bounds the bcrypt work one planted-cookie
+// request can cause before authentication and rate limiting (security review
+// CWE-400): distinct presented session values x users with a session hash.
+// The legitimate case is the genuine value plus one or two plants on a
+// single-account install (at most 3 comparisons). Over the budget nothing is
+// verified and nothing is re-sent; the clear lines and the typed rejection
+// still apply (fail-closed, the pre-re-send behaviour).
+const plantedResendMaxComparisons = 4
+
+// distinctSessionCookieValues returns each distinct non-empty omnipus-session
+// value on the RAW Cookie header lines, in first-seen order (same raw scan as
+// plantedReservedDuplicates, for the same reason). Repeated copies of one
+// value count once.
+func distinctSessionCookieValues(r *http.Request) []string {
 	var vals []string
+	seen := map[string]struct{}{}
 	for _, headerLine := range r.Header.Values("Cookie") {
 		for _, pair := range strings.Split(headerLine, ";") {
 			name, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
-			if ok && strings.TrimSpace(name) == SessionCookieName && value != "" {
-				vals = append(vals, value)
+			if !ok || strings.TrimSpace(name) != SessionCookieName || value == "" {
+				continue
 			}
+			if _, dup := seen[value]; dup {
+				continue
+			}
+			seen[value] = struct{}{}
+			vals = append(vals, value)
 		}
 	}
 	return vals
@@ -234,23 +254,34 @@ func rawSessionCookieValues(r *http.Request) []string {
 // genuineSessionResend returns the cookie to re-send after the clear lines:
 // the presented omnipus-session value that validates against a user's
 // SessionTokenHash, with that session's ORIGINAL expiry (session_issued_at +
-// SessionCookieMaxAge). It returns nil — clear only — when no value
-// validates, when more than one distinct value validates, when the session
-// has no parseable issue time (issued before the field existed), when the
-// original expiry has passed, or on a cross-site subresource request (the
-// same request ResolveUserFromCookie refuses to evaluate). It never mints.
-func genuineSessionResend(r *http.Request, users []config.UserConfig, now time.Time) *http.Cookie {
+// SessionCookieMaxAge) as an absolute Expires and NO Max-Age (a jar counts
+// Max-Age from receipt, so it could outlive the original expiry — security
+// review CWE-613). The expiry is checked with a clock read AFTER the bcrypt
+// work. It returns nil — clear only — when the verification budget
+// (plantedResendMaxComparisons) would be exceeded, when no value validates,
+// when more than one distinct value validates, when the session has no
+// parseable issue time (issued before the field existed), when the original
+// expiry has passed, or on a cross-site subresource request (the same request
+// ResolveUserFromCookie refuses to evaluate). It never mints.
+func genuineSessionResend(r *http.Request, users []config.UserConfig, now func() time.Time) *http.Cookie {
 	if IsCrossSiteSubresourceRequest(r) {
+		return nil
+	}
+	candidates := distinctSessionCookieValues(r)
+	hashed := 0
+	for i := range users {
+		if !users[i].SessionTokenHash.IsZero() {
+			hashed++
+		}
+	}
+	if len(candidates)*hashed > plantedResendMaxComparisons {
 		return nil
 	}
 	var (
 		genuine string
 		owner   *config.UserConfig
 	)
-	for _, value := range rawSessionCookieValues(r) {
-		if value == genuine {
-			continue
-		}
+	for _, value := range candidates {
 		for i := range users {
 			if users[i].SessionTokenHash.IsZero() || users[i].SessionTokenHash.Verify(value) != nil {
 				continue
@@ -270,8 +301,7 @@ func genuineSessionResend(r *http.Request, users []config.UserConfig, now time.T
 		return nil
 	}
 	expires := issuedAt.Add(SessionCookieMaxAge * time.Second)
-	maxAge := int(expires.Sub(now) / time.Second)
-	if maxAge <= 0 {
+	if !expires.After(now()) {
 		return nil
 	}
 	return &http.Cookie{
@@ -279,7 +309,6 @@ func genuineSessionResend(r *http.Request, users []config.UserConfig, now time.T
 		Value:    genuine,
 		Path:     "/",
 		Expires:  expires,
-		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteStrictMode,
@@ -345,7 +374,7 @@ func PlantedCookieGuard(opts ...PlantedCookieGuardOption) func(http.Handler) htt
 				// session too, so re-send the validated genuine cookie with its
 				// original value and expiry AFTER the clear lines (S-4.4).
 				if name == SessionCookieName && o.sessionUsers != nil {
-					if c := genuineSessionResend(r, o.sessionUsers(), time.Now()); c != nil {
+					if c := genuineSessionResend(r, o.sessionUsers(), plantedResendNow); c != nil {
 						http.SetCookie(w, c)
 					}
 				}

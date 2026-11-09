@@ -144,13 +144,12 @@ func TestPreviewPlantedCookieResendKeepsGenuineSession(t *testing.T) {
 			require.Equal(t, http.SameSiteStrictMode, c.SameSite, "re-sent SameSite=Strict, like the original")
 			require.False(t, c.Secure, "Secure mirrors the plain-HTTP request posture, like the original")
 
-			// Same expiry as the original: issue time + 24 h, on both the
-			// Expires and the Max-Age attribute (Max-Age wins in browsers).
+			// Same expiry as the original: issue time + 24 h as an absolute
+			// Expires, and NO Max-Age (a jar counts Max-Age from receipt, so
+			// it could outlive the original — security review CWE-613).
 			require.True(t, c.Expires.Equal(wantExpiry),
 				"re-sent Expires must be the original expiry %s, got %s", wantExpiry, c.Expires)
-			remaining := int(time.Until(wantExpiry).Seconds())
-			require.InDelta(t, remaining, c.MaxAge, 5,
-				"re-sent Max-Age must be the seconds left until the original expiry, never a fresh 24 h")
+			require.Zero(t, c.MaxAge, "the re-send carries no Max-Age attribute")
 
 			// Order: the re-send comes after every clear line, so a browser
 			// applying the lines in order ends with the genuine cookie.
