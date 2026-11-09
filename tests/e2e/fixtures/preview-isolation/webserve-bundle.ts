@@ -11,12 +11,12 @@
  * "Mode 2 response headers" template, where ${PREFIX} is
  * /preview/{agent}/{token}/ WITH its trailing slash): a linked stylesheet, a
  * module script, and a relative fetch('./data.json') — each a CHILD of the
- * prefix. A real agent turn writes these files and calls serve_web; the test
- * never registers a preview by any other path (the review's "keep the real
- * product mint path").
+ * prefix. A real agent turn writes these files with the real file tool and
+ * calls the real serve_web (its model edge scripted by mint-provider.ts); the
+ * test never registers a preview by any other path (the review's "keep the
+ * real product mint path").
  *
- * Every file is one line of plain ASCII with no backslashes, so a model can
- * copy it verbatim through its file tool without escaping mistakes.
+ * Every file is one line of plain ASCII with no backslashes.
  */
 
 /** The stylesheet's observable effect on #probe (computed style). */
@@ -70,30 +70,6 @@ export function devBundleFiles(dirName: string): BundleFiles {
     'server.js': DEV_SERVER_JS,
     'package.json': '{"scripts":{"dev":"node server.js"}}',
   }
-}
-
-/**
- * The agent prompt: create the directory and EXACT files with file tools,
- * then call serve_web (the canonical agent-facing name — pkg/tools/
- * web_serve.go::ToolNameWebServe). Each file's content sits between unique
- * delimiters so nothing in the content can be mistaken for an instruction.
- */
-export function mintPrompt(dirName: string, files: BundleFiles, dev: boolean): string {
-  const fileLines = Object.entries(files)
-    .map(([name, content]) => `FILE ${dirName}/${name}\n<<<CONTENT\n${content}\nCONTENT>>>`)
-    .join('\n')
-  const serve = dev
-    ? `Call the serve_web tool with path "${dirName}" and command "npm run dev" (omit the port parameter; the tool assigns one).`
-    : `Call the serve_web tool with path "${dirName}" and duration_seconds 1800.`
-  return (
-    'Do exactly these steps with tools, in order, then stop. ' +
-    `(1) Create directory ${dirName} in your workspace. ` +
-    '(2) Create each file below with your file-writing tool, never shell commands. ' +
-    'Each file content is exactly the text between the <<<CONTENT and CONTENT>>> lines, ' +
-    'copied verbatim with nothing added. ' +
-    `(3) ${serve} Report the URL.\n` +
-    fileLines
-  )
 }
 
 /**

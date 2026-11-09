@@ -39,23 +39,26 @@
  * CSP violations and rejected fetches are browser-side corroboration.
  *
  * MINT MECHANISM: serve_web registrations are tool-only (no REST endpoint
- * creates one), so a real agent turn writes the fixture files and calls
- * serve_web. The fixture content lives in
+ * creates one), so a real agent turn writes the fixture files with the real
+ * file tool and calls the real serve_web. The model edge of that turn is
+ * scripted (fixtures/preview-isolation/mint-provider.ts): this shard calls no
+ * live model. Each test runs on its own private gateway (canonical-history
+ * fixture, loopback public_url so Mode 1 mints), so no row shares a preview
+ * registry, dev server or workspace with another. The fixture content lives in
  * tests/e2e/fixtures/preview-isolation/webserve-bundle.ts (unit-checked by
  * its vitest companion). Dev-proxy minting requires Linux; elsewhere the row
  * fails loudly at the mint step, never skips.
  *
- * NOT RUN on the authoring pod (no live model, no browser): this file is
- * typechecked and linted there; browser execution belongs to CI's
- * preview-isolation shard.
+ * Browser execution belongs to CI's preview-isolation shard.
  */
 
 import { expect, type Page } from '@playwright/test'
 import { z } from 'zod'
-import { test } from './fixtures/console-errors'
+import { test } from './fixtures/preview-isolation/mint-history'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 import { freshChat, seedAndOpenSession } from './fixtures/session-setup'
 import { sessionMessages } from './fixtures/session-history'
+import { mintDirective } from './fixtures/preview-isolation/mint-provider'
 import {
   DATA_OK_VALUE,
   MODULE_RAN_VALUE,
@@ -64,7 +67,6 @@ import {
   childOfPrefix,
   devBundleFiles,
   isolatedUrlFor,
-  mintPrompt,
   siblingTokenUrl,
   staticBundleFiles,
   type BundleFiles,
@@ -75,11 +77,20 @@ import {
   ValidateTokenResponse,
 } from '../../src/lib/api/generated/schemas'
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+/**
+ * The origin of THIS test's private gateway (the canonical-history fixture
+ * starts one per test, with only its model edge scripted); set before each
+ * test so no row shares a preview registry, dev server or workspace with
+ * another.
+ */
+let BASE_URL = ''
+test.beforeEach(({ canonicalGateway }) => {
+  BASE_URL = canonicalGateway.baseURL
+})
 /** Q4's exact human message (S-4.2; order 27 pins the SPA side of it). */
 const Q4_MESSAGE = 'Omnipus cleared cookies set by a preview — please retry'
-/** MINT_TIMEOUT covers one real agent turn that writes a few files. */
-const MINT_TIMEOUT = 240_000
+/** MINT_TIMEOUT covers one scripted agent turn: a few file writes, then serve_web. */
+const MINT_TIMEOUT = 120_000
 
 // ── Auth plumbing: the HttpOnly session cookie rides page.request ───────────
 
@@ -119,8 +130,8 @@ async function mockAbout(page: Page): Promise<void> {
 }
 
 /**
- * Drive one REAL agent turn: write `files` under `dirName` and call
- * serve_web. Polls the generated SessionHistoryResponse (via sessionMessages)
+ * Drive one real agent turn whose model edge is scripted: write `files` under
+ * `dirName` with the real file tool and call the real serve_web. Polls the generated SessionHistoryResponse (via sessionMessages)
  * until a successful serve_web call for `dirName` is persisted and returns
  * its result exactly as the gateway stored it.
  */
@@ -137,7 +148,7 @@ async function mintWebServeViaAgent(
 
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
-  await input.fill(mintPrompt(dirName, files, dev))
+  await input.fill(mintDirective(dirName, files, dev))
   await input.press('Enter')
 
   const sid = await activeSessionId(page)
@@ -155,16 +166,9 @@ async function mintWebServeViaAgent(
     if (entries) {
       for (const entry of entries) {
         for (const call of entry.tool_calls ?? []) {
-          const result = call.result as Record<string, unknown> | undefined
           const params = call.parameters as Record<string, unknown> | undefined
-          if (
-            call.tool === 'serve_web' &&
-            call.status === 'success' &&
-            (params?.path === dirName || String(result?.path ?? '').includes(dirName))
-          ) {
-            if (!result) throw new Error(`serve_web succeeded for ${dirName} but persisted no result`)
-            return result
-          }
+          if (call.tool !== 'serve_web' || call.status !== 'success' || params?.path !== dirName) continue
+          return serveWebResultOf(call.result, dirName)
         }
       }
       last = `read ${entries.length} history entries, no serve_web success for ${dirName}`
@@ -176,6 +180,24 @@ async function mintWebServeViaAgent(
       `(last: ${last}). The agent turn is the only product surface that registers a preview — ` +
       'a failure here is loud, never a skip.',
   )
+}
+
+/**
+ * A string-returning tool is persisted as `{text: "<model-visible string>"}`
+ * (pkg/agent/tool_result_transcript.go::projectRecordedResult); serve_web's
+ * string is a JSON object (url, isolated_url, kind, path, expires_at). Same
+ * reader as tests/e2e/fixtures/conformance-task-diagnostic.ts.
+ */
+function serveWebResultOf(saved: Record<string, unknown> | undefined, dirName: string): Record<string, unknown> {
+  const text: unknown = saved?.text
+  if (typeof text !== 'string') {
+    throw new Error(`serve_web succeeded for ${dirName} but persisted no text result: ${JSON.stringify(saved)}`)
+  }
+  const parsed: unknown = JSON.parse(text)
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`serve_web result for ${dirName} is not a JSON object: ${text}`)
+  }
+  return parsed as Record<string, unknown>
 }
 
 function mode2UrlOf(result: Record<string, unknown>): string {
@@ -452,7 +474,14 @@ async function attemptApiFormPost(page: Page, target: AttackTarget): Promise<{ u
     field.value = `${t.attackPath}-form`
     form.appendChild(field)
     document.body.appendChild(form)
-    form.submit()
+    // Firefox THROWS from submit() when form-action blocks it (Chromium
+    // returns): either way the block is judged below by the violation, the
+    // unchanged URL and the server-side oracle, never by this call.
+    try {
+      form.submit()
+    } catch {
+      // Blocked submit (Firefox) -- see above.
+    }
   }, target)
   await page.waitForTimeout(2_000)
   const urlAfter = page.url()
@@ -822,11 +851,16 @@ test.describe('order 24 — S-2.1/S-2.2/S-8.1 Mode 1 + WebKit fallback', () => {
 })
 
 test.describe('order 32 — S-4.4 planted-cookie recovery in a real browser', () => {
-  test('a Domain=localhost omnipus-session plant (incl. the trailing-slash /api/ form) is cleared, Retry succeeds, no forced logout', async ({ page }) => {
+  test('a planted /api/ omnipus-session beside the genuine one is cleared, Retry succeeds, no forced logout', async ({ page, canonicalGateway }) => {
     test.setTimeout(180_000)
 
-    // Signed-in baseline BEFORE the plant: the plant is the only change.
+    // Signed-in baseline BEFORE the plant: the plant is the only change. The
+    // private gateway's storage state carries only its cookies; the SPA's
+    // sign-in hint is what a UI login stores (src/store/auth.ts::setUsername),
+    // so it is set once here, then the app is reloaded with it.
     await page.goto('/')
+    await page.evaluate((name) => localStorage.setItem('omnipus_auth_username', name), canonicalGateway.adminUsername)
+    await page.reload()
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page, { timeout: 15_000 })
     const usernameBefore = await page.evaluate(() => localStorage.getItem('omnipus_auth_username'))
@@ -845,13 +879,25 @@ test.describe('order 32 — S-4.4 planted-cookie recovery in a real browser', ()
       }
     })
 
-    // The plant, exactly as a Mode 1 toss lands in the jar: Domain-qualified,
-    // so never the genuine cookie (FR-015: the genuine omnipus-session is
-    // host-only at exactly Path=/ with no Domain).
+    // The plant: a second omnipus-session for the /api/ tree. The genuine
+    // cookie is host-only at exactly Path=/ (FR-015). On host "localhost" a
+    // Domain=localhost cookie is stored HOST-ONLY (RFC 6265 5.3 step 5:
+    // "localhost" is a public suffix equal to the request host), so a plant
+    // at Path=/ -- with or without Domain -- is the same jar entry as the
+    // genuine cookie and REPLACES it (verified in Chromium and Firefox): the
+    // request then carries no session and the app signs out for a reason
+    // that has nothing to do with the guard. A Domain=localhost toss from a
+    // Mode 1 label host is rejected outright by both engines. A /api/ plant
+    // is a different jar entry, so the genuine cookie stays and every /api/
+    // request carries BOTH values -- the duplicated Cookie header the guard
+    // exists to answer.
     await page.context().addCookies([
-      { name: 'omnipus-session', value: `e2e-planted-domain-root-${Date.now()}`, domain: 'localhost', path: '/' },
-      { name: 'omnipus-session', value: `e2e-planted-domain-api-${Date.now()}`, domain: 'localhost', path: '/api/' },
+      { name: 'omnipus-session', value: `e2e-planted-api-${Date.now()}`, domain: 'localhost', path: '/api/' },
     ])
+    expect(
+      (await page.context().cookies(BASE_URL)).filter((c) => c.name === 'omnipus-session' && c.path === '/').length,
+      'the plant must not displace the genuine Path=/ session cookie',
+    ).toBe(1)
 
     // A reload makes the SPA's own boot GETs carry the duplicated Cookie header.
     await page.reload()
@@ -871,8 +917,8 @@ test.describe('order 32 — S-4.4 planted-cookie recovery in a real browser', ()
     expect((await retryResponse).status(), `S-4.4: the Retry of ${retried} succeeds`).toBe(200)
 
     await expect
-      .poll(async () => (await page.context().cookies(BASE_URL)).filter((c) => c.name === 'omnipus-session').length, {
-        message: 'exactly one omnipus-session must remain after the clear',
+      .poll(async () => (await page.context().cookies(`${BASE_URL}/api/`)).filter((c) => c.name === 'omnipus-session').length, {
+        message: 'exactly one omnipus-session must remain for /api/ after the clear (the plant is gone, the genuine one stays)',
         timeout: 15_000,
       })
       .toBe(1)

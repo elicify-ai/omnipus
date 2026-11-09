@@ -87,6 +87,14 @@ export interface GatewayProcessOptions {
    * other scenario in a spec file uses.
    */
   env?: Record<string, string>;
+  /**
+   * Boot with gateway.public_url set to this process's own loopback origin
+   * (http://localhost:<port>, via OMNIPUS_GATEWAY_PUBLIC_URL; an explicit
+   * `env` entry still wins). The port is only known inside start(), so a
+   * caller cannot compute it. Without a public URL a gateway cannot mint a
+   * Mode 1 isolated address (ADR-094 FR-001/FR-011).
+   */
+  loopbackPublicURL?: boolean;
 }
 
 /**
@@ -158,7 +166,10 @@ export class GatewayProcess {
         model: opts.model ?? (opts.apiBase ? E2E_FALLBACK.model : E2E_PRIMARY.model),
         apiBase: opts.apiBase ?? '',
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
-        extraEnv: opts.env ?? {},
+        extraEnv: {
+          ...(opts.loopbackPublicURL ? { OMNIPUS_GATEWAY_PUBLIC_URL: `http://localhost:${port}` } : {}),
+          ...(opts.env ?? {}),
+        },
       },
       homeDir,
       port,

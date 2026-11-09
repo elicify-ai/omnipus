@@ -33,7 +33,6 @@ import {
   childOfPrefix,
   devBundleFiles,
   isolatedUrlFor,
-  mintPrompt,
   previewPrefixUrl,
   siblingTokenUrl,
   staticBundleFiles,
@@ -109,19 +108,8 @@ describe('prefix helpers — child vs sibling', () => {
   })
 })
 
-describe('mintPrompt', () => {
-  it('embeds every file verbatim and names the canonical serve_web tool', () => {
-    const files = devBundleFiles('e2e-dev-1')
-    const prompt = mintPrompt('e2e-dev-1', files, true)
-    for (const [name, content] of Object.entries(files)) {
-      expect(prompt).toContain(`FILE e2e-dev-1/${name}\n<<<CONTENT\n${content}\nCONTENT>>>`)
-    }
-    expect(prompt).toContain('serve_web')
-    expect(prompt).not.toContain('web_serve')
-    expect(prompt).toContain('npm run dev')
-  })
-
-  it('bundle files are plain one-line ASCII with no backslashes (copyable through a file tool)', () => {
+describe('bundle files', () => {
+  it('are plain one-line ASCII with no backslashes and carry the probe values', () => {
     for (const content of Object.values(devBundleFiles('e2e-x'))) {
       expect(content).not.toMatch(/\\/)
       expect(content).toMatch(/^[\x20-\x7e\n]*$/)
