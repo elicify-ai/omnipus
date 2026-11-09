@@ -34,7 +34,9 @@ func (m *historyReadOnlyMedia) ResolveWithOpts(ref string, opts media.ResolveOpt
 		}
 		m.urls[mediaRefURL(ref)] = path
 	}
-	if err != nil {
+	// An unknown ref is routine: buildMediaFrame skips that card and keeps the
+	// page. Any other store error fails the page.
+	if err != nil && !errors.Is(err, media.ErrNotFound) {
 		m.failure = err
 	}
 	return path, err
