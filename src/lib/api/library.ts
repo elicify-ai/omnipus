@@ -100,7 +100,7 @@ import type {
   RelationWriteResponse,
   KnowledgeConflictError,
 } from '@/lib/api/generated/openapi-types'
-import { ApiSchemaError, BASE_URL, CSRF_HEADER_NAME, _recordApiSchemaError, buildHeaders, readCSRFCookie, request, withCsrfRetry, type RequestOptions } from './http'
+import { ApiSchemaError, BASE_URL, CSRF_HEADER_NAME, _recordApiSchemaError, buildHeaders, readCSRFCookie, request, withCsrfRetry } from './http'
 
 // ── Library (library-spec.md) ────────────────────────────────────────────────
 //
@@ -120,13 +120,11 @@ export const libraryQueryKeys = {
 }
 
 /** Every workspace as a Library virtual-root node (D-3 sidebar entry point). */
-export function fetchLibraryWorkspaces(options?: Pick<RequestOptions, 'schemaErrorToast'>): Promise<LibraryWorkspaceNode[]> {
+export function fetchLibraryWorkspaces(): Promise<LibraryWorkspaceNode[]> {
   return request<LibraryWorkspaceNode[]>(
     '/library/workspaces',
     undefined,
     z.array(LibraryWorkspaceNodeSchema) as ZodType<LibraryWorkspaceNode[]>,
-    undefined,
-    options,
   )
 }
 
@@ -140,7 +138,6 @@ export function fetchLibraryEntries(
   workspaceId: string,
   path = '',
   includeHidden = false,
-  options?: Pick<RequestOptions, 'schemaErrorToast'>,
 ): Promise<LibraryEntry[]> {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
@@ -150,8 +147,6 @@ export function fetchLibraryEntries(
     `/library/${encodeURIComponent(workspaceId)}/entries${qs ? `?${qs}` : ''}`,
     undefined,
     z.array(LibraryEntrySchema) as ZodType<LibraryEntry[]>,
-    undefined,
-    options,
   )
 }
 

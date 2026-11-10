@@ -204,10 +204,6 @@ export interface RequestOptions { // not-wire-format: in-browser transport switc
    * other state-changing call keeps the one-time recovery.
    */
   csrfRetry?: boolean
-  /** Disable only the transport's development schema-error toast for a quiet
-   * background read. Validation, error counters and structured diagnostics
-   * remain enabled; the caller still receives the original rejection. */
-  schemaErrorToast?: boolean
 }
 
 export async function request<T>(
@@ -242,7 +238,7 @@ export async function request<T>(
     )
   }
 
-  const attempt = () => performRequest<T>(path, init, schema, onResponseHeaders, options)
+  const attempt = () => performRequest<T>(path, init, schema, onResponseHeaders)
   return stateChanging && options?.csrfRetry !== false ? withCsrfRetry(attempt) : attempt()
 }
 
@@ -251,7 +247,6 @@ async function performRequest<T>(
   init?: RequestInit,
   schema?: ZodType<T>,
   onResponseHeaders?: (headers: Headers) => void,
-  options?: RequestOptions,
 ): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase()
   let res: Response
@@ -324,9 +319,7 @@ async function performRequest<T>(
         [{ path: [], message: 'Response is not valid JSON' }],
         rawText,
       )
-      if (options?.schemaErrorToast !== false) {
-        void maybeDevToast(`[api] Non-JSON response: ${path}`, `${method}:${path}:non-json`)
-      }
+      void maybeDevToast(`[api] Non-JSON response: ${path}`, `${method}:${path}:non-json`)
       throw schemaErr
     }
     // No schema — throw a generic ApiError for non-JSON bodies on non-2xx
@@ -353,9 +346,7 @@ async function performRequest<T>(
         body,
       )
       const first = schemaErr.zodIssues[0]
-      if (options?.schemaErrorToast !== false) {
-        void maybeDevToast(`[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`, `${method}:${path}:schema`)
-      }
+      void maybeDevToast(`[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`, `${method}:${path}:schema`)
       throw schemaErr
     }
     return result.data
