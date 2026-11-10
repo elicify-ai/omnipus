@@ -889,6 +889,16 @@ test.describe('order 32 — S-4.4 planted-cookie recovery in a real browser', ()
       }
     })
 
+    // Plant while NO app page is open. A live SPA keeps polling (e.g. the
+    // agent activity-runs poll, every 5 s) and refetching; a background GET
+    // that lands between the plant and a reload meets the guard on the OLD
+    // page, which clears the plant and raises the toast there; the reload
+    // then discards that page and the reloaded app finds nothing to clear
+    // (CI 2026-11-10, isolation-chromium: no toast in 30 s; the trace shows
+    // the two 401 planted-cookie GETs before the reload). Parking the tab on
+    // about:blank leaves the SPA's own boot GETs as the first to carry it.
+    await page.goto('about:blank')
+
     // The plant: a second omnipus-session for the /api/ tree. The genuine
     // cookie is host-only at exactly Path=/ (FR-015). On host "localhost" a
     // Domain=localhost cookie is stored HOST-ONLY (RFC 6265 5.3 step 5:
@@ -909,8 +919,8 @@ test.describe('order 32 — S-4.4 planted-cookie recovery in a real browser', ()
       'the plant must not displace the genuine Path=/ session cookie',
     ).toBe(1)
 
-    // A reload makes the SPA's own boot GETs carry the duplicated Cookie header.
-    await page.reload()
+    // Loading the app makes the SPA's own boot GETs carry the duplicated Cookie header.
+    await page.goto('/')
 
     const toast = page.getByRole('alert').filter({ hasText: Q4_MESSAGE })
     await expect(toast, 'S-4.2/S-4.4: the typed planted-cookie error surfaces as the recovery toast').toBeVisible({
