@@ -1450,11 +1450,11 @@ func selfEdgeExcludedAgentIDs(d *Deps) map[string]bool {
 // workspaceDelegationDepthCeilingFallback mirrors the gateway fallback used
 // when performance.max_delegation_depth is unset. Kept in lock-step so the
 // tool and gateway validate edges against the same ceiling.
-const workspaceDelegationDepthCeilingFallback = 3
+const workspaceDelegationDepthCeilingFallback = 10
 
 // workspaceDelegationDepthCeiling returns the effective delegation depth
 // ceiling from the live config, mirroring gateway.delegationDepthCeiling:
-// performance.max_delegation_depth when set (> 0), otherwise 3. A nil GetCfg
+// performance.max_delegation_depth when set (> 0), otherwise 10. A nil GetCfg
 // (tests without a wired config) yields the fallback.
 func workspaceDelegationDepthCeiling(d *Deps) int {
 	if d == nil || d.GetCfg == nil {

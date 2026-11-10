@@ -26,6 +26,7 @@ import { expectA11yClean } from './fixtures/a11y'
 // SubagentBlock and shouldRenderSubagentSpan are deleted), so test (b)
 // asserts the default policy directly — see its own comment.
 import { assistantMessages, chatInput, sendButton, waitForConnected } from './fixtures/selectors'
+import { attachWhileObservingTurn, observeAttachTurn } from './fixtures/turn-liveness'
 import { observeAddressedAttachReadiness } from './fixtures/addressed-attach-readiness'
 import { observeReplayAttach } from './fixtures/replay-attach-observer'
 import {
@@ -667,6 +668,7 @@ type AttachViewers = {
   traffic1: ReturnType<typeof observeReplayAttach>
   traffic2: ReturnType<typeof observeReplayAttach>
   readiness2: ReturnType<typeof observeAddressedAttachReadiness>
+  attachTurn2: ReturnType<typeof observeAttachTurn>
   atAttach: { firstText: string; doneCount: number; providerFinished: boolean }[]
   startTurn(): number
   arm(): void
@@ -702,6 +704,9 @@ const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; rep
     const context2 = await browser.newContext({ storageState: AUTH_FILE, baseURL: BASE_URL })
     const page2 = await context2.newPage()
     const readiness2 = observeAddressedAttachReadiness(page2)
+    // Wired before page2's first socket opens: it tracks the current chat
+    // socket generation only (fixtures/turn-liveness.ts).
+    const attachTurn2 = observeAttachTurn(page2)
     let armed = false
     let turnStart = 0
     const atAttach: AttachViewers['atAttach'] = []
@@ -724,7 +729,7 @@ const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; rep
           'PREREQUISITE: warm viewer renders the session whose attach actually completed').toBeVisible()
         await waitForWsConnected(page2)
       } finally { warmReady.cancel() }
-      await use({ sessionId, page2, traffic1, traffic2, readiness2, atAttach,
+      await use({ sessionId, page2, traffic1, traffic2, readiness2, attachTurn2, atAttach,
         startTurn() {
           traffic1.startExperiment()
           traffic2.startExperiment()
@@ -736,6 +741,7 @@ const attachTest = test.extend<{ replayAttachProvider: ReplayAttachProvider; rep
     } finally {
       traffic1.dispose()
       traffic2.dispose()
+      attachTurn2.dispose()
       readiness2.dispose()
       await context2.close()
     }
@@ -750,8 +756,9 @@ attachTest(
     // setup, instead of lowering its already-consumed slot to 60 s. Only the
     // viewer fixture above has a separate 120 s slot. Reply/delta waits stay
     // 15 s (formerly 180 s); the local stream has 1.25 s of configured delay
-    // and no paid-model queue. This still replaces the old 360 s test budget.
-    const { sessionId, page2, traffic1, traffic2, readiness2, atAttach } = viewers
+    // and no paid-model queue. This replaces the real-model budgets (360 s, then
+    // 660 s with a 300 s terminal-state wait on release/v0.1.1).
+    const { sessionId, page2, traffic1, traffic2, readiness2, attachTurn2, atAttach } = viewers
     const turnStart = viewers.startTurn()
     try {
       await waitForConnected(page, { timeout: 10_000 })
@@ -764,12 +771,27 @@ attachTest(
       const turnId = traffic1.liveTokens(turnStart)[0].turn_id
       expect(turnId, 'the first live token identifies the real active turn').toEqual(expect.any(String))
       if (!turnId) throw new Error('PREREQUISITE: live token has no turn id')
+      // The client also shows the turn as live: the composer Stop button
+      // (data-testid="stop-btn", OmnipusComposer) mounts only while the turn
+      // streams. The provider holds the remaining chunks, so the turn cannot
+      // end here; Step 4 below waits for this same marker to unmount.
+      const turnStopButton = page.locator('[data-testid="stop-btn"]')
+      await expect(turnStopButton,
+        'PREREQUISITE: the turn is live: the composer Stop button has replaced Send while the turn streams',
+      ).toBeVisible({ timeout: 10_000 })
 
       const afterAttach1 = traffic1.received.length
       viewers.arm()
       const targetReady = readiness2.arm(sessionId)
       try {
-        const [, proof] = await Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()])
+        // Server-side prerequisite (fixtures/turn-liveness.ts): the marked
+        // attach's own session_state on page2's current chat socket must carry
+        // active_turn, and a rejected attach (session-addressed error frame)
+        // fails the prerequisite with the server message. The wrapper returns
+        // the attach result only after that check has run.
+        const [, proof] = await attachWhileObservingTurn(attachTurn2, sessionId, () =>
+          Promise.all([page2.goto(`/#/sessions/${sessionId}`), targetReady.wait()]),
+        )
         expect(proof.request.session_id, 'second viewer requests the target, not its root session').toBe(sessionId)
         expect(proof.completion.session_id, 'real target catch-up completes').toBe(sessionId)
         traffic1.assertNoReconnect()
@@ -802,6 +824,13 @@ attachTest(
         for (const traffic of [traffic1, traffic2]) {
           await expect.poll(() => traffic.liveDone(turnId).length, { message: 'one live done per viewer', timeout: 15_000 }).toBe(1)
         }
+        // Terminal-state gate before the DOM delivery oracle is judged: the
+        // first viewer's Stop button (proven visible above) unmounts once the
+        // turn ends. The assistant row's data-status cannot serve here: the
+        // virtualized renderer stamps it "complete" during a live turn.
+        await expect(turnStopButton,
+          'the turn reaches its terminal state (composer Stop unmounts as streaming ends)',
+        ).not.toBeVisible({ timeout: 15_000 })
 
         // Count ALL completed assistants, not just a marker-filtered row. The
         // plain scripted paragraph makes exact full-text equality unambiguous.

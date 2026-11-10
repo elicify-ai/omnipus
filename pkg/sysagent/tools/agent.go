@@ -147,7 +147,8 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
-			"fallback_models": fallbackModelsParameters(),
+			"fallback_models":  fallbackModelsParameters(),
+			"reasoning_effort": effortParameter(),
 			"max_tool_iterations": map[string]any{
 				"type":        "integer",
 				"minimum":     1,
@@ -377,6 +378,12 @@ func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 	patch, err := decodePolicyPatch(raw)
 	if err != nil {
 		return fieldErrorResult(err), true
+	}
+	// Channels FR-037: an always-ask tool can be stored as ask or deny, never
+	// allow — on create exactly as on every update writer.
+	if name, bad := tools.AlwaysAskAllowViolation(patch.Set); bad {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", tools.AlwaysAskAllowRefusal(name),
+			"Set "+name+" to ask or deny, or leave it out")), true
 	}
 	if tool, bad := coreagent.ManagementGrantViolation(patch.Set); bad {
 		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementGrantRefusal(tool),
@@ -1009,8 +1016,9 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "New personality/instructions (overwrites SOUL.md)",
 			},
-			"model":           map[string]any{"type": "string", "description": "New primary model slug"},
-			"fallback_models": fallbackModelsParameters(),
+			"model":            map[string]any{"type": "string", "description": "New primary model slug"},
+			"fallback_models":  fallbackModelsParameters(),
+			"reasoning_effort": effortParameter(),
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",

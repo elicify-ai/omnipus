@@ -60,6 +60,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
@@ -341,6 +342,23 @@ func setupAndStartServices(
 		return nil, err
 	}
 
+	// Founder decision 2026-11-08 (Q8 B): workspaces whose delegation store
+	// saved an explicit edge depth of 3 under the OLD shipped default (raised
+	// to 10 by the founder ruling of 2026-10-27) are migrated ONCE to 10. It
+	// runs HERE, before startSchedulers/startPlanEngine start any autonomous
+	// producer (a due scheduled turn reads workspace.ReadDelegation) and before
+	// the REST listener and the agent loop — so no reader sees a pre-migration
+	// 3 and no operator write can interleave (round-5 CHECK R3). The store
+	// cannot tell an old-default 3 from a deliberate 3 — the founder accepted
+	// rewriting both, once; a ledger inside the agent-unreachable store
+	// directory guarantees a 3 saved after a record's migration is never
+	// rewritten (pkg/workspace/delegation_depth_migration.go states the rules
+	// and risks). Best-effort: a failure is logged and boot continues; the next
+	// boot resumes only the unfinished records.
+	if _, mErr := workspace.MigrateDelegationDepthDefaultOnce(stg.homePath); mErr != nil {
+		slog.Error("gateway: delegation depth default migration failed", "error", mErr)
+	}
+
 	// Boot recovery of interrupted task work, all of it BEFORE any task
 	// producer of this process (drain, cron engines, trigger engine, plan
 	// engine, REST listener) starts, so every in_progress claim it sees is the
@@ -363,6 +381,10 @@ func setupAndStartServices(
 	// startPlanEngine, buildRESTAPI). Mark it expected so the queued-task drain
 	// and owed trigger fires wait for it instead of dispatching unwired.
 	agent.GetTaskExecutor(stg.agentLoop).ExpectSessionPlane()
+
+	if hook := beforeStartSchedulersHookForTest.Load(); hook != nil {
+		(*hook)(stg.agentLoop)
+	}
 
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
@@ -436,6 +458,23 @@ func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
 		return
 	}
 	afterStartSchedulersHookForTest.Store(&fn)
+}
+
+// beforeStartSchedulersHookForTest, when set, runs inside setupAndStartServices
+// immediately before startSchedulers starts the first autonomous producers
+// (cron engine, queued-task drain, trigger scheduler). Nil in production; set
+// only by tests through SetBeforeStartSchedulersHookForTest, e.g. to pin that
+// boot-time store migrations completed before any scheduled work can read.
+var beforeStartSchedulersHookForTest atomic.Pointer[func(*agent.AgentLoop)]
+
+// SetBeforeStartSchedulersHookForTest installs fn as the hook run right before
+// startSchedulers (nil removes it). For tests only.
+func SetBeforeStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
+	if fn == nil {
+		beforeStartSchedulersHookForTest.Store(nil)
+		return
+	}
+	beforeStartSchedulersHookForTest.Store(&fn)
 }
 
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
@@ -1706,24 +1745,56 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 	// (e.g. corrupted manifest) does not abort the loop — the error is
 	// logged and the next tick proceeds. Libraries with no orphan files
 	// are a fast no-op.
+	//
+	// The done channel lets teardown WAIT for the goroutine, not just cancel
+	// it: this goroutine's FIRST act is repairLibraryAssociationsOnce — a
+	// writer under workspaces/ — and an in-flight tick touches disk too
+	// (Library.OrphanGC). Context cancellation alone stops the NEXT tick but
+	// leaves the current one running; join-on-done is what keeps a shutdown
+	// (or a test's t.TempDir removal) from racing it
+	// (#1598 "workspaces: directory not empty"). Consumed by
+	// drainBootBackgroundWriters.
+	//
+	// The goroutine derives its context from stg.ctx but carries its OWN
+	// cancel (orphanGCCancel): both teardown drains call it BEFORE joining
+	// done. Deriving the exit signal from stg.ctx alone is not enough — the
+	// graceful shutdown cancels stg.ctx only late (after the turn drain), and
+	// a partial-boot abort or a test harness teardown leaves the parent
+	// context live forever, so a drain that could only join, never cancel,
+	// would sit on done until its budget expired while the goroutine kept
+	// running (CHECK 1 finding F2, 2026-11-08). Same cancel-and-join contract
+	// as the catalog refresh loop.
+	orphanCtx, orphanCancel := context.WithCancel(stg.ctx)
+	orphanDone := make(chan struct{})
+	if stg.runningServices == nil {
+		// Degenerate harness: no services object to carry the handles, so no
+		// drain can ever cancel this goroutine — stop it before it starts.
+		orphanCancel()
+	} else {
+		stg.runningServices.orphanGCDone = orphanDone
+		stg.runningServices.orphanGCCancel = orphanCancel
+	}
 	go func() {
+		defer close(orphanDone)
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
 		// #1449 A-14: the one-time association repair for uploads made
 		// before the durable library_path existed, once per workspace.
+		// Synchronous and uncancelable by design; the join below is what
+		// covers it — the cancel stops only the tick loop after it.
 		stg.repairLibraryAssociationsOnce()
-		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
-		// which never exits) — this goroutine outlives the process
-		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
-		// class of bug: any un-canceled background loop started here can
-		// still be mid-tick (Library.OrphanGC touches disk) when a caller
-		// that boots/tears down many gateways in one process — every test
-		// using testutil.StartTestGateway — has already moved on to
+		// orphanCtx.Done() must be observed here (not a bare
+		// `for range ticker.C`, which never exits) — this goroutine outlives
+		// the process otherwise. See runCatalogRefreshLoop's doc comment for
+		// the shared class of bug: any un-canceled background loop started
+		// here can still be mid-tick (Library.OrphanGC touches disk) when a
+		// caller that boots/tears down many gateways in one process — every
+		// test using testutil.StartTestGateway — has already moved on to
 		// t.TempDir() cleanup of homePath.
 		for {
 			select {
-			case <-stg.ctx.Done():
+			case <-orphanCtx.Done():
 				return
 			case <-ticker.C:
 			}
@@ -2036,7 +2107,7 @@ func runCatalogRefreshLoop(
 	if cat == nil {
 		return
 	}
-	refresh := func(failureLogMsg string, attemptTimeout time.Duration) error {
+	refresh := func(failureLogMsg string, attemptTimeout time.Duration, attempt int) error {
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		defer cancel()
 		err := cat.Refresh(attemptCtx)
@@ -2051,7 +2122,11 @@ func runCatalogRefreshLoop(
 			logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
 				map[string]any{"error": err})
 		} else {
-			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
+			fields := map[string]any{"error": err}
+			if attempt > 0 {
+				fields["attempt"] = attempt
+			}
+			logger.WarnCF("gateway", failureLogMsg, fields)
 		}
 		return err
 	}
@@ -2066,7 +2141,7 @@ func runCatalogRefreshLoop(
 	} else {
 		attempts, err := runCatalogStartupRefresh(ctx, func(attempt int) error {
 			attemptTimeout := catalogStartupAttemptTimeout(attempt, refreshTimeout)
-			return refresh("gateway: catalog startup refresh failed; served document retained", attemptTimeout)
+			return refresh("gateway: catalog startup refresh failed; served document retained", attemptTimeout, attempt)
 		}, waitForCatalogRetry)
 		if ctx.Err() != nil {
 			return
@@ -2084,7 +2159,7 @@ func runCatalogRefreshLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = refresh("gateway: catalog refresh failed; last-known-good retained", refreshTimeout)
+			_ = refresh("gateway: catalog refresh failed; last-known-good retained", refreshTimeout, 0)
 		}
 	}
 }

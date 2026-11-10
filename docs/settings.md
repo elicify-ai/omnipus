@@ -28,7 +28,7 @@ Two jobs that look like settings live on their own pages: what agents may do is 
 4. If the variant wants an API key, paste the key and click **Connect**. The row appears with its status.
 5. If the variant uses sign-in, follow the dialog: it gives you a link and a code to approve on the provider's page, using any device. Sign-in is offered only on providers that can really sign in. OpenAI sign-in is on **ChatGPT (subscription)**, not on the API-key **OpenAI** provider. If you try to save sign-in on a provider that has none, Omnipus refuses and names the provider to use instead, for example `sign-in is not available for "OpenAI"; OpenAI sign-in lives on "ChatGPT (subscription)"`. An older install may still have a **Codex CLI** or **GitHub Copilot** row: those providers were removed, so the row shows an "Unknown provider" error and offers no sign-in or Manage action. Remove it, and use **ChatGPT (subscription)** for OpenAI sign-in.
 6. Set the **default model** on the card at the top of the tab. That is the model new chats use unless an agent has its own.
-7. Use **Test** to re-check the connection, **Check with my account** to list available models, or **Remove provider** to delete it. Removing the default provider first asks for its replacement.
+7. Use **Test** to re-check the connection, **Check with my account** to list available models, or **Remove provider** to delete it. The confirmation lists the agents that use that provider. When a default model is already set on another provider, it says those agents will fall back to that default provider and model, and it names both. If the provider you are removing is one you added yourself, or one that runs on your own computer, it also warns that their conversations will go to the default provider instead. If no default model is set, it says those agents will be left without a model. While the default model is still being checked, it says "Checking the default model…" and **Remove** stays off. If that check fails, it says "We could not check the default model, so we can't tell where these agents will go." and **Remove** stays available. Removing the provider that backs the default is refused until you choose a new default provider and model. Until you choose, it says "These agents will use the new default you choose below." After you choose, it names that provider and model as the default those agents will fall back to.
 
 API keys are stored encrypted on this server, never in the main configuration file. See [security](security.md) for how the encrypted store works.
 
@@ -270,7 +270,18 @@ How much work one agent can hand to another is bounded in two ways: a Performanc
 `performance.max_delegation_depth` caps how many levels a delegation chain may form. An agent delegates a worker, the worker delegates again, and each further hop is one more level. A chain that asks for one level more than the cap is refused with a named error — the extra work never starts, rather than starting and being cut off part-way.
 
 - A workspace **Team** edge can set a tighter depth for a particular agent pair. When both a global value and an edge value exist, the smaller one wins.
-- With nothing set, the code still caps a chain at **three** levels.
+- With nothing set, the code still caps a chain at **ten** levels.
+- The depth caps how deep a chain of delegations can go, not how many helpers one agent may start — a ten-level chain can still start many helpers.
+
+**Upgrading from the old default of 3.** If a workspace was saved while the default was still 3, the first start after upgrading raises each stored edge depth of 3 to the new default **10**, once, and writes one summary line to the log (`one-time delegation depth default migration`). A depth of 3 set on a workspace after it was raised is a deliberate choice and is kept until you change it. This upgrade is usually complete after that first start, but not always:
+
+- **A workspace that could not be saved is retried.** If Omnipus can read a workspace's delegation settings but cannot save the raised value (for example, because of a file permission problem), the log shows an error and Omnipus still starts. Once you fix the cause, the next start raises only the workspaces that were not raised yet.
+- **A workspace that could not be read at the first start is never raised.** If its delegation settings were unreadable or damaged at that start, Omnipus leaves them exactly as they are and counts them in `records_skipped` in the summary line; when it finds the damage while raising a workspace, it also logs a warning naming it (`record skipped permanently`). Later starts do not try again.
+- **A workspace interrupted by a crash is left at its old value on purpose.** If Omnipus stopped during the moment it was raising one workspace, the next start cannot tell whether that 3 is the old default or a 3 you set afterwards. It keeps the 3 and logs a warning naming the workspace (`an interrupted record still holds depth 3`). It never raises it later.
+
+**What to do.** If the summary line shows `records_skipped` above 0, or the log shows either warning, open each affected workspace's **Team** tab, check the delegation depths, and set the depth you want. A depth you set yourself is never changed by the upgrade. When it is unclear which workspace is affected, check every workspace's Team tab for depths of 3.
+
+The protection that makes the upgrade run only once when two Omnipus instances start on the same data folder at the same time works on Linux and macOS only, not on Windows.
 
 ### How many agents run at once
 

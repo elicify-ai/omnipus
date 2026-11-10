@@ -1012,6 +1012,7 @@ export function ProvidersSection() {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       if (result.default_changed) {
         queryClient.invalidateQueries({ queryKey: ['default-model'] })
+        queryClient.invalidateQueries({ queryKey: ['config'] })
       }
       // The row is gone — its stale entitlement bookkeeping goes with it
       // (the process-side cache eviction is the server's; this is ours).
@@ -1041,6 +1042,8 @@ export function ProvidersSection() {
       setChangingDefault(false)
       setDefaultFilterId(undefined)
       queryClient.invalidateQueries({ queryKey: ['default-model'] })
+      // Effort levels: chats and agents riding the default read its effort from the config.
+      queryClient.invalidateQueries({ queryKey: ['config'] })
       // backs_default moves with it, so the rows are stale too.
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       addToast({ message: 'Default model updated', variant: 'success' })
@@ -1375,6 +1378,8 @@ export function ProvidersSection() {
           })()}
           otherProviders={providers.filter((p) => p.id !== removeTarget.id)}
           catalog={catalogDoc}
+          defaultModel={defaultModel}
+          defaultModelState={defaultModelLoading ? 'loading' : defaultModelError ? 'error' : 'ready'}
           isRemoving={isRemoving}
           onConfirm={(newDefault) => removeProvider({ id: removeTarget.id, newDefault })}
         />

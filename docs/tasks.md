@@ -8,7 +8,7 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 
 - **Board** — a kanban of eligible top-level workspace tasks, grouped by status in six columns. Scheduled tasks are hidden, and subtasks are not separate Board cards.
 - **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
-- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
+- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. Scheduled tasks are hidden, the same as on Board and List. That view belongs to planning; see [plans](plans.md).
 
 Above the views, the compact **Plans** header and **New Plan** stay visible. The band is open by default when plans exist, and collapsed when there are none. Click **Plans** to fold or unfold it. The tile area has compact space above and below it. **Unhide done plans** is an unchecked checkbox at the bottom-left of that area, below **All tasks**; it appears when completed plans exist. Checking it reveals completed tiles. Click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
@@ -177,7 +177,7 @@ A named connection that cannot be set up (`model_route_unavailable`), and a conf
 - **A task in a plan is driven by its plan.** It has no Run or Stop control of its own; start, stop, and restart happen at the plan level. See [plans](plans.md).
 - **Dependency circles are rejected.** A chain may not loop back on itself, and dependencies stay inside one plan.
 - **Runs stop after the attempt limit** — three by default. When attempts are spent, the task lands in Failed.
-- **Board and List hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
+- **Board, List and Graph hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
 - **An assignee warning means the agent cannot finish this task as configured.** The warning names the fix, usually a tool permission; starting anyway fails at once.
 - **Deleting a task cannot be undone.** The confirmation is your last chance.
 
@@ -185,6 +185,6 @@ A named connection that cannot be set up (`model_route_unavailable`), and a conf
 
 - [workspaces](workspaces.md) — what a workspace is, and how its team decides who can be assigned.
 - [plans](plans.md) — the Graph view, plan membership, and how a plan starts its tasks.
-- [calendar](calendar.md) — scheduled and repeating tasks, which the Board and List hide.
+- [calendar](calendar.md) — scheduled and repeating tasks, which the Board, List and Graph hide.
 - [goals](goals.md) — the goal loop behind every run, and the judge that scores it.
 - [agents](agents.md) — the agents you can assign to a task, and what each is for.

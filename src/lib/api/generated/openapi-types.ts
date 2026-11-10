@@ -295,7 +295,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
+         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. Returns 422 when a custom endpoint's base URL is refused by the address (SSRF) guard.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -4427,7 +4427,7 @@ export interface components {
              */
             auth_method: "api_key";
             /**
-             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A catalog provider id, or — together with `endpoint` and `protocol` — the name of a custom endpoint. Anything else is rejected with 400.
              * @example anthropic
              */
             id: string;
@@ -4441,11 +4441,19 @@ export interface components {
              * @example claude-sonnet-4-6
              */
             model?: string;
+            /** @description Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused. */
+            reasoning_effort?: string;
             /**
-             * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
-             * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
+             * @description Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
+             * @example https://llm.example.com/v1
              */
             endpoint?: string;
+            /**
+             * @description Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic";
             /**
              * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
              * @example eu-central-1
@@ -4469,6 +4477,8 @@ export interface components {
              * @example gpt-5.4
              */
             model?: string;
+            /** @description Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Optional custom API base URL, persisted as the provider entry's api_base.
              * @example https://api.example.com/v1
@@ -5134,6 +5144,13 @@ export interface components {
             terminal_outcome?: boolean;
             /** @description Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry. */
             room_ref?: components["schemas"]["RoomRef"];
+            /** @description Effort levels spec (FR-058). Copied from this entry's own stored effort record (answering assistant entries only). Absent when the entry has none. */
+            effort?: components["schemas"]["EffortRecord"];
+            /**
+             * @description Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+             * @example 120
+             */
+            turn_reasoning_tokens?: number;
         };
         /** @description The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -8761,6 +8778,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             /**
              * @description Short description of the agent's purpose.
              * @example General-purpose coding assistant
@@ -9027,6 +9046,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
@@ -9114,6 +9135,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
@@ -9229,6 +9252,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             /**
              * @description Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
              * @example 200000
@@ -9294,9 +9319,9 @@ export interface components {
         };
         /**
          * @description One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
-         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>", "reasoning_effort": "<effort>" }` (reasoning_effort optional).
          *     Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
-         *     `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+         *     `additionalProperties: false` — the wire type has exactly these fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
          */
         FallbackModel: {
             /**
@@ -9309,6 +9334,8 @@ export interface components {
              * @example anthropic
              */
             provider?: string;
+            /** @description Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         /** @description One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected. */
         FallbackModelPair: {
@@ -9322,6 +9349,8 @@ export interface components {
              * @example anthropic
              */
             provider: string;
+            /** @description Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
@@ -9419,7 +9448,7 @@ export interface components {
         };
         /**
          * AgentDetail
-         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Extension point: the effort fields of the effort feature are added here when that feature lands.
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
          */
         AgentDetail: {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
@@ -9438,6 +9467,11 @@ export interface components {
             model?: string;
             /** @description The stored primary provider key ("" when not pinned). */
             provider?: string;
+            /**
+             * @description The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+             * @example high
+             */
+            readonly reasoning_effort?: string | null;
             /** @description The stored fallback entries, as stored. */
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
@@ -9517,6 +9551,15 @@ export interface components {
              * @example false
              */
             accepts_images: boolean | null;
+            /**
+             * @description The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+             * @example [
+             *       "provider_default",
+             *       "low",
+             *       "high"
+             *     ]
+             */
+            effort_options: string[] | null;
             /** @description Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise. */
             warning?: string;
         };
@@ -10993,6 +11036,8 @@ export interface components {
              * @example z-ai/glm-5.2
              */
             model: string;
+            /** @description Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Effective context window in tokens; 0 for exempt rows.
              * @example 1048576
@@ -11014,6 +11059,8 @@ export interface components {
             provider: string;
             /** @example claude-sonnet-4-6 */
             model: string;
+            /** @description Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         /**
          * EntitlementModel
@@ -11273,6 +11320,28 @@ export interface components {
              * @example false
              */
             window_unknown?: boolean;
+            /** @description Effort levels spec (FR-035). Optional served reasoning capability, filtered by the gateway's encoder table (FR-049). Absent when the model does not reason. */
+            reasoning?: components["schemas"]["CatalogModelReasoning"];
+        };
+        /**
+         * CatalogModelReasoning
+         * @description Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+         */
+        CatalogModelReasoning: {
+            /**
+             * @description Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+             * @example [
+             *       "low",
+             *       "medium",
+             *       "high"
+             *     ]
+             */
+            levels: string[];
+            /**
+             * @description True when reasoning can be turned on and off as a switch.
+             * @example false
+             */
+            switch: boolean;
         };
         /**
          * CatalogProtocol
@@ -14969,7 +15038,7 @@ export interface components {
          */
         ProviderUpdateRequest: {
             /**
-             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
              * @example openai-compatible
              * @enum {string}
              */
@@ -14981,7 +15050,7 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+             * @description Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
@@ -15892,6 +15961,63 @@ export interface components {
             /** @description Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models. */
             recap_fallback_models?: components["schemas"]["FallbackModel"][];
             /**
+             * @description Provider of the recap model (#1291), stored with recap_model so the recap routes through it. Maps to agents.defaults.recap_provider.
+             * @example openrouter
+             */
+            recap_provider?: string;
+            /** @description Effort for the recap model (effort-levels spec FR-072): absent or "" means Off (the recap default); "provider_default", a catalog level name or "on" turn reasoning on. null is refused. */
+            recap_reasoning_effort?: string;
+            /**
+             * @description Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_max_output_tokens.
+             * @example 2048
+             */
+            recap_max_output_tokens?: number;
+            /**
+             * @description Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_input_tokens.
+             * @example 2000
+             */
+            recap_input_tokens?: number;
+            /**
+             * @description Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_summary_words.
+             * @example 150
+             */
+            recap_summary_words?: number;
+            /**
+             * @description Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_list_items.
+             * @example 5
+             */
+            recap_list_items?: number;
+            /**
+             * @description Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_fallback_context_chars.
+             * @example 1500
+             */
+            recap_fallback_context_chars?: number;
+            /**
+             * @description Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
+             * @example 60
+             */
+            recap_timeout_seconds?: number;
+            /**
+             * @description Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_stream_retries.
+             * @example 2
+             */
+            recap_stream_retries?: number;
+            /**
+             * @description Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_retry_pause_ms.
+             * @example 500
+             */
+            recap_retry_pause_ms?: number;
+            /**
+             * @description Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
+             * @example 4
+             */
+            recap_chars_per_token?: number;
+            /**
+             * @description Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use. Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+             * @example 1
+             */
+            bootstrap_recap_min_spacing_seconds?: number;
+            /**
              * @description Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
              * @example 90
              */
@@ -15985,7 +16111,7 @@ export interface components {
             team?: string[];
             /**
              * @description The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
-             * @example 3
+             * @example 10
              */
             default_depth: number;
         };
@@ -16945,6 +17071,11 @@ export interface components {
              */
             cache_hit_ratio?: number | null;
             /**
+             * @description Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+             * @example 120
+             */
+            reasoning?: number;
+            /**
              * @description Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
              * @example 1000
              */
@@ -16989,7 +17120,7 @@ export interface components {
              */
             kind: "progress";
             /**
-             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
              * @example 0
              */
             depth: number;
@@ -19198,6 +19329,38 @@ export interface components {
             role: "request" | "answer";
         };
         /**
+         * EffortRecord
+         * @description Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort record of the answering candidate: what was chosen, what the final request body actually carried, and why the two differ. One record per answering candidate, on the live done frame and on the answering transcript entry; both history transports project the stored record unchanged. A note is shown only when `sent` differs from `chosen`. Never carries reasoning text or signature material (FR-043).
+         */
+        EffortRecord: {
+            /**
+             * @description The resolved setting for the answering candidate, as stored (for example "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+             * @example medium
+             */
+            chosen?: string;
+            /**
+             * @description The effort value actually present in the final serialised request body, after mapping, guards and extra_body. Absent when nothing was sent.
+             * @example low
+             */
+            sent?: string;
+            /**
+             * @description Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+             * @example mapped
+             * @enum {string}
+             */
+            reason?: "mapped" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+            /**
+             * @description The answering candidate's provider id.
+             * @example openrouter
+             */
+            provider?: string;
+            /**
+             * @description The answering candidate's model id.
+             * @example deepseek/deepseek-v4.1-flash
+             */
+            model?: string;
+        };
+        /**
          * SessionHistoryContext
          * @description Bounded public dependencies of selected history groups (chat history paging D4/D10). Resolve only selected/current relevant spans and duplicate identities, never all session spans. Each optional lifecycle payload is the actual recorded generated public frame, not a fabricated start, running state or success. No competing cancellation/disposition value, private archive mark or copied content store.
          */
@@ -19928,6 +20091,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503ServiceUnavailable"];
@@ -29076,6 +29240,7 @@ export type EntitlementResponse = components["schemas"]["EntitlementResponse"];
 export type ProvidersCatalog = components["schemas"]["ProvidersCatalog"];
 export type CatalogProvider = components["schemas"]["CatalogProvider"];
 export type CatalogModel = components["schemas"]["CatalogModel"];
+export type CatalogModelReasoning = components["schemas"]["CatalogModelReasoning"];
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
 export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];

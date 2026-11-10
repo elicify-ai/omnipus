@@ -69,7 +69,7 @@ export const apiEdges = {
   fetchAgents: vi.fn<typeof import('../../src/lib/api').fetchAgents>(async () => []),
   fetchWorkspace: vi.fn<typeof import('../../src/lib/api').fetchWorkspace>(async (id) => workspaceReply(id)),
   fetchWorkspaceDelegation: vi.fn<typeof import('../../src/lib/api').fetchWorkspaceDelegation>(async (id): Promise<WorkspaceDelegation> => ({
-    revision: '2'.repeat(64), workspace_id: id, team: [], edges: [], default_depth: 3,
+    revision: '2'.repeat(64), workspace_id: id, team: [], edges: [], default_depth: 10,
   })),
   fetchLibraryWorkspaces: vi.fn<typeof import('../../src/lib/api').fetchLibraryWorkspaces>(async () => libraryNodes),
   fetchLibraryEntries: vi.fn<typeof import('../../src/lib/api').fetchLibraryEntries>(async () => libraryEntries),

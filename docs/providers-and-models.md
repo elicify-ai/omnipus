@@ -35,7 +35,7 @@ For device-code sign-in, Omnipus shows the provider's verification link and a sh
 
 **Omnipus's model.** Omnipus, the system agent that creates and changes your agents, uses a model like any agent. If none works, it cannot plan — fix it without a chat: open **Settings → System agents**, choose **Edit** on Omnipus and pick a model from a connected provider. Saving works even while no model works, because it is a settings change, not a chat with the model.
 
-For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
+For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Give it an ID that is not already the ID of a listed provider, for example `my-azure` rather than `azure`. Once the provider list has loaded, the form refuses a listed provider's ID. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
 ## Picking a model when two providers offer it
 
@@ -86,6 +86,8 @@ For any other model, check the provider's documentation for **tool use**, **tool
 
 Some providers cannot be enumerated from a published catalog. Ollama and other local providers depend on what is installed on your machine, so Omnipus requests their live list. A custom endpoint has no catalog to enumerate; you maintain its model names under **Models** in that provider's settings.
 
+Editing a custom endpoint's model names keeps its saved base URL and protocol; you do not need to enter them again. You only enter both when you first add the endpoint. If a save is refused, Settings shows the reason and keeps your unsaved model names in the editor so you can fix the problem and save again. If the endpoint was removed or changed while you were saving, the save fails and asks you to reload.
+
 ## What the provider check proves
 
 When Omnipus configures a provider with `configure_provider`, it checks the saved entry straight away: the configured endpoint (your own address if you set one, otherwise the catalog's) is asked for its model list over that provider's protocol, with the saved key. A local provider such as Ollama is checked without a key. The result is `working` when the list comes back and `saved but not working` with the reason otherwise — a refused key, an unreachable address, or a protocol that has no model list. A passing check does not prove that a particular model runs, that you have quota, or that the model supports tools.
@@ -116,11 +118,16 @@ Every fallback is a provider and a model together. Saving a fallback without a p
 
 **Where fallbacks come from.** Each agent has its own fallback list, set under **Fallback models** on its profile's **Basics** tab, each entry a provider and a model. An agent without fallbacks of its own runs on its main model only; nothing is inherited, and Omnipus never guesses a provider. A `config.json` key `agents.defaults.model_fallbacks` is not a setting: Omnipus starts normally, ignores it, and logs this warning once at load: `removed setting, ignored: agents.defaults.model_fallbacks — set fallbacks per agent as provider/model pairs`.
 
+**When a provider address is refused.** If the SSRF guard (`sandbox.ssrf`) is on, saving a provider address checks where it leads, with or without an API key in the same save. An address that leads to a loopback, private or metadata address is refused with HTTP 422 and the message "The provider address points at an internal network, which is not reachable from here. Use the provider's public address." An address whose host name does not resolve gets its own message: "The provider address was not found: its host name did not resolve. Check the address for typos." These replace the earlier texts "provider endpoint not allowed (SSRF guard)" and "endpoint not allowed"; the status codes are unchanged. For a custom provider, if the address itself is allowed but redirects the key check to a refused address, the save is refused the same way, with HTTP 422 and the internal-network message, and neither the provider nor its key is saved. A local provider such as Ollama on `localhost` is not refused on a local install, and its model list still loads. Whether a built-in provider counts as local comes from the catalog, not from the connection type in the request. A save that names a connection type the built-in provider does not offer is refused with HTTP 400 and the message "This provider does not support the connection type that was sent. To use a different type, add it as a custom provider." and nothing is saved.
+
+On the hosted edition the check is always on, even when `sandbox.ssrf` is off. A built-in provider keeps its own address: an address on one is refused unless the operator's allow list names its host, and a local provider address is refused too. The allow list can be changed only by the operator. If a saved address on a built-in provider is not the provider's own, Omnipus does not use it and starts in limited mode, or tells the person in chat that the request was not sent. The owner fixes this by saving that provider again in **Settings → Providers**; the save resets the address to the provider's own. To use a different address, add a custom provider instead.
+
 The catalog changes over time. Use the provider and model lists in **Settings → Providers** as the live list. Treat the examples on this page as a starting point, not a complete inventory.
 
 ## Related pages
 
 - [Agents](agents.md) — choose the main model and fallback models for each agent.
 - [Settings](settings.md) — find the Providers tab and other installation controls.
+- [Custom endpoint](custom-endpoint.md) — connect Azure OpenAI or another unlisted service in the setup wizard.
 - [Tools](tools.md) — understand the tools sent with every model request.
 - [Troubleshooting](troubleshooting.md) — diagnose connection and credential failures.

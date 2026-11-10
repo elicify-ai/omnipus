@@ -402,9 +402,15 @@ describe('D4 rows 5-6 — the reply header', () => {
     const target = header?.querySelector('[data-testid="reply-target"]')
     expect(target?.textContent?.length).toBe(40)
     expect(target?.textContent?.endsWith('…')).toBe(true)
-    // Hover reveals the FULL text in the catalogued tooltip.
-    fireEvent.mouseEnter(header?.querySelector('[data-testid="reply-target-trigger"]') as Element)
-    expect(screen.getAllByText(longName + ' · Telegram').length).toBeGreaterThan(0)
+    // Pointer hover reveals the FULL text in the catalogued tooltip. Radix
+    // opens on a pointer MOVE (mouse type) or focus — not mouseenter
+    // (round 2, K5) — and the open lands on a timer, so the assertion waits.
+    fireEvent.pointerMove(header?.querySelector('[data-testid="reply-target-tooltip"]') as Element, {
+      pointerType: 'mouse',
+      pointerId: 1,
+    })
+    const revealed = await screen.findAllByText(longName + ' · Telegram')
+    expect(revealed.length).toBeGreaterThan(0)
   })
 })
 

@@ -195,6 +195,34 @@ type CronJob struct {
 	SessionID string `json:"sessionId,omitempty"`
 }
 
+// cloneJob returns a deep copy of job that shares no memory with it: every
+// pointer field (schedule and state times) and the run-history slice get their
+// own allocation. Methods that hand a stored job to a caller return a clone
+// taken under cs.mu, so the caller owns the result: reading it never races with
+// a firing job, and mutating it never changes service state (issue #1621).
+// Keep this in step with the job types above when a pointer, slice or map
+// field is added to CronJob, CronSchedule, CronPayload or CronJobState.
+func cloneJob(job CronJob) CronJob {
+	out := job
+	out.Schedule.AtMS = cloneInt64Ptr(job.Schedule.AtMS)
+	out.Schedule.EveryMS = cloneInt64Ptr(job.Schedule.EveryMS)
+	out.State.NextRunAtMS = cloneInt64Ptr(job.State.NextRunAtMS)
+	out.State.LastRunAtMS = cloneInt64Ptr(job.State.LastRunAtMS)
+	if job.State.History != nil {
+		out.State.History = make([]CronRunRecord, len(job.State.History))
+		copy(out.State.History, job.State.History)
+	}
+	return out
+}
+
+func cloneInt64Ptr(p *int64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 type CronStore struct {
 	Version int       `json:"version"`
 	Jobs    []CronJob `json:"jobs"`
@@ -1213,7 +1241,8 @@ type JobSpec struct {
 // atomic write. It is the ONLY creation path (session-core DEL-15: the legacy
 // AddJob and the owner-less backfill are deleted): the job needs an explicit,
 // already-authorized owner (spec.AgentID), and a job without one is refused
-// rather than persisted for a later backfill. Returns a copy of the stored job.
+// rather than persisted for a later backfill. Returns a caller-owned deep copy
+// of the stored job.
 func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 	if strings.TrimSpace(spec.AgentID) == "" {
 		return nil, errors.New("cron: a job needs an explicit owner (AgentID); owner-less jobs are not created")
@@ -1268,17 +1297,18 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		return nil, err
 	}
 	cs.notify()
-	return &job, nil
+	out := cloneJob(job)
+	return &out, nil
 }
 
-// GetJob returns a copy of the job with the given id, or (zero,false) if no
-// such job exists.
+// GetJob returns a caller-owned deep copy of the job with the given id, or
+// (zero,false) if no such job exists.
 func (cs *CronService) GetJob(jobID string) (CronJob, bool) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == jobID {
-			return cs.store.Jobs[i], true
+			return cloneJob(cs.store.Jobs[i]), true
 		}
 	}
 	return CronJob{}, false
@@ -1433,6 +1463,8 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	return removed
 }
 
+// EnableJob sets the job's enabled flag and returns a caller-owned deep copy
+// of the updated job, or nil when no such job exists.
 func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -1455,7 +1487,8 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 
 			cs.notify()
 
-			return job
+			out := cloneJob(*job)
+			return &out
 		}
 	}
 
@@ -1466,18 +1499,20 @@ func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	if includeDisabled {
-		return cs.store.Jobs
+	// Caller-owned deep copies taken under the lock (issue #1621): the store's
+	// own slice and pointer fields must never escape it. With includeDisabled
+	// the result keeps the store's nil-versus-empty shape, as before.
+	var out []CronJob
+	if includeDisabled && cs.store.Jobs != nil {
+		out = make([]CronJob, 0, len(cs.store.Jobs))
 	}
-
-	var enabled []CronJob
-	for _, job := range cs.store.Jobs {
-		if job.Enabled {
-			enabled = append(enabled, job)
+	for i := range cs.store.Jobs {
+		if includeDisabled || cs.store.Jobs[i].Enabled {
+			out = append(out, cloneJob(cs.store.Jobs[i]))
 		}
 	}
 
-	return enabled
+	return out
 }
 
 func (cs *CronService) Status() map[string]any {

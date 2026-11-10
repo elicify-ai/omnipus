@@ -72,6 +72,16 @@ type WhatsAppNativeChannel struct {
 	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
 	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
 
+	// connectsInFlight counts connectNative calls inside client.ConnectContext;
+	// nativeStopMark names the run context a stop has begun for. They pair
+	// lock-free (#1675): connectNative increments, then refuses if the mark
+	// names its context; stopNative sets the mark, then reads the count. So a
+	// stop either sees the connect (cancel first: Disconnect would wait behind
+	// ConnectContext's socket lock) or the connect sees the stop and never
+	// dials.
+	connectsInFlight atomic.Int32
+	nativeStopMark   atomic.Pointer[nativeStopMark]
+
 	// attempts is the manager-owned pairing-attempt store and instance this
 	// channel's id in it (gate r3). attemptID is the pairing attempt the QR
 	// loop currently runs, guarded by mu; every event carries it (M8).
@@ -340,7 +350,6 @@ func NewWhatsAppNativeChannel(
 	base := channels.NewBaseChannel("whatsapp_native", cfg, bus, cfg.AllowFrom,
 		channels.WithMaxMessageLength(65536),
 		channels.WithGroupTrigger(cfg.GroupTrigger),
-		channels.WithReasoningChannelID(cfg.ReasoningChannelID),
 	)
 	if storePath == "" {
 		storePath = "whatsapp"
@@ -415,6 +424,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) (startErr error) {
 	client := whatsmeow.NewClient(deviceStore, waLogger)
 	c.mu.Lock()
 	resource.client, resource.container = client, container
+	resource.liveClient.Store(client)
 	c.container, c.client = container, client
 	c.mu.Unlock()
 	if nativeClientHook != nil {
@@ -591,6 +601,7 @@ func (c *WhatsAppNativeChannel) stop(ctx context.Context, interrupt bool) error 
 		// Capture once so repeated Stop calls join one final disposal.
 		resource = &nativeLifecycle{ctx: c.runCtx, cancel: c.runCancel,
 			client: c.client, container: c.container, attemptID: c.attemptID, done: make(chan struct{})}
+		resource.liveClient.Store(c.client)
 		c.lifecycle = resource
 	}
 	c.mu.Unlock()
