@@ -1668,7 +1668,7 @@ func (m *BrowserManager) Started() bool {
 // and a managed binary already installed under installRoot is found by
 // EnsureChromium's own findInstalledBinary check before any download is
 // attempted; concurrent first-time downloads are serialized by
-// EnsureChromium's own installMu.
+// EnsureChromium's own installSlot.
 //
 // No-op — returns ("", nil), not an error — when cfg.CDPURL is set: remote
 // CDP mode attaches to an operator-managed Chromium elsewhere and never

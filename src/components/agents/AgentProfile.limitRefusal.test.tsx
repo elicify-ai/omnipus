@@ -30,7 +30,16 @@ if (typeof Element !== 'undefined' && !Element.prototype.hasPointerCapture) {
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  return { ...actual, useNavigate: () => vi.fn(), useParams: () => ({}) }
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+    useParams: () => ({}),
+    Link: ({ children, to, ...rest }: { children?: React.ReactNode; to?: string } & Record<string, unknown>) => (
+      <a href={typeof to === 'string' ? to : '#'} {...(rest as Record<string, unknown>)}>
+        {children}
+      </a>
+    ),
+  }
 })
 
 vi.mock('@/lib/api', async (importOriginal) => {

@@ -83,20 +83,24 @@ func buildWorkspaceCSP(mainOrigin string) string {
 // workspaceContentType maps lowercase file extensions to MIME types per
 // FR-020a. Keys include the leading dot.
 var workspaceContentType = map[string]string{
-	".html": "text/html; charset=utf-8",
-	".htm":  "text/html; charset=utf-8",
-	".css":  "text/css",
-	".js":   "application/javascript",
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif":  "image/gif",
-	".svg":  "image/svg+xml",
-	".webp": "image/webp",
-	".json": "application/json",
-	".txt":  "text/plain; charset=utf-8",
-	".md":   "text/plain; charset=utf-8",
-	".pdf":  "application/pdf",
+	".html":  "text/html; charset=utf-8",
+	".htm":   "text/html; charset=utf-8",
+	".css":   "text/css",
+	".js":    "application/javascript",
+	".mjs":   "application/javascript",
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
+	".wasm":  "application/wasm",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".jpeg":  "image/jpeg",
+	".gif":   "image/gif",
+	".svg":   "image/svg+xml",
+	".webp":  "image/webp",
+	".json":  "application/json",
+	".txt":   "text/plain; charset=utf-8",
+	".md":    "text/plain; charset=utf-8",
+	".pdf":   "application/pdf",
 }
 
 // contentTypeForPath resolves the Content-Type for the given file path

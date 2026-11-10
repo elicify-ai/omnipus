@@ -27,7 +27,100 @@ import (
 
 // --- Sessions ---
 
+// sessionSubRoute is one allowed sub-path under /api/v1/sessions/{id}/.
+// methods is the exhaustive Allow list for that sub-resource. exact requires
+// the whole sub-path to equal name; otherwise name and name + "/" + rest are
+// the same resource.
+type sessionSubRoute struct {
+	name    string
+	exact   bool
+	methods []string
+}
+
+// sessionSubRoutes is the explicit list of sub-paths HandleSessions accepts
+// under /api/v1/sessions/{id}/. Anything else is 404. A listed sub-path used
+// with a method not in methods is 405 with an Allow header. The bare session
+// (/api/v1/sessions/{id}, no sub-path) is not in this list.
+//
+// "messages" (exact) is GET /sessions/{id}/messages. "messages" (nested) is
+// GET /sessions/{id}/messages/{position}; serveSessionHistoryEntry owns the
+// position rules. "tool-results" covers the resource and tool-results/{ref};
+// HandleToolResults owns the ref rules.
+var sessionSubRoutes = []sessionSubRoute{
+	{name: "messages", exact: true, methods: []string{http.MethodGet}},
+	{name: "messages", exact: false, methods: []string{http.MethodGet}},
+	{name: "tool-results", exact: false, methods: []string{http.MethodGet}},
+}
+
+// matchSessionSubRoute returns the allow-list entry for subPath.
+// An exact entry wins over a nested entry of the same name.
+func matchSessionSubRoute(subPath string) (sessionSubRoute, bool) {
+	var nested sessionSubRoute
+	var haveNested bool
+	for _, route := range sessionSubRoutes {
+		if route.exact {
+			if subPath == route.name {
+				return route, true
+			}
+			continue
+		}
+		if (subPath == route.name || strings.HasPrefix(subPath, route.name+"/")) && !haveNested {
+			nested = route
+			haveNested = true
+		}
+	}
+	if haveNested {
+		return nested, true
+	}
+	return sessionSubRoute{}, false
+}
+
+// dispatchSessionSubPath serves /api/v1/sessions/{id}/{subPath}.
+// An unknown sub-path is 404. A known sub-path with the wrong method is 405
+// and sets Allow to the methods that sub-resource accepts. This function
+// never renames or deletes the session.
+func (a *restAPI) dispatchSessionSubPath(w http.ResponseWriter, r *http.Request, sessionID, subPath string) {
+	route, ok := matchSessionSubRoute(subPath)
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	allowed := false
+	for _, method := range route.methods {
+		if method == r.Method {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		w.Header().Set("Allow", strings.Join(route.methods, ", "))
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	switch {
+	case route.name == "messages" && route.exact:
+		a.getSessionMessages(w, r, sessionID)
+	case route.name == "messages":
+		// The exact entry wins for "messages", so the nested entry always
+		// carries "messages/{position}".
+		a.serveSessionHistoryEntry(w, r, sessionID, strings.TrimPrefix(subPath, "messages/"))
+	case route.name == "tool-results":
+		// Security F1 (#1452): a stored result is readable only while its
+		// session is, under the same access order as the history page (main
+		// eligibility, then session existence) — never by reference alone.
+		if a.readableSessionStore(w, sessionID) == nil {
+			return
+		}
+		// HandleToolResults reads the ref from r.URL.Path itself.
+		a.HandleToolResults(w, r)
+	default:
+		// A listed route with no handler must not fall through onto the session.
+		jsonErr(w, http.StatusNotFound, "not found")
+	}
+}
+
 // HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages/tool-results), POST (create), PUT (rename), DELETE (delete).
+// PUT and DELETE apply only to the bare session. Any sub-path is either a listed sub-resource or 404.
 func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	// Extract optional session ID and sub-path from the URL.
 	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages,
@@ -52,16 +145,11 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch tool-results sub-resource before the generic method switch so the
-	// full path (including ref) is available to HandleToolResults via r.URL.Path.
-	// Security F1 (#1452): a stored result is readable only while its session
-	// is, under the same access order as the history page (main eligibility,
-	// then session existence) — never by reference alone.
-	if strings.HasPrefix(subPath, "tool-results/") || subPath == "tool-results" {
-		if r.Method == http.MethodGet && a.readableSessionStore(w, sessionID) == nil {
-			return
-		}
-		a.HandleToolResults(w, r)
+	// A sub-path is never the session itself. Refuse it here so the method
+	// switch below cannot rename or delete the chat, and cannot return the
+	// session detail for an address it does not recognise.
+	if sessionID != "" && subPath != "" {
+		a.dispatchSessionSubPath(w, r, sessionID, subPath)
 		return
 	}
 
@@ -69,10 +157,6 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		if sessionID == "" {
 			a.listSessions(w, r)
-		} else if subPath == "messages" {
-			a.getSessionMessages(w, r, sessionID)
-		} else if position, ok := strings.CutPrefix(subPath, "messages/"); ok {
-			a.serveSessionHistoryEntry(w, r, sessionID, position)
 		} else {
 			a.getSession(w, r, sessionID)
 		}

@@ -8,15 +8,16 @@ import { requireLiveModelKeys } from './e2e-model-keys';
 
 /** Real private gateway ownership is required by the offline canonical driver.
  * This fixture never repoints the shared shard home or fabricates a stopped owner. */
-export const test = base.extend<{ canonicalGateway: GatewayProcess; canonicalPage: Page; canonicalProviderBase: string | undefined }>({
+export const test = base.extend<{ canonicalGateway: GatewayProcess; canonicalPage: Page; canonicalProviderBase: string | undefined; canonicalLoopbackPublicURL: boolean }>({
   canonicalProviderBase: [undefined, { option: true }],
-  canonicalGateway: [async ({ browserName, canonicalProviderBase }, use, info) => {
+  canonicalLoopbackPublicURL: [false, { option: true }],
+  canonicalGateway: [async ({ browserName, canonicalProviderBase, canonicalLoopbackPublicURL }, use, info) => {
     // A mock-provider gateway (canonicalProviderBase set) needs no real key; a
     // live one needs the keys for the active pair (primary and fallback).
     if (!canonicalProviderBase) {
       requireLiveModelKeys('the canonical-history real-gateway fixture (CI-only without the keys)');
     }
-    const gateway = await GatewayProcess.start({ adminUsername: 'admin', adminPassword: 'admin123', apiBase: canonicalProviderBase });
+    const gateway = await GatewayProcess.start({ adminUsername: 'admin', adminPassword: 'admin123', apiBase: canonicalProviderBase, loopbackPublicURL: canonicalLoopbackPublicURL });
     const authFile = info.outputPath('canonical-auth.json');
     fs.mkdirSync(path.dirname(authFile), { recursive: true });
     fs.writeFileSync(authFile, JSON.stringify(await gateway.browserStorageState()), { mode: 0o600 });

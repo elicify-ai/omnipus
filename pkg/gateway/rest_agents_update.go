@@ -719,7 +719,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// fastAgentUpsert (issue #571), not a full config reload: a soul change is
 	// only real once a fresh AgentInstance/ContextBuilder picks up the new
 	// SOUL.md — but that does not require
-	// restarting channels/cron/schedulers/the plan engine or rebuilding
+	// restarting channels/cron/schedulers or rebuilding
 	// every OTHER agent's instance, only this one agent's. See
 	// AgentLoop.UpsertAgentFast for how the resolver/override/wiring parity
 	// is achieved without that cost; it falls back to the slow, hardened

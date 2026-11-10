@@ -349,16 +349,14 @@ export function fetchCliDetect(): Promise<CliDetect> {
   return request<CliDetect>('/system/cli-detect', undefined, CliDetectSchema as ZodType<CliDetect>)
 }
 
-// fetchCliValidate performs a stateless, create-time check that a CLI binary
-// actually runs at the given path (external-executor-cli-path-detection spec
-// FR-006/FR-013/FR-014/FR-015/FR-017/FR-018). It spawns only `<cli> --version`
-// server-side (15s timeout, no shell) and returns exactly one classified
-// `reason`. Callers MUST gate blocking on `reason` (missing-binary /
-// handshake-failed), never on the raw `ok` boolean (FR-018) — `unauthenticated`
-// also reports ok=true but is a non-blocking warning. The endpoint is
-// `withAuth` (create-parity with `createAgent`), rate-limited, and audited
-// server-side — pass an AbortSignal so a debounced validate-on-blur caller can
-// cancel a stale in-flight request when the path changes again.
+// fetchCliValidate runs the stateless program check behind Check CLI in
+// Settings → Third-party agents (POST /system/cli-validate). The server checks
+// cliPath exactly as given with the shared program-file check, then runs only
+// `<cli> --version` on the checked file (no shell) and returns one classified
+// `reason`. Settings shows the result as a notice chosen by `reason`, never by
+// the raw `ok` boolean — `unauthenticated` also reports ok=true. The check saves
+// nothing. The endpoint needs a signed-in person session and is rate-limited
+// and audited server-side; `opts.signal` lets a caller cancel a check in flight.
 export function fetchCliValidate(
   cli: CliValidateRequest['cli'],
   cliPath: string,
@@ -376,9 +374,8 @@ export function fetchCliValidate(
 // a subagent_3p external-CLI worker with the given settings — argv sourced
 // from the same buildArgs() logic each driver (claude/codex/opencode) uses at
 // real dispatch time, not a hand-maintained static description. Stateless and
-// body-driven (mirrors
-// fetchCliValidate) so it works both from the create wizard, where no agent
-// id exists yet, and from an existing agent's edit form. Any cli_args token
+// body-driven (mirrors fetchCliValidate), so the agent editor can preview
+// unsaved settings without changing the saved agent. Any cli_args token
 // the safety filter would strip at real dispatch time is excluded from the
 // previewed argv and reported instead in the response's dropped_args, so the
 // operator sees before saving that something they typed will be silently
@@ -403,10 +400,9 @@ export function fetchExecutorPreview(
 // subprocess open for up to ~30s (rest_executor_smoketest.go's bounded
 // timeout/turn cap) — an explicit operator action only, never called
 // automatically. Stateless and body-driven (mirrors fetchExecutorPreview and
-// fetchCliValidate) so it works both from the create wizard, where no agent
-// id exists yet, and from an existing agent's edit form. Always resolves
-// (never rejects) for a domain-level failure — a failed run comes back as a
-// 200 with `ok: false` and `error` set, matching fetchCliValidate's
+// fetchCliValidate), so the agent editor can test unsaved executor settings.
+// Always resolves (never rejects) for a domain-level failure — a failed run
+// comes back as a 200 with `ok: false` and `error` set, matching fetchCliValidate's
 // convention of using the body for domain-level failure rather than 4xx/5xx;
 // this only rejects (throws ApiError) for a genuine transport/auth/rate-limit
 // failure. Pass an AbortSignal so the caller can cancel a stale in-flight

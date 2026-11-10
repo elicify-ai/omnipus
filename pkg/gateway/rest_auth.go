@@ -712,6 +712,19 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		// ADR-094 FR-015 (review F5): the planted-cookie guard found a
+		// duplicated reserved cookie on this request, stamped the clear lines
+		// and marked the credential read failed. Serving the SPA's own API
+		// read (e.g. GET /api/v1/state) as anonymous would show a signed-out
+		// state and send the user to /login with no recovery; answer the
+		// typed planted_cookie_cleared 401 instead so the SPA offers its one
+		// Retry. A top-level browser navigation (a sign-in callback on a
+		// provider route) keeps the anonymous pass-through: a JSON error
+		// would replace the page and the SPA transport never sees it.
+		if middleware.CredentialReadFailed(r.Context()) && r.Header.Get("Sec-Fetch-Mode") != "navigate" {
+			middleware.WritePlantedCookieCleared(w, http.StatusUnauthorized)
+			return
+		}
 		// Cookie fallback (ADR-044, FR-009): the SPA no longer sends a bearer
 		// token — it authenticates via the omnipus-session HttpOnly cookie. Resolve
 		// it here (the same lookup checkBearerAuth/authenticateWS/browser_ws use) so
@@ -788,6 +801,7 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	tokenID := config.TokenIDFromRaw(token)
 	createdAt := time.Now().UTC().Format(time.RFC3339)
+	sessionIssuedAt := middleware.FormatSessionIssuedAt(time.Now())
 
 	var evictedTokens int
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -825,6 +839,10 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			// Session-cookie token remains single-slot (one browser session
 			// cookie per login is the existing contract); overwrite as before.
 			userMap["session_token_hash"] = string(sessionHash)
+			// ADR-094 FR-015: the issue time next to the hash, so the
+			// planted-cookie guard can re-send this cookie with its
+			// original expiry.
+			userMap["session_issued_at"] = sessionIssuedAt
 			return nil
 		}
 		return ErrUserNotFound
@@ -1246,8 +1264,8 @@ func revokeUserToken(userMap map[string]any, presentedToken, presentedID string)
 // waits for IsReloadPending() to clear before reporting confirmed=false.
 //
 // This was 5 SECONDS, and that was a release blocker in its own right. A reload
-// stops and restarts every channel, cron, the plan engine, the task/loop
-// schedulers and the provider, then rebuilds the whole AgentRegistry. On an
+// stops and restarts every channel, cron, the task/loop schedulers and the
+// provider, then rebuilds the whole AgentRegistry. On an
 // idle gateway that is milliseconds; under real load (a busy plan engine, live
 // LLM turns — the llm-conformance e2e shard) it is TENS OF SECONDS. Every
 // reload that overran 5s hit the silent-nil return in triggerReloadAndWait, so

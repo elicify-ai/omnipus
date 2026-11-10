@@ -54,6 +54,15 @@ func (al *AgentLoop) loopScheduler() *LoopScheduler {
 	return al.loopSched
 }
 
+// LoopScheduler is the exported read side of SetLoopScheduler, under the same
+// al.mu. Callers outside this package that must see the scheduler a config
+// reload swaps in (the gateway's "loop" active counter, which runs on the
+// live plan engine's goroutines during a reload, #1725) read it here once,
+// never from a gateway field the reload reassigns without a lock.
+func (al *AgentLoop) LoopScheduler() *LoopScheduler {
+	return al.loopScheduler()
+}
+
 // applyLoopCommandPrompt is handleCommand's rewrite hook for `/loop`. Every
 // verb (status, stop, interval-set, self-paced-set) answers synchronously
 // (matched=true, handled=true) — `/loop` itself never runs a worker turn;
