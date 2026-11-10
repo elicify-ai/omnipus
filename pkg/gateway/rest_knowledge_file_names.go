@@ -69,7 +69,7 @@ func (n collectionFileNames) names(paths []string) []string {
 //
 // Everything else is copied unchanged.
 func (n collectionFileNames) text(reason string, paths []string) string {
-	reported := make([]reportedSpelling, 0, 2*len(paths))
+	reported := make([]reportedSpelling, 0, len(paths))
 	for _, p := range paths {
 		if p == "" {
 			continue
